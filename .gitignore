@@ -1,0 +1,115 @@
+# Python bytecode, test caches, and tooling caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ipynb_checkpoints/
+
+# Virtual environments and local Python installations
+.venv/
+venv/
+env/
+ENV/
+
+# Python build and packaging output
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Secrets and machine-specific environment settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+
+# Logs, process state, crash dumps, and temporary files
+*.log
+*.out
+*.err
+*.pid
+*.pid.lock
+*.tmp
+*.temp
+*.bak
+*.dmp
+/tmp/
+/temp/
+/.cache/
+
+# Raw/private input data and generated datasets
+/dataset/
+/datasets/
+/annotations/
+/yolo_dataset/
+/videos/
+/archive/
+
+# Downloaded models, training runs, and inference output
+/models/*
+!/models/.gitkeep
+/runs/
+/tracked_videos/
+
+# Model checkpoints and generated numerical artifacts anywhere in the tree
+*.pt
+*.pt2
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.engine
+*.tflite
+*.pb
+*.h5
+*.hdf5
+*.joblib
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.parquet
+*.arrow
+*tfevents*
+
+# Raw video files should be stored outside Git or in dedicated artifact storage
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+
+# Vendored upstream source; the project uses the package from requirements.txt
+/supervision/
+
+# Local task notes and obsolete non-dot Git metadata copies
+/task.md
+/gitignore
+/gitattributes
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
