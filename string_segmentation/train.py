@@ -3,24 +3,16 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import platform
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from common.files import sha256_file
 from config import STRING_SEGMENTATION_CONFIG, YOLO_CONFIG
 from string_segmentation.prepare_dataset import prepare_string_dataset
 from yolo_training.download_model import download_model
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _batch(value: str):
@@ -43,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mosaic", type=float, default=STRING_SEGMENTATION_CONFIG.mosaic)
     parser.add_argument("--project", default=str(STRING_SEGMENTATION_CONFIG.project))
     parser.add_argument("--name", default=STRING_SEGMENTATION_CONFIG.run_name)
+    parser.add_argument("--exist-ok", action="store_true", help="Allow reusing an existing YOLO run directory.")
     parser.add_argument("--no-prepare", action="store_true")
     parser.add_argument("--clear-dataset", action="store_true")
     parser.add_argument("--auto-download", action="store_true")
@@ -94,7 +87,7 @@ def main() -> int:
         "mosaic": args.mosaic,
         "project": str(Path(args.project).resolve()),
         "name": args.name,
-        "exist_ok": True,
+        "exist_ok": bool(args.exist_ok),
     }
     if args.device:
         kwargs["device"] = args.device
@@ -107,9 +100,9 @@ def main() -> int:
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(save_dir.resolve()),
         "source_weights": str(weights.resolve()),
-        "source_weights_sha256": _sha256(weights),
+        "source_weights_sha256": sha256_file(weights),
         "dataset_manifest": str((dataset_dir / "manifest.json").resolve()),
-        "dataset_manifest_sha256": _sha256(dataset_dir / "manifest.json"),
+        "dataset_manifest_sha256": sha256_file(dataset_dir / "manifest.json"),
         "parameters": kwargs,
         "environment": {"python": sys.version, "platform": platform.platform()},
         "artifacts": {

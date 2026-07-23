@@ -79,7 +79,7 @@ def main() -> int:
         data.setdefault("bbox_review_status", overall_status)
         data.setdefault(
             "string_review_status",
-            "rejected" if overall_status == "rejected" else "auto_labeled_needs_review",
+            overall_status if overall_status in {"rejected", "unresolved"} else "auto_labeled_needs_review",
         )
         qa = qa_annotation(data, frame_records.get((data["video_id"], int(data["frame_index"]))))
         data["qa"] = qa

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-ALLOWED = {"auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected"}
+ALLOWED = {"auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected", "unresolved"}
 COMPONENTS = {"all", "bbox", "string"}
 STRING_ATTACHMENT_CLASSES = {"hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
@@ -25,6 +25,8 @@ def _overall_status(data: dict) -> str:
         return "approved" if bbox_status == string_status == "approved" else "reviewed"
     if bbox_status == string_status == "rejected":
         return "rejected"
+    if bbox_status == string_status == "unresolved":
+        return "unresolved"
     return "partially_reviewed"
 
 
@@ -84,6 +86,47 @@ def validate_review_gate(data: dict, component: str) -> list[str]:
         elif visibility == "uncertain":
             issues.append("string visibility must be resolved before review approval")
     return issues
+
+
+def _append_review_event(annotation_path: Path, data: dict, component: str, status: str) -> None:
+    annotations_root = next((parent for parent in annotation_path.resolve().parents if parent.name == "annotations"), None)
+    if annotations_root is None:
+        return
+    dataset_root = annotations_root.parent
+    try:
+        label_path = str(annotation_path.resolve().relative_to(Path.cwd().resolve()))
+    except ValueError:
+        label_path = str(annotation_path.resolve())
+    event = {
+        "created_at_utc": data["reviewed_at_utc"],
+        "label_path": label_path,
+        "component": component,
+        "status": status,
+        "reviewer": data.get("reviewer", "manual"),
+        "reason": data.get("review_notes", ""),
+        "string_visibility": data.get("string_visibility"),
+        "yoyo_visibility": data.get("visibility"),
+        "scene_label": data.get("scene_label", "unknown"),
+    }
+    with (dataset_root / "manual_review_log.jsonl").open("a", encoding="utf-8") as file:
+        file.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _refresh_visualization(annotation_path: Path, data: dict) -> None:
+    """Keep the stored review overlay in sync with the accepted JSON state."""
+    annotations_root = next((parent for parent in annotation_path.resolve().parents if parent.name == "annotations"), None)
+    source_image = Path(str(data.get("source_image", "")))
+    if annotations_root is None or not source_image.is_file():
+        return
+    labels_root = annotations_root / "labels"
+    try:
+        relative = annotation_path.resolve().relative_to(labels_root.resolve())
+    except ValueError:
+        return
+    from annotation.video_frame_annotator import draw_visualization
+
+    output_path = annotations_root / "visualizations" / relative.with_name(f"{relative.stem}_vis.jpg")
+    draw_visualization(source_image, data, output_path)
 
 
 def update_annotation_status(
@@ -162,6 +205,8 @@ def update_annotation_status(
     if notes is not None:
         data["review_notes"] = notes
     annotation_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _refresh_visualization(annotation_path, data)
+    _append_review_event(annotation_path, data, component, status)
     return data
 
 

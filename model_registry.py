@@ -3,21 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _resolve(value: str | Path | None, base_dir: Path) -> Path | None:
@@ -62,7 +54,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
         represented_weights.add(weights)
         dataset_manifest = _resolve(manifest.get("dataset_manifest"), base_dir)
         recorded_dataset_sha = str(manifest.get("dataset_manifest_sha256", ""))
-        current_dataset_sha = _sha256(dataset_manifest) if dataset_manifest and dataset_manifest.exists() else ""
+        current_dataset_sha = sha256_file(dataset_manifest) if dataset_manifest and dataset_manifest.exists() else ""
         metrics_path = next((run_dir / name for name in metric_names if (run_dir / name).exists()), None)
         metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path else {}
         warnings = []
@@ -85,9 +77,9 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
                 "task": manifest.get("task", "unknown"),
                 "created_at_utc": manifest.get("created_at_utc"),
                 "run_manifest": str(manifest_path.resolve()),
-                "run_manifest_sha256": _sha256(manifest_path),
+                "run_manifest_sha256": sha256_file(manifest_path),
                 "weights": str(weights),
-                "weights_sha256": _sha256(weights) if weights.exists() else "",
+                "weights_sha256": sha256_file(weights) if weights.exists() else "",
                 "dataset_manifest": str(dataset_manifest.resolve()) if dataset_manifest and dataset_manifest.exists() else str(dataset_manifest or ""),
                 "dataset_manifest_sha256_recorded": recorded_dataset_sha,
                 "dataset_manifest_sha256_current": current_dataset_sha,
@@ -114,7 +106,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
                 "task": "unknown",
                 "run_manifest": "",
                 "weights": str(weights),
-                "weights_sha256": _sha256(weights),
+                "weights_sha256": sha256_file(weights),
                 "roles": roles,
                 "warnings": ["run_manifest_missing"],
                 "complete": False,

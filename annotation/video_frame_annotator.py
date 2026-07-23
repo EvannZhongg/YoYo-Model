@@ -21,6 +21,7 @@ from annotation.annotator import (
 )
 from annotation.prompts import VIDEO_FRAME_ANNOTATION_PROMPT
 from config import MODEL_CONFIG, OSS_CONFIG
+from video_dataset.split_policy import parse_source_groups
 
 
 VISIBILITY = {"visible", "partially_visible", "occluded", "out_of_frame", "absent", "uncertain"}
@@ -122,6 +123,26 @@ def normalize_annotation(raw: dict[str, Any], width: int, height: int) -> dict[s
     }
 
 
+def _visualization_review_labels(annotation: dict[str, Any], has_masks: bool) -> tuple[str, str | None]:
+    accepted = {"approved", "reviewed"}
+    bbox_status = str(annotation.get("bbox_review_status", "auto_labeled_needs_review"))
+    string_status = str(annotation.get("string_review_status", "auto_labeled_needs_review"))
+    if bbox_status in accepted and string_status in accepted:
+        header = "REVIEWED ANNOTATION"
+    elif bbox_status in accepted or string_status in accepted:
+        header = "COMPONENT REVIEW"
+    else:
+        header = "VLM REVIEW ONLY"
+    if not has_masks:
+        return header, None
+    mask_banner = (
+        "REVIEWED STRING MASK"
+        if string_status in accepted
+        else "COLOR MASK PROPOSAL | STRING REVIEW REQUIRED"
+    )
+    return header, mask_banner
+
+
 def draw_visualization(image_path: Path, annotation: dict[str, Any], output_path: Path) -> None:
     frame = cv2.imread(str(image_path))
     if frame is None:
@@ -155,7 +176,8 @@ def draw_visualization(image_path: Path, annotation: dict[str, Any], output_path
             cv2.circle(frame, tuple(int(round(float(value))) for value in point), 8, (0, 220, 255), -1)
     bad_case = ",".join(annotation.get("bad_case", [])) or "none"
     qa_warnings = ",".join((annotation.get("qa") or {}).get("warnings", [])) or "none"
-    header = f"VLM REVIEW ONLY | visibility={annotation.get('visibility', 'uncertain')} | string={annotation.get('string_visibility', 'uncertain')}"
+    header_prefix, mask_banner = _visualization_review_labels(annotation, bool(mask_polygons))
+    header = f"{header_prefix} | visibility={annotation.get('visibility', 'uncertain')} | string={annotation.get('string_visibility', 'uncertain')}"
     review_line = (
         f"bbox_review={annotation.get('bbox_review_status', 'needs_review')} | "
         f"string_review={annotation.get('string_review_status', 'needs_review')} | "
@@ -165,8 +187,8 @@ def draw_visualization(image_path: Path, annotation: dict[str, Any], output_path
     cv2.putText(frame, header, (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(frame, review_line, (18, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (120, 255, 120), 2, cv2.LINE_AA)
     cv2.putText(frame, f"bad_case={bad_case} | qa={qa_warnings}", (18, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
-    if mask_polygons:
-        cv2.putText(frame, "COLOR MASK PROPOSAL | REVIEW REQUIRED", (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 200, 255), 2, cv2.LINE_AA)
+    if mask_banner:
+        cv2.putText(frame, mask_banner, (18, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (0, 200, 255), 2, cv2.LINE_AA)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), frame)
 
@@ -223,14 +245,17 @@ def main() -> int:
     parser.add_argument("--candidates-only", action="store_true")
     parser.add_argument("--workers", type=int, default=4, help="Concurrent API requests.")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--exclude-source-groups", default="", help="Comma-separated source groups excluded before VLM inference.")
     args = parser.parse_args()
     dataset_dir = Path(args.dataset_dir)
     records = [json.loads(line) for line in (dataset_dir / "frames.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    excluded_groups = parse_source_groups(args.exclude_source_groups)
     selected = [
         record
         for record in records
         if (args.split == "all" or record["split"] == args.split)
         and (not args.candidates_only or record.get("candidate_only"))
+        and str(record.get("source_group") or record.get("video_id") or "").strip() not in excluded_groups
     ]
     if args.limit > 0:
         selected = selected[: args.limit]

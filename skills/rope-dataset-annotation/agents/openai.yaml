@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rope Dataset Annotation"
+  short_description: "Build and review precise rope segmentation labels"
+  default_prompt: "Use $rope-dataset-annotation to create and quality-review rope labels for these images."

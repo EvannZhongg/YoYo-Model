@@ -63,7 +63,7 @@ def main() -> int:
     parser.add_argument("--thumb-width", type=int, default=480)
     parser.add_argument(
         "--string-status",
-        choices=["all", "auto_labeled_needs_review", "approved", "reviewed", "rejected"],
+        choices=["all", "auto_labeled_needs_review", "approved", "reviewed", "rejected", "unresolved"],
         default="all",
     )
     args = parser.parse_args()

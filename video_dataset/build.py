@@ -7,7 +7,6 @@ not treated as a negative sample until a human confirms that the yoyo is absent.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 from datetime import datetime, timezone
@@ -16,16 +15,10 @@ from typing import Any
 
 import cv2
 
+from common.files import sha256_file
+
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def video_info(path: Path, videos_dir: Path, action_group: str = "1A") -> dict[str, Any]:

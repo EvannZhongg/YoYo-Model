@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import platform
 import random
@@ -16,8 +15,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from common.files import sha256_file
 from config import SEMANTIC_STRING_CONFIG
-from string_segmentation.semantic_metrics import collect_probabilities, select_threshold
+from string_segmentation.device import resolve_device
+from string_segmentation.semantic_metrics import balanced_validation_key, collect_probabilities, select_threshold
 from string_segmentation.semantic_model import (
     ReviewedStringDataset,
     build_string_model,
@@ -26,26 +27,6 @@ from string_segmentation.semantic_model import (
     load_checkpoint,
     save_checkpoint,
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _device(value: str) -> torch.device:
-    requested = str(value).strip().lower()
-    if requested in {"", "auto"}:
-        requested = "cuda" if torch.cuda.is_available() else "cpu"
-    if requested.isdigit():
-        requested = f"cuda:{requested}"
-    device = torch.device(requested)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is not available")
-    return device
 
 
 def _loader(dataset, batch: int, workers: int, shuffle: bool) -> DataLoader:
@@ -87,6 +68,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=SEMANTIC_STRING_CONFIG.seed)
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--initial-weights", default="")
+    parser.add_argument("--early-stopping-patience", type=int, default=0)
+    parser.add_argument("--early-stopping-min-epochs", type=int, default=10)
     parser.add_argument("--exist-ok", action="store_true")
     return parser.parse_args()
 
@@ -100,6 +83,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--pretrained-backbone is only supported by lraspp_mobilenet_v3")
     if args.hard_negative_weight < 0:
         raise ValueError("hard-negative weight must be non-negative")
+    if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
+        raise ValueError("early-stopping patience must be non-negative and minimum epochs must be positive")
     if args.input_width % 16 or args.input_height % 16:
         raise ValueError("Semantic input width and height must be divisible by 16")
     dataset_dir = Path(args.dataset_dir)
@@ -130,7 +115,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
-    device = _device(args.device)
+    device = resolve_device(args.device)
     train_dataset = ReviewedStringDataset(
         dataset_dir,
         "train",
@@ -183,7 +168,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         initialization = {
             "mode": "warm_start",
             "weights": str(initial_weights.resolve()),
-            "weights_sha256": _sha256(initial_weights),
+            "weights_sha256": sha256_file(initial_weights),
             "checkpoint_epoch": int(initial_checkpoint.get("epoch", 0)),
             "dataset_manifest_sha256": str(initial_checkpoint.get("dataset_manifest_sha256", "")),
         }
@@ -197,11 +182,14 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs), eta_min=float(args.lr) * 0.05)
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
-    manifest_hash = _sha256(dataset_manifest_path)
-    best_key = (-1.0, -1.0, -1.0)
+    manifest_hash = sha256_file(dataset_manifest_path)
+    best_key = (-1.0, -1.0, float("-inf"), -1.0, -1.0)
     best_epoch = 0
     best_threshold = 0.5
     best_metrics: dict[str, Any] = {}
+    epochs_without_improvement = 0
+    completed_epochs = 0
+    stopped_early = False
 
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -227,11 +215,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         scheduler.step()
         validation_samples = collect_probabilities(model, val_loader, device)
         threshold, validation_metrics, threshold_sweep = select_threshold(validation_samples)
-        key = (
-            float(validation_metrics["tolerant"]["f1"]),
-            float(validation_metrics["image_presence"]["f1"]),
-            float(validation_metrics["pixel"]["dice"]),
-        )
+        key = balanced_validation_key(validation_metrics)
+        improved = key > best_key
         row = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
@@ -239,6 +224,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "train_focal": focal_total / max(1, batch_count),
             "train_dice_loss": dice_total / max(1, batch_count),
             "train_hard_negative": hard_negative_total / max(1, batch_count),
+            "is_best": improved,
             "validation": validation_metrics,
             "threshold_sweep": threshold_sweep,
         }
@@ -246,7 +232,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(
             f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} "
-            f"threshold={threshold:.2f} val_tol_f1={key[0]:.4f} val_dice={key[2]:.4f}",
+            f"threshold={threshold:.2f} val_balanced_f1={key[0]:.4f} "
+            f"val_tol_f1={validation_metrics['tolerant']['f1']:.4f} "
+            f"val_presence_f1={validation_metrics['image_presence']['f1']:.4f} "
+            f"val_dice={validation_metrics['pixel']['dice']:.4f}",
             flush=True,
         )
         save_checkpoint(
@@ -258,11 +247,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             validation_metrics,
             manifest_hash,
         )
-        if key > best_key:
+        completed_epochs = epoch
+        if improved:
             best_key = key
             best_epoch = epoch
             best_threshold = threshold
             best_metrics = validation_metrics
+            epochs_without_improvement = 0
             save_checkpoint(
                 weights_dir / "best.pt",
                 model,
@@ -272,6 +263,20 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 validation_metrics,
                 manifest_hash,
             )
+        else:
+            epochs_without_improvement += 1
+        if (
+            args.early_stopping_patience > 0
+            and epoch >= args.early_stopping_min_epochs
+            and epochs_without_improvement >= args.early_stopping_patience
+        ):
+            stopped_early = True
+            print(
+                f"early_stop epoch={epoch} best_epoch={best_epoch} "
+                f"patience={args.early_stopping_patience}",
+                flush=True,
+            )
+            break
 
     run_manifest = {
         "schema_version": "1.0",
@@ -291,11 +296,18 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "device": str(device),
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
+            "early_stopping_patience": int(args.early_stopping_patience),
+            "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
             **model_config,
+        },
+        "training": {
+            "completed_epochs": completed_epochs,
+            "stopped_early": stopped_early,
+            "stop_reason": "validation_patience_exhausted" if stopped_early else "requested_epochs_completed",
         },
         "selection": {
             "split": "val",
-            "metric": "tolerant_f1_then_image_f1_then_pixel_dice",
+            "metric": "harmonic_tolerant_presence_then_presence_then_negative_fp_then_tolerant_then_pixel_dice",
             "best_epoch": best_epoch,
             "threshold": best_threshold,
             "metrics": best_metrics,

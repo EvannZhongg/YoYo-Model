@@ -26,6 +26,14 @@ STRING_METHODS = (
     "hand_to_yoyo_geometric_prior",
 )
 STRING_ATTACHMENT_CLASSES = ("unknown", "hand_and_yoyo_attached", "yoyo_detached", "hand_detached")
+STRING_HAND_ANCHOR_STATUSES = (
+    "unknown",
+    "not_applicable",
+    "no_visible_wrist",
+    "no_geometry",
+    "matched",
+    "mismatch",
+)
 VISIBILITY_STATES = ("visible", "edge_clipped", "likely_out_of_frame", "not_visible_or_occluded")
 BAD_CASE_VOCAB = (
     "no_yoyo",
@@ -33,6 +41,7 @@ BAD_CASE_VOCAB = (
     "low_confidence",
     "edge_clipped",
     "pose_missing",
+    "pose_identity_needs_review",
     "string_needs_review",
     "string_low_confidence",
     "string_not_observed",
@@ -40,10 +49,13 @@ BAD_CASE_VOCAB = (
     "string_without_yoyo",
     "string_temporal_conflict",
     "string_spatially_ambiguous",
+    "string_hand_anchor_mismatch",
     "likely_out_of_frame",
     "not_visible_or_occluded",
 )
 STRING_POINT_COUNT = 8
+STRING_COMPONENT_COUNT = 8
+STRING_COMPONENT_POINT_COUNT = 4
 POSE_POINT_COUNT = 17
 
 
@@ -66,6 +78,33 @@ def feature_names() -> list[str]:
     names.extend(f"string_attachment_{name}" for name in STRING_ATTACHMENT_CLASSES)
     for index in range(STRING_POINT_COUNT):
         names.extend((f"string_{index}_x", f"string_{index}_y", f"string_{index}_present"))
+    names.extend(
+        (
+            "string_component_count_ratio",
+            "string_hand_supported_component_count_ratio",
+            "string_flow_component_count_ratio",
+            "string_flow_source_component_count_ratio",
+            "string_flow_partial_component_loss",
+            "string_distance_to_nearest_wrist_diag",
+            "string_hand_anchor_threshold_diag",
+        )
+    )
+    names.extend(f"string_hand_anchor_status_{status}" for status in STRING_HAND_ANCHOR_STATUSES)
+    for component_index in range(STRING_COMPONENT_COUNT):
+        names.extend(
+            (
+                f"string_component_{component_index}_present",
+                f"string_component_{component_index}_length_diag",
+            )
+        )
+        for point_index in range(STRING_COMPONENT_POINT_COUNT):
+            names.extend(
+                (
+                    f"string_component_{component_index}_{point_index}_x",
+                    f"string_component_{component_index}_{point_index}_y",
+                    f"string_component_{component_index}_{point_index}_present",
+                )
+            )
     for side in ("left", "right"):
         names.extend((f"{side}_hand_present", f"{side}_hand_x", f"{side}_hand_y", f"{side}_hand_confidence"))
     for index in range(POSE_POINT_COUNT):
@@ -94,6 +133,45 @@ def _polyline_length(points: list[list[float]]) -> float:
     if len(points) < 2:
         return 0.0
     return float(sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(points, points[1:])))
+
+
+def _valid_polyline(value: Any) -> list[list[float]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    points = []
+    for point in value:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            continue
+        try:
+            x, y = float(point[0]), float(point[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x) and math.isfinite(y):
+            points.append([x, y])
+    return points if len(points) >= 2 else []
+
+
+def _string_components(string: dict[str, Any] | None) -> list[list[list[float]]]:
+    if not string:
+        return []
+    components = [
+        points
+        for value in (string.get("polylines") or [])
+        if (points := _valid_polyline(value))
+    ]
+    if not components:
+        primary = _valid_polyline(string.get("points"))
+        if primary:
+            components = [primary]
+    return components
+
+
+def _count_ratio(value: Any, maximum: int) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    return max(0.0, min(float(maximum), numeric)) / max(1, maximum)
 
 
 def _hand_map(hands: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -139,7 +217,10 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
         ]
         vector.extend(1.0 if visibility == state else 0.0 for state in VISIBILITY_STATES)
         string = record.get("string") or None
-        string_points = [[float(point[0]), float(point[1])] for point in (string or {}).get("points", [])]
+        string_components = _string_components(string)
+        string_points = _valid_polyline((string or {}).get("points"))
+        if not string_points and string_components:
+            string_points = string_components[0]
         resampled = _resample_polyline(string_points, STRING_POINT_COUNT) if string_points else []
         vector.extend((1.0 if string else 0.0, float((string or {}).get("confidence", 0.0)), _polyline_length(string_points) / diagonal))
         method = str((string or {}).get("method", ""))
@@ -153,6 +234,32 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
                 vector.extend((resampled[index][0] / width, resampled[index][1] / height, 1.0))
             else:
                 vector.extend((0.0, 0.0, 0.0))
+        anchor_status = str((string or {}).get("hand_anchor_status", "unknown"))
+        if anchor_status not in STRING_HAND_ANCHOR_STATUSES:
+            anchor_status = "unknown"
+        vector.extend(
+            (
+                _count_ratio(len(string_components), STRING_COMPONENT_COUNT),
+                _count_ratio((string or {}).get("hand_supported_component_count", 0), STRING_COMPONENT_COUNT),
+                _count_ratio((string or {}).get("flow_component_count", 0), STRING_COMPONENT_COUNT),
+                _count_ratio((string or {}).get("flow_source_component_count", 0), STRING_COMPONENT_COUNT),
+                1.0 if (string or {}).get("flow_partial_component_loss") else 0.0,
+                float((string or {}).get("distance_to_nearest_wrist_px") or 0.0) / diagonal,
+                float((string or {}).get("hand_anchor_threshold_px") or 0.0) / diagonal,
+            )
+        )
+        vector.extend(1.0 if anchor_status == status else 0.0 for status in STRING_HAND_ANCHOR_STATUSES)
+        for component_index in range(STRING_COMPONENT_COUNT):
+            if component_index < len(string_components):
+                component = string_components[component_index]
+                component_points = _resample_polyline(component, STRING_COMPONENT_POINT_COUNT)
+                vector.extend((1.0, _polyline_length(component) / diagonal))
+                for point in component_points:
+                    vector.extend((point[0] / width, point[1] / height, 1.0))
+            else:
+                vector.extend((0.0, 0.0))
+                for _ in range(STRING_COMPONENT_POINT_COUNT):
+                    vector.extend((0.0, 0.0, 0.0))
         hands = _hand_map(record.get("hands") or [])
         for side in ("left", "right"):
             hand = hands.get(side)
@@ -171,6 +278,15 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
             "string_present": bool(string),
             "string_method": method or None,
             "string_attachment_class": attachment_class,
+            "string_component_count": len(string_components),
+            "string_encoded_component_count": min(len(string_components), STRING_COMPONENT_COUNT),
+            "string_hand_supported_component_count": int(
+                (string or {}).get("hand_supported_component_count", 0) or 0
+            ),
+            "string_hand_anchor_status": anchor_status,
+            "string_flow_partial_component_loss": bool(
+                (string or {}).get("flow_partial_component_loss", False)
+            ),
             "visibility": visibility,
             "bad_case": sorted(bad_cases),
         }
@@ -200,14 +316,18 @@ def export_tracking_features(records: list[dict[str, Any]], run_dir: str | Path,
         feature_names=np.asarray(feature_names()),
     )
     manifest = {
-        "schema_version": "yoyo_tracking_frame_features_v4",
+        "schema_version": "yoyo_tracking_frame_features_v7",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "frame_count": len(rows),
         "feature_count": len(feature_names()),
         "feature_names": feature_names(),
         "string_point_count": STRING_POINT_COUNT,
+        "string_component_count": STRING_COMPONENT_COUNT,
+        "string_component_point_count": STRING_COMPONENT_POINT_COUNT,
+        "string_component_order_policy": "Preserve tracking observation order: yoyo-side primary first, then independently observed hand-supported components; never interpolate across components.",
         "string_methods": list(STRING_METHODS),
         "string_attachment_classes": list(STRING_ATTACHMENT_CLASSES),
+        "string_hand_anchor_statuses": list(STRING_HAND_ANCHOR_STATUSES),
         "pose_point_count": POSE_POINT_COUNT,
         "bad_case_vocab": list(BAD_CASE_VOCAB),
         "image_size": [width, height],

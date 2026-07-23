@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from annotation.annotator import annotation_output_paths
+from common.files import collect_files
 from config import BASE_DIR, DATASET_CONFIG
 
 
@@ -16,18 +17,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-
-def collect_images(input_dir: Path) -> list[Path]:
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Dataset image directory does not exist: {input_dir}")
-
-    pattern = "**/*" if DATASET_CONFIG.recursive else "*"
-    return sorted(
-        path
-        for path in input_dir.glob(pattern)
-        if path.is_file() and path.suffix.lower() in DATASET_CONFIG.image_extensions
-    )
 
 
 def remove_empty_dirs(root: Path) -> None:
@@ -81,7 +70,12 @@ def index_output_files(output_dir: Path) -> dict[str, dict[str, list[Path]]]:
 
 def expected_source_keys(input_dir: Path, output_dir: Path) -> set[str]:
     keys = set()
-    for image_path in collect_images(input_dir):
+    image_paths = collect_files(
+        input_dir,
+        DATASET_CONFIG.image_extensions,
+        recursive=DATASET_CONFIG.recursive,
+    )
+    for image_path in image_paths:
         paths = annotation_output_paths(image_path, input_dir, output_dir)
         keys.add(paths["label"].relative_to(output_dir / "labels").with_suffix("").as_posix())
     return keys

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import warnings
 from datetime import datetime, timezone
@@ -12,20 +11,13 @@ from typing import Any
 
 import cv2
 import numpy as np
-import torch
 from torch.utils.data import DataLoader
 
+from common.files import sha256_file
 from config import SEMANTIC_STRING_CONFIG
+from string_segmentation.device import resolve_device
 from string_segmentation.semantic_metrics import collect_probabilities, metrics_at_threshold, remove_small_components
 from string_segmentation.semantic_model import ReviewedStringDataset, letterbox, load_checkpoint
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _check_dataset_manifest(
@@ -60,18 +52,6 @@ def _artifact_suffix(
         threshold_token = f"{float(threshold_override):.4f}".rstrip("0").rstrip(".").replace(".", "p")
         parts.append(f"threshold_{threshold_token}")
     return f"_{'_'.join(parts)}" if parts else ""
-
-
-def _device(value: str) -> torch.device:
-    requested = str(value).strip().lower()
-    if requested in {"", "auto"}:
-        requested = "cuda" if torch.cuda.is_available() else "cpu"
-    if requested.isdigit():
-        requested = f"cuda:{requested}"
-    device = torch.device(requested)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is not available")
-    return device
 
 
 def _write_image(path: Path, image: np.ndarray) -> None:
@@ -131,7 +111,7 @@ def evaluate(
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
-    device = _device(device_value)
+    device = resolve_device(device_value)
     model, checkpoint = load_checkpoint(weights, device)
     config = checkpoint["model_config"]
     dataset = ReviewedStringDataset(
@@ -147,7 +127,7 @@ def evaluate(
     threshold = float(checkpoint.get("threshold", 0.5) if threshold_override is None else threshold_override)
     metrics = metrics_at_threshold(samples, threshold, tolerance_px=3, min_component_pixels=8)
     manifest_path = dataset_dir / "manifest.json"
-    current_manifest_hash = _sha256(manifest_path)
+    current_manifest_hash = sha256_file(manifest_path)
     checkpoint_manifest_hash = str(checkpoint.get("dataset_manifest_sha256", ""))
     dataset_matches_checkpoint, mismatch_warning = _check_dataset_manifest(
         checkpoint_manifest_hash,
@@ -166,7 +146,7 @@ def evaluate(
         "task": "binary_semantic_segmentation",
         "split": split,
         "weights": str(weights.resolve()),
-        "weights_sha256": _sha256(weights),
+        "weights_sha256": sha256_file(weights),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
         "dataset_manifest_sha256": current_manifest_hash,

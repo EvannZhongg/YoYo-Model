@@ -16,8 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from config import TRACKING_CONFIG
+from video_dataset.split_policy import parse_source_groups
 
-REVIEWED = {"approved", "reviewed", "rejected"}
+REVIEWED = {"approved", "reviewed", "rejected", "unresolved"}
 PRELABEL_FAILURES = {"no_mask", "too_many_components", "mask_area_too_large"}
 BAD_CASE_WEIGHTS = {
     "motion_blur": 2.5,
@@ -28,6 +30,7 @@ BAD_CASE_WEIGHTS = {
     "multiple_yoyo": 1.5,
     "non_trick_scene": 1.0,
 }
+AGREEMENT_EXCLUDED_BAD_CASES = {"motion_blur", "string_ambiguous", "multiple_yoyo", "hands_occluded"}
 
 
 def load_prediction_polylines(dataset_dir: str | Path, label_path: str | Path) -> list[list[list[float]]]:
@@ -113,6 +116,76 @@ def _metadata_score(data: dict[str, Any]) -> tuple[float, list[str]]:
     return round(score, 4), reasons
 
 
+def _agreement_candidate(data: dict[str, Any]) -> bool:
+    if str(data.get("string_visibility", "uncertain")) not in {"visible", "partial"}:
+        return False
+    if not _polylines(data) and not (data.get("string_mask_polygons_pixel") or []):
+        return False
+    if (data.get("qa") or {}).get("warnings"):
+        return False
+    if set(str(value) for value in (data.get("bad_case") or [])) & AGREEMENT_EXCLUDED_BAD_CASES:
+        return False
+    if str((data.get("string_prelabel") or {}).get("status", "")) in PRELABEL_FAILURES:
+        return False
+    return True
+
+
+def _annotation_agreement(binary, data: dict[str, Any], meta) -> dict[str, Any] | None:
+    """Compare model pixels with draft geometry as a review hint, never truth."""
+    import cv2
+    import numpy as np
+
+    target = np.zeros(binary.shape, dtype=np.uint8)
+    scale_x = float(meta.resized_width) / max(1.0, float(meta.original_width))
+    scale_y = float(meta.resized_height) / max(1.0, float(meta.original_height))
+    strokes = _polylines(data)
+    if strokes:
+        width = max(1, int(round(8.0 * min(scale_x, scale_y))))
+        for stroke in strokes:
+            points = np.asarray(
+                [[float(point[0]) * scale_x, float(point[1]) * scale_y] for point in stroke],
+                dtype=np.float32,
+            ).round().astype(np.int32)
+            if len(points) >= 2:
+                cv2.polylines(target, [points], False, 1, width, cv2.LINE_AA)
+    else:
+        for polygon in data.get("string_mask_polygons_pixel") or []:
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                continue
+            points = np.asarray(
+                [[float(point[0]) * scale_x, float(point[1]) * scale_y] for point in polygon],
+                dtype=np.float32,
+            ).round().astype(np.int32)
+            cv2.fillPoly(target, [points], 1)
+    target = target > 0
+    prediction = np.asarray(binary, dtype=bool)
+    target_pixels = int(target.sum())
+    prediction_pixels = int(prediction.sum())
+    if not target_pixels:
+        return None
+    intersection = int(np.logical_and(target, prediction).sum())
+    exact_dice = (2.0 * intersection / (target_pixels + prediction_pixels)) if prediction_pixels else 0.0
+    tolerance_original_px = 12
+    tolerance_input_px = max(1, int(round(tolerance_original_px * min(scale_x, scale_y))))
+    kernel = np.ones((tolerance_input_px * 2 + 1, tolerance_input_px * 2 + 1), dtype=np.uint8)
+    target_dilated = cv2.dilate(target.astype(np.uint8), kernel, iterations=1) > 0
+    prediction_dilated = cv2.dilate(prediction.astype(np.uint8), kernel, iterations=1) > 0
+    precision = float(np.logical_and(prediction, target_dilated).sum() / prediction_pixels) if prediction_pixels else 0.0
+    recall = float(np.logical_and(target, prediction_dilated).sum() / target_pixels)
+    tolerant_f1 = (2.0 * precision * recall / (precision + recall)) if precision + recall else 0.0
+    return {
+        "status": "review_hint_only",
+        "exact_dice": round(exact_dice, 6),
+        "tolerant_precision": round(precision, 6),
+        "tolerant_recall": round(recall, 6),
+        "tolerant_f1": round(tolerant_f1, 6),
+        "target_pixels": target_pixels,
+        "prediction_pixels": prediction_pixels,
+        "tolerance_original_px": tolerance_original_px,
+        "tolerance_input_px": tolerance_input_px,
+    }
+
+
 def _model_signal(
     data: dict[str, Any],
     weights: str | Path,
@@ -146,9 +219,16 @@ def _model_signal(
         model, image, int(config["input_width"]), int(config["input_height"]), model_device
     )
     threshold = float(checkpoint.get("threshold", 0.5))
-    binary = probability >= threshold
+    content_probability = probability[
+        meta.pad_y : meta.pad_y + meta.resized_height,
+        meta.pad_x : meta.pad_x + meta.resized_width,
+    ]
+    binary = content_probability >= threshold
+    agreement = _annotation_agreement(binary, data, meta)
     predicted_pixels = int(binary.sum())
-    mean_probability = float(probability.mean())
+    predicted_fraction = float(predicted_pixels / binary.size) if binary.size else 0.0
+    mean_probability = float(content_probability.mean()) if content_probability.size else 0.0
+    max_probability = float(content_probability.max()) if content_probability.size else 0.0
     score = 0.0
     reasons: list[str] = []
     visibility = str(data.get("string_visibility", "uncertain"))
@@ -192,7 +272,9 @@ def _model_signal(
         "status": "ok",
         "threshold": round(threshold, 4),
         "predicted_pixels": predicted_pixels,
+        "predicted_fraction": round(predicted_fraction, 8),
         "mean_probability": round(mean_probability, 6),
+        "max_probability": round(max_probability, 6),
         "components": components,
         "prediction_preview": str(preview_path.resolve()) if preview_path is not None else None,
         "prediction_polylines": (observation or {}).get("polylines", []),
@@ -200,6 +282,7 @@ def _model_signal(
         "prediction_anchored_to_yoyo": (observation or {}).get("anchored_to_yoyo"),
         "prediction_spatially_ambiguous": (observation or {}).get("spatially_ambiguous"),
         "editor_import_filter": "1A yoyo-spatial anchor when yoyo bbox is available",
+        "annotation_agreement": agreement,
     }
 
 
@@ -231,7 +314,7 @@ def _save_model_preview(
         overlay[mask] = cv2.addWeighted(overlay, 0.30, magenta, 0.70, 0)[mask]
         contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(overlay, contours, -1, (255, 255, 0), max(2, image_bgr.shape[1] // 1500))
-    text = f"SEMANTIC V3 RAW MASK / REVIEW ONLY  threshold={float(threshold):.4f}  pixels={int(mask.sum())}"
+    text = f"SEMANTIC RAW MASK / REVIEW ONLY  threshold={float(threshold):.4f}  pixels={int(mask.sum())}"
     cv2.putText(
         overlay,
         text,
@@ -320,8 +403,19 @@ def build_queue(
     with_model: bool = False,
     weights: str | Path | None = None,
     device: str = "",
+    exclude_source_groups: set[str] | str | None = None,
+    strategy: str = "uncertainty",
 ) -> dict[str, Any]:
     root = Path(dataset_dir)
+    if strategy not in {"uncertainty", "agreement"}:
+        raise ValueError(f"Unsupported review queue strategy: {strategy}")
+    if strategy == "agreement" and not with_model:
+        raise ValueError("strategy=agreement requires with_model=True")
+    excluded_groups = (
+        parse_source_groups(exclude_source_groups)
+        if isinstance(exclude_source_groups, str)
+        else {str(value).strip() for value in (exclude_source_groups or set()) if str(value).strip()}
+    )
     labels_root = root / "annotations" / "labels"
     paths = sorted(labels_root.rglob("*.json")) if labels_root.exists() else []
     rows: list[dict[str, Any]] = []
@@ -329,7 +423,12 @@ def build_queue(
         data = json.loads(path.read_text(encoding="utf-8"))
         if split != "all" and data.get("split") != split:
             continue
+        source_group = str(data.get("source_group") or data.get("video_id") or "").strip()
+        if source_group in excluded_groups:
+            continue
         if str(data.get("string_review_status", "auto_labeled_needs_review")) in REVIEWED:
+            continue
+        if strategy == "agreement" and not _agreement_candidate(data):
             continue
         score, reasons = _metadata_score(data)
         rows.append({
@@ -346,8 +445,8 @@ def build_queue(
             "model": None,
             "_annotation": data,
         })
-    rows = _diverse_order(rows)
-    if limit > 0:
+    rows = _diverse_order(rows) if strategy == "uncertainty" else rows
+    if strategy == "uncertainty" and limit > 0:
         rows = rows[: int(limit)]
     if with_model:
         if not weights:
@@ -359,10 +458,24 @@ def build_queue(
             model_score, model_reasons, model_details = _model_signal(
                 row["_annotation"], weights, device, model_cache, preview
             )
-            row["priority_score"] = round(float(row["priority_score"]) + model_score, 4)
-            row["reasons"].extend(model_reasons)
+            if strategy == "agreement":
+                agreement = model_details.get("annotation_agreement") or {}
+                tolerant_f1 = float(agreement.get("tolerant_f1", 0.0))
+                confidence = float(model_details.get("prediction_confidence") or 0.0)
+                components = int(model_details.get("components", 0))
+                row["priority_score"] = round(10.0 * tolerant_f1 + 2.0 * confidence - 0.15 * max(0, components - 1), 4)
+                row["reasons"] = [
+                    f"annotation_model_tolerant_f1:{tolerant_f1:.4f}",
+                    f"model_confidence:{confidence:.4f}",
+                    f"model_components:{components}",
+                ]
+            else:
+                row["priority_score"] = round(float(row["priority_score"]) + model_score, 4)
+                row["reasons"].extend(model_reasons)
             row["model"] = model_details
         rows = _diverse_order(rows)
+        if strategy == "agreement" and limit > 0:
+            rows = rows[: int(limit)]
     for index, row in enumerate(rows, 1):
         row["queue_rank"] = index
         row["batch_index"] = (index - 1) // 16 + 1
@@ -376,11 +489,17 @@ def build_queue(
         "dataset_dir": str(root.resolve()),
         "action_group": "1A",
         "split": split,
+        "strategy": strategy,
+        "exclude_source_groups": sorted(excluded_groups),
         "with_model": bool(with_model),
         "weights": str(Path(weights).resolve()) if weights else None,
         "count": len(rows),
         "rows": rows,
-        "policy": "metadata/model uncertainty only; every item requires visual review",
+        "policy": (
+            "annotation/model agreement is a review hint only; every item requires visual review"
+            if strategy == "agreement"
+            else "metadata/model uncertainty only; every item requires visual review"
+        ),
         "review_sheet": str(sheet.resolve()) if sheet else None,
     }
     output_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -399,6 +518,7 @@ def build_queue(
         "review_sheet": str(sheet.resolve()) if sheet else None,
         "count": len(rows),
         "with_model": bool(with_model),
+        "strategy": strategy,
         "top": rows[:5],
     }
 
@@ -406,13 +526,24 @@ def build_queue(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rank pending 1A string annotations for visual review.")
     parser.add_argument("--dataset-dir", default="datasets/video_v1")
-    parser.add_argument("--split", choices=["all", "train", "val", "test"], default="all")
+    parser.add_argument("--split", choices=["all", "train", "val", "test"], default="train")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--with-model", action="store_true")
-    parser.add_argument("--weights", default="runs/semantic/yoyo_string_semantic_v3/weights/best.pt")
+    parser.add_argument("--weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument("--device", default="")
+    parser.add_argument("--exclude-source-groups", default="", help="Comma-separated source groups excluded before ranking/inference.")
+    parser.add_argument("--strategy", choices=["uncertainty", "agreement"], default="uncertainty")
     args = parser.parse_args()
-    result = build_queue(args.dataset_dir, args.split, args.limit, args.with_model, args.weights, args.device)
+    result = build_queue(
+        args.dataset_dir,
+        args.split,
+        args.limit,
+        args.with_model,
+        args.weights,
+        args.device,
+        args.exclude_source_groups,
+        args.strategy,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

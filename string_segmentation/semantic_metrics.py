@@ -148,6 +148,19 @@ def metrics_at_threshold(
     }
 
 
+def balanced_validation_key(metrics: dict[str, Any]) -> tuple[float, float, float, float, float]:
+    tolerant_f1 = float(metrics["tolerant"]["f1"])
+    presence_f1 = float(metrics["image_presence"]["f1"])
+    balanced_f1 = (
+        2.0 * tolerant_f1 * presence_f1 / (tolerant_f1 + presence_f1)
+        if tolerant_f1 + presence_f1 > 0.0
+        else 0.0
+    )
+    negative_false_positives = float(metrics["negative_mean_false_positive_pixels"])
+    pixel_dice = float(metrics["pixel"]["dice"])
+    return balanced_f1, presence_f1, -negative_false_positives, tolerant_f1, pixel_dice
+
+
 def select_threshold(
     samples: list[dict[str, Any]],
     thresholds: Iterable[float] | None = None,
@@ -165,10 +178,7 @@ def select_threshold(
     best = max(
         results,
         key=lambda item: (
-            item["tolerant"]["f1"],
-            item["image_presence"]["f1"],
-            item["pixel"]["dice"],
-            -item["negative_mean_false_positive_pixels"],
+            *balanced_validation_key(item),
             -abs(item["threshold"] - 0.5),
         ),
     )

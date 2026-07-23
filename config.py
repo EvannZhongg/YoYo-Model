@@ -145,7 +145,11 @@ class YOLOConfig:
 @dataclass(frozen=True)
 class TrackingConfig:
     weights_path: Path = _as_path(
-        _env_or_config("TRACKING_WEIGHTS_PATH", "tracking.weights_path", "runs/yolo/yoyo_video_v2/weights/best.pt")
+        _env_or_config(
+            "TRACKING_WEIGHTS_PATH",
+            "tracking.weights_path",
+            "runs/yolo/yoyo_video_v8_fresh_holdout/weights/best.pt",
+        )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
     confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.25))
@@ -155,18 +159,27 @@ class TrackingConfig:
     trace_length: int = int(_env_or_config("TRACKING_TRACE_LENGTH", "tracking.trace_length", 30))
     line_thickness: int = int(_env_or_config("TRACKING_LINE_THICKNESS", "tracking.line_thickness", 2))
     text_scale: float = float(_env_or_config("TRACKING_TEXT_SCALE", "tracking.text_scale", 0.6))
+    visualization_max_width: int = int(
+        _env_or_config("TRACKING_VISUALIZATION_MAX_WIDTH", "tracking.visualization_max_width", 1920)
+    )
     pose_weights_path: Path = _as_path(_env_or_config("TRACKING_POSE_WEIGHTS_PATH", "tracking.pose_weights_path", "models/yolo11n-pose.pt"))
-    enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", False), False)
+    enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", True), True)
     auto_download_pose: bool = _as_bool(_env_or_config("TRACKING_AUTO_DOWNLOAD_POSE", "tracking.auto_download_pose", False), False)
     string_weights_path: Path = _as_path(
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/semantic/yoyo_string_semantic_v3/weights/best.pt",
+            "runs/semantic/yoyo_string_semantic_v17_reviewed_expansion_hn005/weights/best.pt",
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
     string_confidence: float = float(_env_or_config("TRACKING_STRING_CONFIDENCE", "tracking.string_confidence", 0.20))
+    string_inference_scale: float = float(
+        _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 2.0)
+    )
+    string_inference_fps: float = float(
+        _env_or_config("TRACKING_STRING_INFERENCE_FPS", "tracking.string_inference_fps", 10.0)
+    )
     string_max_propagation_frames: int = int(
         _env_or_config("TRACKING_STRING_MAX_PROPAGATION_FRAMES", "tracking.string_max_propagation_frames", 12)
     )

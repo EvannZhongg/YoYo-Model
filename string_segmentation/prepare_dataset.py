@@ -15,19 +15,13 @@ import cv2
 import numpy as np
 import yaml
 
+from common.files import sha256_file
 from config import STRING_SEGMENTATION_CONFIG
+from video_dataset.split_policy import derived_split, parse_source_groups, remove_cross_split_duplicate_hashes
 
 
 ACCEPTED_REVIEW = {"approved", "reviewed"}
 POSITIVE_VISIBILITY = {"visible", "partial"}
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _annotation_digest(paths: list[Path]) -> str:
@@ -85,6 +79,8 @@ def prepare_string_dataset(
     output_dir: Path,
     line_width_px: int = 8,
     clear: bool = False,
+    holdout_source_groups: set[str] | None = None,
+    exclude_original_test: bool = False,
 ) -> dict[str, Any]:
     labels_root = annotations_dir / "labels"
     if not labels_root.exists():
@@ -99,6 +95,7 @@ def prepare_string_dataset(
     source_groups: dict[str, set[str]] = defaultdict(set)
     attachment_class_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     used_annotations: list[Path] = []
+    candidates: list[dict[str, Any]] = []
 
     for label_path in label_paths:
         try:
@@ -110,9 +107,16 @@ def prepare_string_dataset(
         if review not in ACCEPTED_REVIEW:
             skipped.append({"label": str(label_path), "reason": f"string_review_status={review}"})
             continue
-        split = str(annotation.get("split", "")).lower()
-        if split not in {"train", "val", "test"}:
-            skipped.append({"label": str(label_path), "reason": f"invalid_split={split}"})
+        original_split = str(annotation.get("split", "")).lower()
+        group = str(annotation.get("source_group") or annotation.get("video_id") or "unknown")
+        split, split_skip = derived_split(
+            original_split,
+            group,
+            holdout_source_groups,
+            exclude_original_test,
+        )
+        if split is None:
+            skipped.append({"label": str(label_path), "reason": str(split_skip)})
             continue
         visibility = str(annotation.get("string_visibility", "uncertain")).lower()
         if visibility == "uncertain":
@@ -148,6 +152,39 @@ def prepare_string_dataset(
             continue
 
         video_id = str(annotation.get("video_id") or annotation.get("source_group") or "unknown")
+        candidates.append(
+            {
+                "label_path": label_path,
+                "annotation": annotation,
+                "split": split,
+                "visibility": visibility,
+                "source": source,
+                "width": width,
+                "height": height,
+                "polygons": polygons,
+                "video_id": video_id,
+                "source_group": group,
+                "image_sha256": sha256_file(source),
+            }
+        )
+
+    candidates, duplicate_drops = remove_cross_split_duplicate_hashes(candidates)
+    skipped.extend(
+        {
+            "label": str(item["label_path"]),
+            "reason": f"duplicate_image_hash_owned_by_{item['duplicate_owner_split']}",
+        }
+        for item in duplicate_drops
+    )
+
+    for candidate in candidates:
+        label_path = candidate["label_path"]
+        annotation = candidate["annotation"]
+        split = candidate["split"]
+        visibility = candidate["visibility"]
+        source = candidate["source"]
+        polygons = candidate["polygons"]
+        video_id = candidate["video_id"]
         relative = Path(split) / video_id / source.name
         image_target = output_dir / "images" / relative
         yolo_target = output_dir / "labels" / relative.with_suffix(".txt")
@@ -199,8 +236,14 @@ def prepare_string_dataset(
         "data_yaml": str(data_yaml.resolve()),
         "line_width_px": int(line_width_px),
         "accepted_review_statuses": sorted(ACCEPTED_REVIEW),
+        "derived_split_policy": {
+            "holdout_source_groups": sorted(holdout_source_groups or set()),
+            "exclude_original_test": bool(exclude_original_test),
+            "canonical_annotations_unchanged": True,
+        },
         "counts": {split: dict(values) for split, values in sorted(counts.items())},
         "used_annotation_count": len(used_annotations),
+        "cross_split_duplicate_hashes_removed": len(duplicate_drops),
         "source_groups": {split: sorted(groups) for split, groups in sorted(source_groups.items())},
         "string_attachment_class_counts": {
             split: dict(sorted(values.items())) for split, values in sorted(attachment_class_counts.items())
@@ -223,12 +266,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=str(STRING_SEGMENTATION_CONFIG.dataset_dir))
     parser.add_argument("--line-width-px", type=int, default=STRING_SEGMENTATION_CONFIG.line_width_px)
     parser.add_argument("--clear", action="store_true")
+    parser.add_argument(
+        "--holdout-source-groups",
+        default="",
+        help="Comma-separated source groups routed wholly to derived test.",
+    )
+    parser.add_argument(
+        "--exclude-original-test",
+        action="store_true",
+        help="Exclude the previously inspected canonical test sources from this derived dataset.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    result = prepare_string_dataset(Path(args.annotations_dir), Path(args.output_dir), args.line_width_px, args.clear)
+    result = prepare_string_dataset(
+        Path(args.annotations_dir),
+        Path(args.output_dir),
+        args.line_width_px,
+        args.clear,
+        parse_source_groups(args.holdout_source_groups),
+        args.exclude_original_test,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

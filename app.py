@@ -1,8 +1,7 @@
 import logging
 import os
 import json
-import subprocess
-import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import gradio as gr
@@ -12,6 +11,7 @@ from annotation.annotator import annotate_image_for_dataset, run_detection_strea
 from annotation.prompts import EXAMPLE_PROMPTS, YOYO_DETECTION_PROMPT
 from annotation.review import update_annotation_status
 from annotation.video_frame_annotator import draw_visualization
+from common.files import collect_files
 from config import (
     BASE_DIR,
     DATASET_CONFIG,
@@ -20,9 +20,40 @@ from config import (
     STRING_SEGMENTATION_CONFIG,
     TRACKING_CONFIG,
 )
+from video_tracking.frame_review import (
+    append_tracking_frame_review,
+    load_tracking_frame_selection,
+)
 from video_tracking.segment_review import load_segment_context, update_segment
 from video_tracking.tracker import track_video
 from video_dataset.string_review_queue import load_prediction_polylines
+from workbench.commands import (
+    _workbench_holdout_defaults,
+    workbench_audit,
+    workbench_build,
+    workbench_candidates,
+    workbench_evaluate_pipeline,
+    workbench_evaluate_semantic,
+    workbench_hard_negative_neighbors,
+    workbench_hard_negative_queue,
+    workbench_model_registry,
+    workbench_prelabel_strings,
+    workbench_prepare_string,
+    workbench_qa_export,
+    workbench_string_review_queue,
+    workbench_train_semantic,
+    workbench_train_string,
+    workbench_vlm,
+)
+from workbench.review import (
+    review_label_paths as _review_label_paths,
+    review_label_preview,
+    review_visualization_path as _review_visualization_path,
+    workbench_stats as _workbench_stats,
+)
+from workbench.tracking import (
+    tracking_review_gallery as _tracking_review_gallery,
+)
 
 
 LOG_FILE = BASE_DIR / "app.log"
@@ -51,19 +82,6 @@ def _example_value(path: Path | None):
     return None
 
 
-def _collect_dataset_images(input_dir: str) -> list[Path]:
-    root = Path(input_dir)
-    if not root.exists():
-        raise FileNotFoundError(f"数据集图片目录不存在：{root}")
-
-    pattern = "**/*" if DATASET_CONFIG.recursive else "*"
-    return sorted(
-        path
-        for path in root.glob(pattern)
-        if path.is_file() and path.suffix.lower() in DATASET_CONFIG.image_extensions
-    )
-
-
 def run_dataset_annotation_streaming(
     input_dir: str,
     output_dir: str,
@@ -73,7 +91,11 @@ def run_dataset_annotation_streaming(
     max_pixels_str: str,
 ):
     try:
-        image_paths = _collect_dataset_images(input_dir)
+        image_paths = collect_files(
+            Path(input_dir),
+            DATASET_CONFIG.image_extensions,
+            recursive=DATASET_CONFIG.recursive,
+        )
     except Exception as exc:
         yield f"Error: {exc}"
         return
@@ -132,6 +154,47 @@ def _uploaded_video_path(video):
     return getattr(video, "name", None)
 
 
+def select_tracking_review_frame(metadata_path: str | Path | None, evt: gr.SelectData):
+    if not metadata_path:
+        return {}, {}, "Select a completed tracking run first."
+    index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+    try:
+        selection = load_tracking_frame_selection(metadata_path, index)
+    except Exception as exc:
+        return {}, {}, f"Frame selection failed: {exc}"
+    binding = selection["binding"]
+    return (
+        selection["frame_record"],
+        binding,
+        f"Selected frame {binding['frame_index']} ({binding['view']}); digest {binding['frame_record_sha256']}.",
+    )
+
+
+def save_tracking_frame_review(
+    metadata_path: str | Path | None,
+    binding: dict | None,
+    decision: str,
+    reviewer: str,
+    notes: str,
+):
+    if not metadata_path:
+        return None, "Frame review failed: select a completed tracking run first."
+    try:
+        output_path, event = append_tracking_frame_review(
+            metadata_path,
+            binding or {},
+            decision,
+            reviewer,
+            notes,
+        )
+    except Exception as exc:
+        return None, f"Frame review failed: {exc}"
+    return (
+        str(output_path),
+        f"Saved {event['decision']} review for frame {event['frame_index']} by {event['reviewer']}.",
+    )
+
+
 def run_video_tracking(
     video,
     weights_path: str,
@@ -145,15 +208,19 @@ def run_video_tracking(
     enable_string_model: bool,
     string_weights_path: str,
     string_confidence: float,
+    string_inference_scale: float,
+    string_inference_fps: float,
     string_attachment_class: str,
     export_clips: bool,
     start_seconds: float,
     max_segment_seconds: float,
     activity_speed_diagonal_per_s: float,
+    max_frames: int,
+    visualization_max_width: int,
 ):
     video_path = _uploaded_video_path(video)
     if not video_path:
-        return None, None, None, None, None, None, [], "Error: No video provided."
+        return None, None, None, None, None, [], None, [], None, {}, {}, None, "", "Error: No video provided."
 
     try:
         result = track_video(
@@ -170,24 +237,34 @@ def run_video_tracking(
             enable_string_model=bool(enable_string_model),
             string_weights_path=string_weights_path.strip() or None,
             string_confidence=float(string_confidence),
+            string_inference_scale=float(string_inference_scale),
+            string_inference_fps=float(string_inference_fps),
             string_attachment_class=string_attachment_class,
             export_json=True,
             export_clips=bool(export_clips),
             activity_speed_diagonal_per_s=float(activity_speed_diagonal_per_s),
             start_seconds=float(start_seconds),
             max_segment_seconds=float(max_segment_seconds),
+            max_frames=max(0, int(max_frames)),
+            visualization_max_width=max(0, int(visualization_max_width)),
         )
     except Exception as exc:
         logger.exception("Video tracking failed")
-        return None, None, None, None, None, None, [], f"Error: {exc}"
+        return None, None, None, None, None, [], None, [], None, {}, {}, None, "", f"Error: {exc}"
 
+    review_gallery = _tracking_review_gallery(result.get("run_dir"))
     status = (
         f"Done. Frames: {result['frame_count']}\n"
         f"Output: {result['output_video']}\n"
         f"Segments: {len(result['segments'])}\n"
         f"Approved clip-tokens: {result.get('trick_token_count', 0)}\n"
         f"Bad cases: {result['bad_case_counts']}\n"
+        f"String geometry: {result.get('string_geometry_counts', {})}\n"
         f"String model: {result.get('string_model', 'disabled')}\n"
+        f"Semantic inference frames: {result.get('string_inference_frame_count', 0)}\n"
+        f"Tracking rate: {result.get('tracking_loop_fps', 0):.2f} frames/s\n"
+        f"Preview resolution: {result.get('output_width', 0)}x{result.get('output_height', 0)}\n"
+        f"Review images: {len(review_gallery)}\n"
         f"Run manifest: {result['run_manifest']}\n"
         f"Weights: {result['weights']}"
     )
@@ -198,88 +275,33 @@ def run_video_tracking(
         result["segments_json"],
         result["run_manifest"],
         result.get("review_sheet") or None,
+        review_gallery,
         result.get("trick_token_manifest") or None,
         clips,
+        result["metadata_jsonl"],
+        {},
+        {},
+        None,
+        "",
         status,
     )
 
 
-def _review_label_paths(dataset_dir: str, status: str, split: str, component: str = "all") -> list[Path]:
-    root = Path(dataset_dir)
-    labels_root = root / "annotations" / "labels"
-    if not labels_root.exists():
-        return []
-    paths = sorted(labels_root.rglob("*.json"))
-    results = []
-    for path in paths:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        status_field = {
-            "bbox": "bbox_review_status",
-            "string": "string_review_status",
-        }.get(component, "review_status")
-        current_status = data.get(status_field)
-        if current_status is None:
-            current_status = data.get("review_status") if component == "all" else "auto_labeled_needs_review"
-        if status and current_status != status:
-            continue
-        if split != "all" and data.get("split") != split:
-            continue
-        results.append(path)
-    queue_rank: dict[str, int] = {}
-    queue_path = root / "string_review_queue.json"
-    if queue_path.exists():
-        try:
-            payload = json.loads(queue_path.read_text(encoding="utf-8"))
-            queue_rank = {
-                str(Path(row["label_path"]).resolve()): int(row.get("queue_rank", 10**9))
-                for row in payload.get("rows", [])
-                if row.get("label_path")
-            }
-        except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError):
-            queue_rank = {}
-    return sorted(results, key=lambda path: (queue_rank.get(str(path.resolve()), 10**9), str(path)))
+    paths = _review_label_paths(dataset_dir, status, split, component, exclude_source_groups)
+    choices = [str(path) for path in paths]
+    selected = choices[0] if choices else ""
+    image, summary, selected = review_label_preview(selected, dataset_dir)
+    return gr.update(choices=choices, value=selected), image, summary
 
 
-def _review_visualization_path(label_path: Path, dataset_dir: str) -> Path:
-    labels_root = Path(dataset_dir) / "annotations" / "labels"
-    relative = label_path.relative_to(labels_root)
-    return Path(dataset_dir) / "annotations" / "visualizations" / relative.with_name(f"{relative.stem}_vis.jpg")
-
-
-def review_label_preview(label_path: str | None, dataset_dir: str):
-    if not label_path:
-        return None, "", ""
-    path = Path(label_path)
-    if not path.exists():
-        return None, "Label not found", label_path
-    data = json.loads(path.read_text(encoding="utf-8"))
-    preview = _review_visualization_path(path, dataset_dir)
-    queue_path = Path(dataset_dir) / "string_review_queue.json"
-    if queue_path.exists():
-        try:
-            queue = json.loads(queue_path.read_text(encoding="utf-8"))
-            selected = next(
-                (
-                    row
-                    for row in queue.get("rows", [])
-                    if str(Path(str(row.get("label_path", ""))).resolve()) == str(path.resolve())
-                ),
-                None,
-            )
-            if selected:
-                data = dict(data)
-                data["review_queue"] = selected
-        except (OSError, json.JSONDecodeError, TypeError, KeyError, ValueError):
-            pass
-    summary = json.dumps(data, ensure_ascii=False, indent=2)
-    return str(preview) if preview.exists() else None, summary, str(path)
-
-
-def refresh_review_queue(dataset_dir: str, status: str, split: str, component: str):
-    paths = _review_label_paths(dataset_dir, status, split, component)
+def refresh_review_queue(
+    dataset_dir: str,
+    status: str,
+    split: str,
+    component: str,
+    exclude_source_groups: str = "",
+):
+    paths = _review_label_paths(dataset_dir, status, split, component, exclude_source_groups)
     choices = [str(path) for path in paths]
     selected = choices[0] if choices else ""
     image, summary, selected = review_label_preview(selected, dataset_dir)
@@ -293,9 +315,10 @@ def workbench_navigate(
     split: str,
     component: str,
     direction: int,
+    exclude_source_groups: str = "",
 ):
     """Move through the active review queue while refreshing every editor field."""
-    paths = [str(path) for path in _review_label_paths(dataset_dir, status, split, component)]
+    paths = [str(path) for path in _review_label_paths(dataset_dir, status, split, component, exclude_source_groups)]
     if not paths:
         return (gr.update(choices=[], value=""),) + workbench_preview(None, dataset_dir)
     current = str(label_path or "")
@@ -318,6 +341,7 @@ def apply_review_status(
     string_visibility: str | None = None,
     yoyo_visibility: str | None = None,
     scene_label: str | None = None,
+    exclude_source_groups: str = "",
 ):
     if not label_path:
         return gr.update(), None, "No label selected"
@@ -335,197 +359,19 @@ def apply_review_status(
         )
     except Exception as exc:
         return gr.update(), None, f"Review update failed: {exc}"
-    choices = [str(path) for path in _review_label_paths(dataset_dir, "auto_labeled_needs_review", split, component)]
+    choices = [
+        str(path)
+        for path in _review_label_paths(
+            dataset_dir, "auto_labeled_needs_review", split, component, exclude_source_groups
+        )
+    ]
     selected = choices[0] if choices else ""
     image, summary, selected = review_label_preview(selected, dataset_dir)
     return gr.update(choices=choices, value=selected), image, summary
 
 
-def _workbench_stats(dataset_dir: str) -> str:
-    """Return compact, refreshable counts for the visual workbench."""
-    root = Path(dataset_dir)
-    labels = sorted((root / "annotations" / "labels").rglob("*.json")) if (root / "annotations" / "labels").exists() else []
-    counts = {
-        "labels": len(labels),
-        "bbox_pending": 0,
-        "bbox_approved": 0,
-        "string_pending": 0,
-        "string_approved": 0,
-        "rejected": 0,
-        "trick": 0,
-        "transition": 0,
-        "non_trick": 0,
-        "scene_unknown": 0,
-    }
-    for path in labels:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        bbox_status = data.get("bbox_review_status", data.get("review_status", "auto_labeled_needs_review"))
-        string_status = data.get("string_review_status", "auto_labeled_needs_review")
-        counts["bbox_pending"] += bbox_status not in {"approved", "reviewed", "rejected"}
-        counts["bbox_approved"] += bbox_status in {"approved", "reviewed"}
-        counts["string_pending"] += string_status not in {"approved", "reviewed", "rejected"}
-        counts["string_approved"] += string_status in {"approved", "reviewed"}
-        counts["rejected"] += data.get("review_status") == "rejected"
-        scene = str(data.get("scene_label", "unknown"))
-        key = scene if scene in {"trick", "transition", "non_trick"} else "scene_unknown"
-        counts[key] += 1
-    frames_path = root / "frames.jsonl"
-    frame_count = sum(1 for line in frames_path.read_text(encoding="utf-8").splitlines() if line.strip()) if frames_path.exists() else 0
-    return (
-        f"Labels: {counts['labels']} | Frame records: {frame_count}\n"
-        f"BBox pending: {counts['bbox_pending']} | BBox approved: {counts['bbox_approved']}\n"
-        f"String pending: {counts['string_pending']} | String approved: {counts['string_approved']}\n"
-        f"Scenes - trick: {counts['trick']} | transition: {counts['transition']} | "
-        f"non-trick: {counts['non_trick']} | unknown: {counts['scene_unknown']}\n"
-        f"Rejected frames: {counts['rejected']}"
-    )
-
-
-def _run_workbench_command(args: list[str]) -> str:
-    try:
-        completed = subprocess.run(
-            [sys.executable, *args],
-            cwd=str(BASE_DIR),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-    except Exception as exc:
-        return f"Command failed to start: {exc}"
-    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
-    return f"Exit code: {completed.returncode}\n{output}" if output else f"Exit code: {completed.returncode}"
-
-
-def workbench_build(videos_dir: str, dataset_dir: str, sample_fps: float, max_frames_per_video: int) -> str:
-    return _run_workbench_command([
-        "-m", "video_dataset.build", "--videos-dir", videos_dir, "--output-dir", dataset_dir,
-        "--sample-fps", str(sample_fps), "--max-frames-per-video", str(int(max_frames_per_video)),
-        "--action-group", DATASET_CONFIG.current_action_group,
-    ])
-
-
-def workbench_audit(dataset_dir: str, strict: bool) -> str:
-    args = ["-m", "video_dataset.audit", "--dataset-dir", dataset_dir]
-    if strict:
-        args.append("--strict")
-    return _run_workbench_command(args)
-
-
-def workbench_model_registry() -> str:
-    return _run_workbench_command(["model_registry.py"])
-
-
-def workbench_candidates(dataset_dir: str, weights: str, sample_fps: float, confidence: float, max_candidates: int) -> str:
-    return _run_workbench_command([
-        "-m", "video_dataset.select_candidates", "--dataset-dir", dataset_dir, "--weights", weights,
-        "--sample-fps", str(sample_fps), "--confidence", str(confidence),
-        "--max-candidates-per-video", str(int(max_candidates)),
-    ])
-
-
-def workbench_vlm(dataset_dir: str, split: str, limit: int, workers: int, candidates_only: bool) -> str:
-    args = ["-m", "annotation.video_frame_annotator", "--dataset-dir", dataset_dir, "--split", split, "--workers", str(int(workers))]
-    if int(limit) > 0:
-        args.extend(["--limit", str(int(limit))])
-    if candidates_only:
-        args.append("--candidates-only")
-    return _run_workbench_command(args)
-
-
-def workbench_qa_export(dataset_dir: str, yolo_dir: str) -> str:
-    qa_output = _run_workbench_command(["-m", "annotation.qa", "--dataset-dir", dataset_dir])
-    export_output = _run_workbench_command([
-        "-m", "yolo_training.prepare_dataset", "--annotations-dir", f"{dataset_dir}/annotations",
-        "--output-dir", yolo_dir, "--clear",
-    ])
-    return f"QA\n{qa_output}\n\nYOLO export\n{export_output}"
-
-
-def workbench_prepare_string(dataset_dir: str, output_dir: str) -> str:
-    return _run_workbench_command([
-        "-m", "string_segmentation.prepare_dataset",
-        "--annotations-dir", f"{dataset_dir}/annotations",
-        "--output-dir", output_dir,
-        "--clear",
-    ])
-
-
-def workbench_train_string(dataset_dir: str, output_dir: str, epochs: int, device: str) -> str:
-    args = [
-        "-m", "string_segmentation.train",
-        "--annotations-dir", f"{dataset_dir}/annotations",
-        "--dataset-dir", output_dir,
-        "--epochs", str(int(epochs)),
-        "--auto-download",
-        "--clear-dataset",
-    ]
-    if str(device).strip():
-        args.extend(["--device", str(device).strip()])
-    return _run_workbench_command(args)
-
-
-def workbench_train_semantic(string_dataset_dir: str, output_dir: str, run_name: str, epochs: int, device: str) -> str:
-    args = [
-        "-m", "string_segmentation.train_semantic",
-        "--dataset-dir", string_dataset_dir,
-        "--project", output_dir,
-        "--name", run_name.strip() or SEMANTIC_STRING_CONFIG.run_name,
-        "--epochs", str(int(epochs)),
-    ]
-    if str(device).strip():
-        args.extend(["--device", str(device).strip()])
-    return _run_workbench_command(args)
-
-
-def workbench_evaluate_semantic(weights: str, string_dataset_dir: str, device: str) -> str:
-    args = [
-        "-m", "string_segmentation.evaluate_semantic",
-        "--weights", weights,
-        "--dataset-dir", string_dataset_dir,
-        "--split", "test",
-    ]
-    if str(device).strip():
-        args.extend(["--device", str(device).strip()])
-    return _run_workbench_command(args)
-
-
-def workbench_prelabel_strings(dataset_dir: str, split: str, limit: int) -> str:
-    args = ["-m", "annotation.string_prelabel", "--dataset-dir", dataset_dir, "--split", split]
-    if int(limit) > 0:
-        args.extend(["--limit", str(int(limit))])
-    return _run_workbench_command(args)
-
-
-def workbench_string_review_queue(
-    dataset_dir: str,
-    split: str,
-    limit: int,
-    with_model: bool,
-    weights: str,
-    device: str,
-) -> tuple[str, str | None]:
-    args = [
-        "-m", "video_dataset.string_review_queue",
-        "--dataset-dir", dataset_dir,
-        "--split", split,
-        "--limit", str(int(limit)),
-    ]
-    if with_model:
-        args.extend(["--with-model", "--weights", weights])
-        if str(device).strip():
-            args.extend(["--device", str(device).strip()])
-    output = _run_workbench_command(args)
-    sheet = Path(dataset_dir) / "review_sheets" / "string_review_queue.jpg"
-    return output, str(sheet) if sheet.exists() else None
-
-
-def workbench_refresh(dataset_dir: str, status: str, split: str, component: str):
-    queue, image, summary = refresh_review_queue(dataset_dir, status, split, component)
+def workbench_refresh(dataset_dir: str, status: str, split: str, component: str, exclude_source_groups: str = ""):
+    queue, image, summary = refresh_review_queue(dataset_dir, status, split, component, exclude_source_groups)
     return queue, image, summary, _workbench_stats(dataset_dir)
 
 
@@ -540,6 +386,7 @@ def workbench_apply(
     string_visibility: str,
     yoyo_visibility: str,
     scene_label: str,
+    exclude_source_groups: str = "",
 ):
     queue, image, summary = apply_review_status(
         status,
@@ -552,6 +399,7 @@ def workbench_apply(
         string_visibility,
         yoyo_visibility,
         scene_label,
+        exclude_source_groups,
     )
     return queue, image, summary, _workbench_stats(dataset_dir)
 
@@ -688,7 +536,7 @@ def workbench_detail_crop(label_path: str | None, dataset_dir: str | None = None
     caption.text((12, 10), "RAW DETAIL", fill=(255, 255, 255))
     caption.text((raw_crop.width + 12, 10), "ANNOTATION OVERLAY", fill=(255, 255, 255))
     if prediction_crop is not None:
-        caption.text((raw_crop.width * 2 + 12, 10), "SEMANTIC V3 REVIEW ONLY", fill=(255, 255, 255))
+        caption.text((raw_crop.width * 2 + 12, 10), "SEMANTIC MODEL REVIEW ONLY", fill=(255, 255, 255))
     return comparison
 
 
@@ -991,6 +839,11 @@ def save_segment_review(segment_id: str, segments_path: str, status: str, start_
 
 
 def create_demo():
+    version_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    holdout_source_groups_default, exclude_original_test_default = _workbench_holdout_defaults()
+    workbench_yolo_default = BASE_DIR / "datasets" / "video_v1" / f"yolo_candidate_{version_stamp}"
+    workbench_string_default = BASE_DIR / "datasets" / "video_v1" / f"string_seg_candidate_{version_stamp}"
+    workbench_semantic_name_default = f"yoyo_string_semantic_candidate_{version_stamp}"
     with gr.Blocks(title="YoYo Auto Annotation") as demo:
         gr.Markdown("# YoYo Auto Annotation")
         gr.Markdown("使用大模型先自动标注悠悠球图片，保存原图副本、坐标 JSON 和可视化图片，供后续训练检测/追踪模型使用。")
@@ -1130,8 +983,18 @@ def create_demo():
                 with gr.Row():
                     workbench_videos_dir = gr.Textbox(label="Videos Directory", value=str(BASE_DIR / "videos"))
                     workbench_dataset_dir = gr.Textbox(label="Video Dataset Directory", value=str(BASE_DIR / "datasets" / "video_v1"))
-                    workbench_yolo_dir = gr.Textbox(label="YOLO Output Directory", value=str(BASE_DIR / "datasets" / "video_v1" / "yolo_v3"))
-                    workbench_string_dir = gr.Textbox(label="String Segmentation Dataset", value=str(STRING_SEGMENTATION_CONFIG.dataset_dir))
+                    workbench_yolo_dir = gr.Textbox(label="YOLO Output Directory", value=str(workbench_yolo_default))
+                    workbench_string_dir = gr.Textbox(label="String Segmentation Dataset", value=str(workbench_string_default))
+                    wb_replace_dataset = gr.Checkbox(label="Allow replacing an existing dataset version", value=False)
+                    wb_holdout_source_groups = gr.Textbox(
+                        label="Derived Holdout Source Groups",
+                        value=holdout_source_groups_default,
+                        placeholder="comma-separated source_group values",
+                    )
+                    wb_exclude_original_test = gr.Checkbox(
+                        label="Exclude previously inspected canonical test",
+                        value=exclude_original_test_default,
+                    )
 
                 with gr.Row():
                     with gr.Column():
@@ -1172,36 +1035,114 @@ def create_demo():
                         wb_string_device = gr.Textbox(label="Device", value=STRING_SEGMENTATION_CONFIG.device, placeholder="0, cpu, or empty")
                         wb_string_prepare = gr.Button("Export Reviewed String Dataset")
                         wb_string_train = gr.Button("Train String Segmentation", variant="primary")
+                        wb_string_run_name = gr.Textbox(
+                            label="YOLO String Run Name",
+                            value=f"yoyo_string_candidate_{version_stamp}",
+                        )
                         wb_semantic_project = gr.Textbox(
                             label="Semantic Model Project",
                             value=str(SEMANTIC_STRING_CONFIG.project),
                         )
                         wb_semantic_name = gr.Textbox(
                             label="Semantic Run Name",
-                            value=SEMANTIC_STRING_CONFIG.run_name,
+                            value=workbench_semantic_name_default,
                         )
+                        wb_semantic_architecture = gr.Dropdown(
+                            label="Semantic Architecture",
+                            choices=["tiny_unet", "lraspp_mobilenet_v3"],
+                            value="tiny_unet",
+                        )
+                        wb_semantic_pretrained = gr.Checkbox(label="ImageNet Pretrained Backbone", value=False)
+                        wb_semantic_initial_weights = gr.Textbox(label="Semantic Warm-start Weights", value="")
+                        with gr.Row():
+                            wb_semantic_lr = gr.Number(label="Semantic Learning Rate", value=0.001)
+                            wb_semantic_hard_negative = gr.Number(label="Hard-negative Weight", value=0.005)
+                        with gr.Row():
+                            wb_semantic_patience = gr.Number(label="Early-stop Patience (0 = off)", value=8, precision=0)
+                            wb_semantic_min_epochs = gr.Number(label="Early-stop Minimum Epochs", value=12, precision=0)
                         wb_semantic_weights = gr.Textbox(
                             label="Semantic Weights (for test evaluation)",
-                            value=str(SEMANTIC_STRING_CONFIG.project / SEMANTIC_STRING_CONFIG.run_name / "weights" / "best.pt"),
+                            value=str(SEMANTIC_STRING_CONFIG.project / workbench_semantic_name_default / "weights" / "best.pt"),
                         )
                         wb_semantic_train = gr.Button("Train Semantic String Model")
                         wb_semantic_eval = gr.Button("Evaluate Semantic Model on Test")
+                        with gr.Accordion("Deployed Detector + String Evaluation", open=False):
+                            wb_pipeline_string_dataset = gr.Textbox(
+                                label="Reviewed Pipeline Dataset",
+                                value=str(BASE_DIR / "datasets" / "video_v1" / "string_seg_v17_reviewed_expansion"),
+                            )
+                            wb_pipeline_detector = gr.Textbox(
+                                label="Detector Weights",
+                                value=str(TRACKING_CONFIG.weights_path),
+                            )
+                            wb_pipeline_string = gr.Textbox(
+                                label="String Weights",
+                                value=str(TRACKING_CONFIG.string_weights_path),
+                            )
+                            wb_pipeline_scale = gr.Slider(
+                                label="Semantic Inference Scale",
+                                minimum=0.5,
+                                maximum=2.0,
+                                value=TRACKING_CONFIG.string_inference_scale,
+                                step=0.25,
+                            )
+                            wb_pipeline_output = gr.Textbox(
+                                label="Pipeline Evaluation Output",
+                            value=str(BASE_DIR / "runs" / "pipeline_eval" / f"workbench_{version_stamp}"),
+                            )
+                            with gr.Row():
+                                wb_pipeline_split = gr.Dropdown(
+                                    label="Evaluation Split",
+                                    choices=["val", "test"],
+                                    value="val",
+                                )
+                                wb_pipeline_confirm_test = gr.Checkbox(
+                                    label="Confirm final frozen-test evaluation",
+                                    value=False,
+                                )
+                            wb_pipeline_eval = gr.Button("Evaluate Deployed Pipeline")
+                            wb_pipeline_log = gr.Textbox(label="Pipeline Evaluation Log", lines=7, interactive=False)
+                            wb_pipeline_sheet = gr.Image(label="Pipeline Failure Review", type="filepath", interactive=False)
                         wb_string_prelabel_split = gr.Dropdown(label="Color Prelabel Split", choices=["all", "train", "val", "test"], value="all")
                         wb_string_prelabel_limit = gr.Number(label="Color Prelabel Limit (0 = all)", value=0, precision=0)
                         wb_string_prelabel = gr.Button("Generate Color String Proposals")
-                        wb_queue_split = gr.Dropdown(label="Review Queue Split", choices=["all", "train", "val", "test"], value="all")
+                        wb_queue_split = gr.Dropdown(label="Review Queue Split", choices=["all", "train", "val", "test"], value="train")
                         wb_queue_limit = gr.Number(label="Review Queue Batch Size (0 = all)", value=16, precision=0)
-                        wb_queue_with_model = gr.Checkbox(label="Use semantic v3 uncertainty", value=True)
+                        wb_queue_strategy = gr.Radio(
+                            label="Review Queue Strategy",
+                            choices=[("Uncertainty first", "uncertainty"), ("Agreement first", "agreement")],
+                            value="uncertainty",
+                        )
+                        wb_queue_with_model = gr.Checkbox(label="Use current semantic model", value=True)
                         wb_queue_device = gr.Textbox(label="Queue Device", value=TRACKING_CONFIG.device, placeholder="cuda, 0, or cpu")
                         wb_queue = gr.Button("Build String Review Queue")
                         wb_queue_log = gr.Textbox(label="Review Queue Log", lines=6, interactive=False)
                         wb_queue_sheet = gr.Image(label="Ranked String Review Batch", type="filepath", interactive=False)
+                        with gr.Accordion("Hard-negative Mining", open=False):
+                            wb_hn_output_name = gr.Textbox(label="Hard-negative Queue Name", value="string_hard_negative_queue")
+                            wb_hn_queue = gr.Button("Build Train Hard-negative Queue")
+                            wb_hn_queue_path = gr.Textbox(
+                                label="Hard-negative Queue JSON",
+                                value=str(Path(workbench_dataset_dir.value) / "string_hard_negative_queue.json"),
+                            )
+                            wb_hn_sheet = gr.Image(label="Hard-negative Review Sheet", type="filepath", interactive=False)
+                            with gr.Row():
+                                wb_hn_offsets = gr.Textbox(label="Neighbor Offsets (seconds)", value="-1,-0.5,0.5,1")
+                                wb_hn_top_anchors = gr.Number(label="Top Anchors (0 = all)", value=8, precision=0)
+                                wb_hn_limit = gr.Number(label="Neighbor Limit (0 = all)", value=32, precision=0)
+                            with gr.Row():
+                                wb_hn_include_yoyo = gr.Checkbox(label="Include Yoyo-visible Anchors", value=False)
+                                wb_hn_include_clean = gr.Checkbox(label="Include Clean Negative Anchors", value=False)
+                            wb_hn_neighbor_name = gr.Textbox(label="Neighbor Candidate Name", value="hard_negative_neighbor_candidates")
+                            wb_hn_neighbors = gr.Button("Build Review-only Neighbor Candidates")
+                            wb_hn_candidates_path = gr.Textbox(label="Neighbor Candidate JSON", interactive=False)
+                            wb_hn_log = gr.Textbox(label="Hard-negative Mining Log", lines=7, interactive=False)
                         wb_string_log = gr.Textbox(label="String Dataset / Training Log", lines=9, interactive=False)
 
                 gr.Markdown("可视化审核队列。选择 String 后，沿画面中实际可见的绳段依次点击；遮挡或不可见间隔使用新的 stroke。BBox 使用两个对角点。黄色线/绿色框是尚未保存的编辑预览。")
                 with gr.Row():
-                    wb_review_status = gr.Dropdown(label="Queue Status", choices=["auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected"], value="auto_labeled_needs_review")
-                    wb_review_split = gr.Dropdown(label="Queue Split", choices=["all", "train", "val", "test"], value="all")
+                    wb_review_status = gr.Dropdown(label="Queue Status", choices=["auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected", "unresolved"], value="auto_labeled_needs_review")
+                    wb_review_split = gr.Dropdown(label="Queue Split", choices=["all", "train", "val", "test"], value="train")
                     wb_review_component = gr.Dropdown(label="Component", choices=["bbox", "string", "all"], value="bbox")
                     wb_review_refresh = gr.Button("Refresh Review Queue")
                 wb_review_label = gr.Dropdown(label="Frame Annotation", choices=[])
@@ -1264,23 +1205,45 @@ def create_demo():
                     wb_save_geometry = gr.Button("Save Geometry + Requeue")
                     wb_review_approve = gr.Button("Approve Component")
                     wb_review_marked = gr.Button("Mark Component Reviewed")
+                    wb_review_unresolved = gr.Button("Defer Component as Unresolved")
                     wb_review_reject = gr.Button("Reject Component")
 
                 wb_build.click(workbench_build, [workbench_videos_dir, workbench_dataset_dir, wb_sample_fps, wb_max_frames], wb_build_log)
                 wb_audit.click(workbench_audit, [workbench_dataset_dir, wb_audit_strict], wb_audit_log)
-                wb_candidates.click(workbench_candidates, [workbench_dataset_dir, wb_weights, wb_sample_fps, wb_candidate_conf, wb_max_candidates], wb_candidates_log)
-                wb_vlm.click(workbench_vlm, [workbench_dataset_dir, wb_split, wb_limit, wb_workers, wb_candidates_only], wb_vlm_log)
-                wb_qa_export.click(workbench_qa_export, [workbench_dataset_dir, workbench_yolo_dir], wb_qa_log)
+                wb_candidates.click(
+                    workbench_candidates,
+                    [workbench_dataset_dir, wb_weights, wb_sample_fps, wb_candidate_conf, wb_max_candidates, wb_holdout_source_groups],
+                    wb_candidates_log,
+                )
+                wb_vlm.click(
+                    workbench_vlm,
+                    [workbench_dataset_dir, wb_split, wb_limit, wb_workers, wb_candidates_only, wb_holdout_source_groups],
+                    wb_vlm_log,
+                )
+                wb_qa_export.click(
+                    workbench_qa_export,
+                    [workbench_dataset_dir, workbench_yolo_dir, wb_replace_dataset, wb_holdout_source_groups, wb_exclude_original_test],
+                    wb_qa_log,
+                )
                 wb_model_registry.click(workbench_model_registry, [], wb_qa_log)
-                wb_string_prepare.click(workbench_prepare_string, [workbench_dataset_dir, workbench_string_dir], wb_string_log)
+                wb_string_prepare.click(
+                    workbench_prepare_string,
+                    [workbench_dataset_dir, workbench_string_dir, wb_replace_dataset, wb_holdout_source_groups, wb_exclude_original_test],
+                    wb_string_log,
+                )
                 wb_string_train.click(
                     workbench_train_string,
-                    [workbench_dataset_dir, workbench_string_dir, wb_string_epochs, wb_string_device],
+                    [workbench_dataset_dir, workbench_string_dir, wb_string_epochs, wb_string_device, wb_string_run_name],
                     wb_string_log,
                 )
                 wb_semantic_train.click(
                     workbench_train_semantic,
-                    [workbench_string_dir, wb_semantic_project, wb_semantic_name, wb_string_epochs, wb_string_device],
+                    [
+                        workbench_string_dir, wb_semantic_project, wb_semantic_name, wb_string_epochs,
+                        wb_string_device, wb_semantic_architecture, wb_semantic_pretrained,
+                        wb_semantic_initial_weights, wb_semantic_lr, wb_semantic_hard_negative,
+                        wb_semantic_patience, wb_semantic_min_epochs,
+                    ],
                     wb_string_log,
                 )
                 wb_semantic_eval.click(
@@ -1288,17 +1251,47 @@ def create_demo():
                     [wb_semantic_weights, workbench_string_dir, wb_string_device],
                     wb_string_log,
                 )
+                wb_pipeline_eval.click(
+                    workbench_evaluate_pipeline,
+                    [
+                        workbench_dataset_dir, wb_pipeline_string_dataset, wb_pipeline_detector,
+                        wb_pipeline_string, wb_pipeline_scale, wb_pipeline_split, wb_pipeline_output,
+                        wb_string_device, wb_pipeline_confirm_test,
+                    ],
+                    [wb_pipeline_log, wb_pipeline_sheet],
+                )
                 wb_string_prelabel.click(
                     workbench_prelabel_strings,
-                    [workbench_dataset_dir, wb_string_prelabel_split, wb_string_prelabel_limit],
+                    [workbench_dataset_dir, wb_string_prelabel_split, wb_string_prelabel_limit, wb_holdout_source_groups],
                     wb_string_log,
                 )
                 wb_queue.click(
                     workbench_string_review_queue,
-                    [workbench_dataset_dir, wb_queue_split, wb_queue_limit, wb_queue_with_model, wb_semantic_weights, wb_queue_device],
+                    [
+                        workbench_dataset_dir, wb_queue_split, wb_queue_limit, wb_queue_with_model,
+                        wb_semantic_weights, wb_queue_device, wb_holdout_source_groups, wb_queue_strategy,
+                    ],
                     [wb_queue_log, wb_queue_sheet],
                 )
-                wb_review_refresh.click(workbench_refresh, [workbench_dataset_dir, wb_review_status, wb_review_split, wb_review_component], [wb_review_label, wb_review_image, wb_review_json, wb_stats])
+                wb_hn_queue.click(
+                    workbench_hard_negative_queue,
+                    [workbench_dataset_dir, wb_semantic_weights, wb_queue_device, wb_hn_output_name, wb_holdout_source_groups],
+                    [wb_hn_log, wb_hn_sheet, wb_hn_queue_path],
+                )
+                wb_hn_neighbors.click(
+                    workbench_hard_negative_neighbors,
+                    [
+                        workbench_dataset_dir, wb_hn_queue_path, wb_hn_offsets, wb_hn_top_anchors,
+                        wb_hn_limit, wb_hn_include_yoyo, wb_hn_include_clean, wb_hn_neighbor_name,
+                        wb_holdout_source_groups,
+                    ],
+                    [wb_hn_log, wb_hn_sheet, wb_hn_candidates_path],
+                )
+                wb_review_refresh.click(
+                    workbench_refresh,
+                    [workbench_dataset_dir, wb_review_status, wb_review_split, wb_review_component, wb_holdout_source_groups],
+                    [wb_review_label, wb_review_image, wb_review_json, wb_stats],
+                )
                 wb_review_label.change(
                     workbench_preview,
                     [wb_review_label, workbench_dataset_dir],
@@ -1307,10 +1300,10 @@ def create_demo():
                 wb_review_label.change(workbench_detail_crop, [wb_review_label, workbench_dataset_dir], [wb_review_crop])
                 for button, direction in ((wb_review_previous, -1), (wb_review_next, 1)):
                     button.click(
-                        lambda label, dataset, status, split, component, direction=direction: workbench_navigate(
-                            label, dataset, status, split, component, direction
+                        lambda label, dataset, status, split, component, exclude, direction=direction: workbench_navigate(
+                            label, dataset, status, split, component, direction, exclude
                         ),
-                        [wb_review_label, workbench_dataset_dir, wb_review_status, wb_review_split, wb_review_component],
+                        [wb_review_label, workbench_dataset_dir, wb_review_status, wb_review_split, wb_review_component, wb_holdout_source_groups],
                         [
                             wb_review_label, wb_review_image, wb_review_json, wb_bbox_editor, wb_string_editor,
                             wb_yoyo_visibility, wb_string_visibility, wb_string_attachment, wb_scene_label, wb_bad_case,
@@ -1350,15 +1343,15 @@ def create_demo():
                     [wb_review_image, wb_review_json, wb_bbox_editor, wb_string_editor, wb_stats],
                 )
                 wb_save_event.then(workbench_detail_crop, [wb_review_label, workbench_dataset_dir], [wb_review_crop])
-                for button, status in ((wb_review_approve, "approved"), (wb_review_marked, "reviewed"), (wb_review_reject, "rejected")):
+                for button, status in ((wb_review_approve, "approved"), (wb_review_marked, "reviewed"), (wb_review_unresolved, "unresolved"), (wb_review_reject, "rejected")):
                     button.click(
-                        lambda label, notes, dataset, split, component, attachment, string_visibility, yoyo_visibility, scene_label, status=status: workbench_apply(
-                            status, label, notes, dataset, split, component, attachment, string_visibility, yoyo_visibility, scene_label
+                        lambda label, notes, dataset, split, component, attachment, string_visibility, yoyo_visibility, scene_label, exclude, status=status: workbench_apply(
+                            status, label, notes, dataset, split, component, attachment, string_visibility, yoyo_visibility, scene_label, exclude
                         ),
                         [
                             wb_review_label, wb_review_notes, workbench_dataset_dir, wb_review_split,
                             wb_review_component, wb_string_attachment, wb_string_visibility,
-                            wb_yoyo_visibility, wb_scene_label,
+                            wb_yoyo_visibility, wb_scene_label, wb_holdout_source_groups,
                         ],
                         [wb_review_label, wb_review_image, wb_review_json, wb_stats],
                     )
@@ -1403,13 +1396,13 @@ def create_demo():
                 with gr.Row():
                     review_status_filter = gr.Dropdown(
                         label="Review Status",
-                        choices=["auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected"],
+                        choices=["auto_labeled_needs_review", "partially_reviewed", "reviewed", "approved", "rejected", "unresolved"],
                         value="auto_labeled_needs_review",
                     )
                     review_split_filter = gr.Dropdown(
                         label="Split",
                         choices=["all", "train", "val", "test"],
-                        value="all",
+                        value="train",
                     )
                     review_component = gr.Dropdown(
                         label="Review Component",
@@ -1417,6 +1410,11 @@ def create_demo():
                         value="bbox",
                     )
                     review_refresh = gr.Button("Refresh Queue")
+                review_holdout_source_groups = gr.Textbox(
+                    label="Excluded Holdout Source Groups",
+                    value=holdout_source_groups_default,
+                    placeholder="comma-separated source_group values",
+                )
                 review_label = gr.Dropdown(label="Annotation JSON", choices=[])
                 review_image = gr.Image(label="Visual Verification", type="filepath")
                 review_json = gr.Textbox(label="Annotation JSON", lines=18, interactive=False)
@@ -1424,11 +1422,12 @@ def create_demo():
                 with gr.Row():
                     review_approve = gr.Button("Approve")
                     review_marked = gr.Button("Mark Reviewed")
+                    review_unresolved = gr.Button("Mark Unresolved")
                     review_reject = gr.Button("Reject")
 
                 review_refresh.click(
                     fn=refresh_review_queue,
-                    inputs=[review_dataset_dir, review_status_filter, review_split_filter, review_component],
+                    inputs=[review_dataset_dir, review_status_filter, review_split_filter, review_component, review_holdout_source_groups],
                     outputs=[review_label, review_image, review_json],
                 )
                 review_label.change(
@@ -1436,10 +1435,10 @@ def create_demo():
                     inputs=[review_label, review_dataset_dir],
                     outputs=[review_image, review_json, review_label],
                 )
-                for button, status in ((review_approve, "approved"), (review_marked, "reviewed"), (review_reject, "rejected")):
+                for button, status in ((review_approve, "approved"), (review_marked, "reviewed"), (review_unresolved, "unresolved"), (review_reject, "rejected")):
                     button.click(
-                        fn=lambda label, notes, dataset, split, component, status=status: apply_review_status(status, label, notes, dataset, split, component),
-                        inputs=[review_label, review_notes, review_dataset_dir, review_split_filter, review_component],
+                        fn=lambda label, notes, dataset, split, component, exclude, status=status: apply_review_status(status, label, notes, dataset, split, component, exclude_source_groups=exclude),
+                        inputs=[review_label, review_notes, review_dataset_dir, review_split_filter, review_component, review_holdout_source_groups],
                         outputs=[review_label, review_image, review_json],
                     )
 
@@ -1456,6 +1455,12 @@ def create_demo():
                             label="Output Directory",
                             value=str(TRACKING_CONFIG.output_dir),
                             interactive=True,
+                        )
+                        tracking_preview_width = gr.Number(
+                            label="Tracked Preview Maximum Width (0 = source)",
+                            value=TRACKING_CONFIG.visualization_max_width,
+                            minimum=0,
+                            precision=0,
                         )
                         tracking_conf = gr.Slider(
                             label="Confidence",
@@ -1508,6 +1513,19 @@ def create_demo():
                             value=TRACKING_CONFIG.string_confidence,
                             step=0.01,
                         )
+                        tracking_string_scale = gr.Slider(
+                            label="Semantic Inference Scale",
+                            minimum=0.5,
+                            maximum=2.0,
+                            value=TRACKING_CONFIG.string_inference_scale,
+                            step=0.25,
+                        )
+                        tracking_string_fps = gr.Number(
+                            label="Semantic Model FPS (0 = every frame)",
+                            value=TRACKING_CONFIG.string_inference_fps,
+                            minimum=0,
+                            precision=1,
+                        )
                         tracking_string_attachment = gr.Dropdown(
                             label="String Attachment (current 1A)",
                             choices=[
@@ -1524,6 +1542,12 @@ def create_demo():
                             label="Start Time (seconds)",
                             value=0,
                             minimum=0,
+                        )
+                        tracking_max_frames = gr.Number(
+                            label="Preview Frame Limit (0 = full video)",
+                            value=0,
+                            minimum=0,
+                            precision=0,
                         )
                         tracking_max_segment = gr.Number(
                             label="Maximum Exported Valid Segment Seconds",
@@ -1542,11 +1566,47 @@ def create_demo():
                         track_btn = gr.Button("Run Video Tracking", variant="primary", size="lg")
 
                     with gr.Column(scale=1):
+                        tracking_metadata_source = gr.State(value=None)
                         tracking_output_video = gr.Video(label="Tracked Video")
                         tracking_metadata = gr.File(label="Frame Metadata JSONL")
                         tracking_segments = gr.File(label="Segment Manifest")
                         tracking_run_manifest = gr.File(label="Run Manifest")
                         tracking_review_sheet = gr.Image(label="Tracking Visual Review", type="filepath")
+                        tracking_review_gallery = gr.Gallery(
+                            label="Tracking Review Frames (Raw / Overlay)",
+                            columns=2,
+                            height=560,
+                            allow_preview=True,
+                            object_fit="contain",
+                            type="filepath",
+                            buttons=["fullscreen", "download"],
+                        )
+                        tracking_selected_frame = gr.JSON(
+                            label="Selected Tracking Frame JSON",
+                        )
+                        tracking_review_binding = gr.JSON(
+                            label="Digest-bound Review Identity",
+                        )
+                        with gr.Row():
+                            tracking_review_decision = gr.Radio(
+                                choices=["correct", "incorrect", "unresolved"],
+                                value="unresolved",
+                                label="Frame Decision",
+                            )
+                            tracking_review_reviewer = gr.Textbox(
+                                label="Reviewer",
+                                value="workbench-reviewer",
+                            )
+                        tracking_review_notes = gr.Textbox(
+                            label="Frame Review Notes",
+                            lines=2,
+                        )
+                        tracking_review_save = gr.Button("Save Frame Review", variant="primary")
+                        tracking_review_log = gr.File(label="Tracking Frame Review Log")
+                        tracking_review_status = gr.Textbox(
+                            label="Frame Review Status",
+                            interactive=False,
+                        )
                         tracking_token_manifest = gr.File(label="Valid Trick Clip-token Manifest")
                         tracking_clip_files = gr.File(label="Candidate Clips", file_count="multiple")
                         tracking_status = gr.Textbox(
@@ -1571,11 +1631,15 @@ def create_demo():
                         tracking_string_model,
                         tracking_string_weights,
                         tracking_string_conf,
+                        tracking_string_scale,
+                        tracking_string_fps,
                         tracking_string_attachment,
                         tracking_export_clips,
                         tracking_start_seconds,
                         tracking_max_segment,
                         tracking_activity_speed,
+                        tracking_max_frames,
+                        tracking_preview_width,
                     ],
                     outputs=[
                         tracking_output_video,
@@ -1583,10 +1647,36 @@ def create_demo():
                         tracking_segments,
                         tracking_run_manifest,
                         tracking_review_sheet,
+                        tracking_review_gallery,
                         tracking_token_manifest,
                         tracking_clip_files,
+                        tracking_metadata_source,
+                        tracking_selected_frame,
+                        tracking_review_binding,
+                        tracking_review_log,
+                        tracking_review_status,
                         tracking_status,
                     ],
+                )
+                tracking_review_gallery.select(
+                    fn=select_tracking_review_frame,
+                    inputs=[tracking_metadata_source],
+                    outputs=[
+                        tracking_selected_frame,
+                        tracking_review_binding,
+                        tracking_review_status,
+                    ],
+                )
+                tracking_review_save.click(
+                    fn=save_tracking_frame_review,
+                    inputs=[
+                        tracking_metadata_source,
+                        tracking_review_binding,
+                        tracking_review_decision,
+                        tracking_review_reviewer,
+                        tracking_review_notes,
+                    ],
+                    outputs=[tracking_review_log, tracking_review_status],
                 )
 
     return demo

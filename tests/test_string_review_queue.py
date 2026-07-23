@@ -2,15 +2,87 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
 from string_segmentation.semantic_model import LetterboxMeta
-from video_dataset.string_review_queue import _save_model_preview, build_queue, load_prediction_polylines
+from video_dataset.string_review_queue import (
+    _annotation_agreement,
+    _save_model_preview,
+    build_queue,
+    load_prediction_polylines,
+)
 
 
 class StringReviewQueueTests(unittest.TestCase):
+    def test_annotation_agreement_distinguishes_match_from_mismatch(self):
+        meta = LetterboxMeta(
+            original_width=40,
+            original_height=40,
+            target_width=40,
+            target_height=40,
+            resized_width=40,
+            resized_height=40,
+            pad_x=0,
+            pad_y=0,
+            scale=1.0,
+        )
+        annotation = {"string_polylines_pixel": [[[4, 6], [35, 6]]]}
+        matching = np.zeros((40, 40), dtype=np.uint8)
+        cv2.polylines(matching, [np.asarray([[4, 6], [35, 6]], dtype=np.int32)], False, 1, 8, cv2.LINE_AA)
+        mismatching = np.zeros((40, 40), dtype=np.uint8)
+        cv2.polylines(mismatching, [np.asarray([[4, 34], [35, 34]], dtype=np.int32)], False, 1, 8, cv2.LINE_AA)
+
+        perfect = _annotation_agreement(matching > 0, annotation, meta)
+        mismatch = _annotation_agreement(mismatching > 0, annotation, meta)
+
+        self.assertEqual(perfect["exact_dice"], 1.0)
+        self.assertEqual(perfect["tolerant_f1"], 1.0)
+        self.assertEqual(mismatch["exact_dice"], 0.0)
+        self.assertEqual(mismatch["tolerant_f1"], 0.0)
+
+    def test_agreement_strategy_requires_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "requires with_model"):
+                build_queue(tmp, strategy="agreement")
+
+    @patch("video_dataset.string_review_queue._model_signal")
+    def test_agreement_strategy_ranks_higher_tolerant_f1_first(self, model_signal):
+        def signal(data, *_args, **_kwargs):
+            f1 = 0.9 if int(data["frame_index"]) == 2 else 0.4
+            return 0.0, [], {
+                "status": "ok",
+                "components": 1,
+                "prediction_confidence": 0.8,
+                "annotation_agreement": {"tolerant_f1": f1},
+            }
+
+        model_signal.side_effect = signal
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels = root / "annotations" / "labels" / "train" / "video-a"
+            labels.mkdir(parents=True)
+            for frame_index in (1, 2):
+                (labels / f"frame_{frame_index:08d}.json").write_text(json.dumps({
+                    "video_id": "video-a",
+                    "source_group": "video-a",
+                    "split": "train",
+                    "frame_index": frame_index,
+                    "string_review_status": "auto_labeled_needs_review",
+                    "string_visibility": "visible",
+                    "string_polylines_pixel": [[[1, frame_index], [10, frame_index]]],
+                    "qa": {"warnings": []},
+                }), encoding="utf-8")
+
+            result = build_queue(root, split="train", with_model=True, weights="unused.pt", strategy="agreement")
+            payload = json.loads((root / "string_review_queue.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["strategy"], "agreement")
+        self.assertEqual([row["frame_index"] for row in payload["rows"]], [2, 1])
+        self.assertTrue(payload["policy"].startswith("annotation/model agreement"))
+
     def test_semantic_preview_restores_letterbox_to_original_size(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "preview.jpg"
@@ -68,6 +140,7 @@ class StringReviewQueueTests(unittest.TestCase):
         self.assertEqual({row["source_group"] for row in payload["rows"]}, {"video-a", "video-b"})
         self.assertTrue(all("reviewed" not in row["label_path"] for row in payload["rows"]))
         self.assertTrue(all(row["reasons"] for row in payload["rows"]))
+        self.assertEqual(payload["strategy"], "uncertainty")
 
     def test_prediction_geometry_loader_does_not_touch_annotations(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -88,6 +161,47 @@ class StringReviewQueueTests(unittest.TestCase):
 
         self.assertEqual(strokes, [[[1.0, 2.0], [3.5, 4.5]]])
         self.assertEqual(after, original)
+
+    def test_excluded_source_group_is_absent_before_model_ranking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels = root / "annotations" / "labels" / "train"
+            for group in ("ab03bb7118b0", "kept"):
+                path = labels / group / "frame_00000000.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({
+                    "video_id": group,
+                    "source_group": group,
+                    "split": "train",
+                    "string_review_status": "auto_labeled_needs_review",
+                    "string_visibility": "uncertain",
+                }), encoding="utf-8")
+            result = build_queue(root, split="train", exclude_source_groups="ab03bb7118b0")
+            payload = json.loads((root / "string_review_queue.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(payload["exclude_source_groups"], ["ab03bb7118b0"])
+        self.assertEqual(payload["rows"][0]["source_group"], "kept")
+
+    def test_unresolved_labels_are_terminal_and_absent_from_active_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels = root / "annotations" / "labels" / "train"
+            for group, status in (("unresolved", "unresolved"), ("pending", "auto_labeled_needs_review")):
+                path = labels / group / "frame.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({
+                    "video_id": group,
+                    "source_group": group,
+                    "split": "train",
+                    "string_review_status": status,
+                    "string_visibility": "uncertain",
+                }), encoding="utf-8")
+            result = build_queue(root, split="train")
+            payload = json.loads((root / "string_review_queue.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(payload["rows"][0]["source_group"], "pending")
 
 
 if __name__ == "__main__":

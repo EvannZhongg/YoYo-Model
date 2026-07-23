@@ -40,8 +40,8 @@ yolo:
   models_dir: "models"
   # Used by download_yolo_model.py. Override with --url if Ultralytics changes asset URLs.
   model_url_template: "https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
-  dataset_dir: "yolo_dataset"
-  data_yaml: "yolo_dataset/data.yaml"
+  dataset_dir: "datasets/video_v1/yolo_v8_fresh_holdout"
+  data_yaml: "datasets/video_v1/yolo_v8_fresh_holdout/data.yaml"
   class_names:
     - "yoyo"
   train_split: 0.8
@@ -52,16 +52,16 @@ yolo:
   workers: 0
   device: ""
   project: "runs/yolo"
-  run_name: "yoyo_video_v1"
-  exist_ok: true
+  run_name: "yoyo_video_candidate"
+  exist_ok: false
 
 string_segmentation:
   model_name: "yolo11n-seg.pt"
   models_dir: "models"
-  dataset_dir: "datasets/video_v1/string_seg_v6"
+  dataset_dir: "datasets/video_v1/string_seg_v17_reviewed_expansion"
   annotations_dir: "datasets/video_v1/annotations"
   project: "runs/yolo"
-  run_name: "yoyo_string_v1"
+  run_name: "yoyo_string_candidate"
   epochs: 100
   imgsz: 960
   batch: 4
@@ -78,9 +78,9 @@ string_segmentation:
 semantic_string:
   # Single-class semantic baseline for thin strings. It consumes only the
   # review-gated string_seg split and is versioned separately from YOLO runs.
-  dataset_dir: "datasets/video_v1/string_seg_v6"
+  dataset_dir: "datasets/video_v1/string_seg_v17_reviewed_expansion"
   project: "runs/semantic"
-  run_name: "yoyo_string_semantic_v1"
+  run_name: "yoyo_string_semantic_candidate"
   epochs: 40
   input_width: 960
   input_height: 544
@@ -93,7 +93,7 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/yolo/yoyo_video_v2/weights/best.pt"
+  weights_path: "runs/yolo/yoyo_video_v8_fresh_holdout/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.25
   iou: 0.7
@@ -102,15 +102,23 @@ tracking:
   trace_length: 30
   line_thickness: 2
   text_scale: 0.6
+  # Keep model inference and metadata at source resolution while limiting the
+  # annotated preview video to a practical review size. Set to 0 for source.
+  visualization_max_width: 1920
   pose_weights_path: "models/yolo11n-pose.pt"
-  enable_pose: false
+  enable_pose: true
   auto_download_pose: false
-  # Semantic v3 has the best independent negative-case tradeoff currently
-  # available.  It remains review-only until more string annotations are
-  # approved; the older YOLO segmentation checkpoint is retained in runs/.
-  string_weights_path: "runs/semantic/yoyo_string_semantic_v3/weights/best.pt"
+  # Semantic v17 is trained from random initialization with a source-isolated
+  # fresh holdout. Predictions remain review-only and never become label truth.
+  string_weights_path: "runs/semantic/yoyo_string_semantic_v17_reviewed_expansion_hn005/weights/best.pt"
   enable_string_model: true
   string_confidence: 0.20
+  # Val-selected 2x inference preserves thin 4K string pixels. The tracker
+  # scales component-area filtering with it to avoid admitting tiny noise.
+  string_inference_scale: 2.0
+  # Run the expensive semantic model at this cadence and use checked optical
+  # flow between observations. Set to 0 to infer on every video frame.
+  string_inference_fps: 10.0
   # Temporal string tracking is review-only: stop propagation after a short
   # gap and reject optical-flow drift with forward/backward consistency.
   string_max_propagation_frames: 12

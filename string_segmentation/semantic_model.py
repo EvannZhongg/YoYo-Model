@@ -20,6 +20,7 @@ TRANSFER_CHECKPOINT_FORMAT = "yoyo_string_semantic_transfer_v1"
 CHECKPOINT_FORMATS = {CHECKPOINT_FORMAT, TRANSFER_CHECKPOINT_FORMAT}
 IMAGE_MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGE_STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+_INFERENCE_NORMALIZATION_CACHE: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
 
 
 def _group_count(channels: int) -> int:
@@ -163,6 +164,27 @@ def normalize_image(image_bgr: np.ndarray) -> torch.Tensor:
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     rgb = (rgb - IMAGE_MEAN) / IMAGE_STD
     return torch.from_numpy(np.transpose(rgb, (2, 0, 1))).float()
+
+
+def normalize_image_for_inference(
+    image_bgr: np.ndarray,
+    device: str | torch.device,
+) -> torch.Tensor:
+    """Transfer uint8 pixels first, then normalize without large CPU float copies."""
+    target_device = torch.device(device)
+    array = np.ascontiguousarray(image_bgr)
+    tensor = torch.from_numpy(array).to(target_device)
+    tensor = tensor.permute(2, 0, 1).unsqueeze(0)[:, [2, 1, 0]].float().div_(255.0)
+    cache_key = str(target_device)
+    constants = _INFERENCE_NORMALIZATION_CACHE.get(cache_key)
+    if constants is None:
+        constants = (
+            torch.as_tensor(IMAGE_MEAN, dtype=torch.float32, device=target_device).view(1, 3, 1, 1),
+            torch.as_tensor(IMAGE_STD, dtype=torch.float32, device=target_device).view(1, 3, 1, 1),
+        )
+        _INFERENCE_NORMALIZATION_CACHE[cache_key] = constants
+    mean, std = constants
+    return tensor.sub_(mean).div_(std)
 
 
 def render_yolo_segmentation(label_path: Path, width: int, height: int) -> np.ndarray:
@@ -342,7 +364,7 @@ def predict_letterboxed(
     device: str | torch.device,
 ) -> tuple[np.ndarray, LetterboxMeta]:
     image, _, meta = letterbox(frame_bgr, input_width, input_height)
-    tensor = normalize_image(image).unsqueeze(0).to(device)
+    tensor = normalize_image_for_inference(image, device)
     probability = torch.sigmoid(model(tensor))[0, 0].detach().cpu().numpy()
     return probability, meta
 
@@ -430,6 +452,7 @@ def semantic_mask_observation(
     attachment_class: str = "unknown",
     min_component_pixels: int = 12,
     max_components: int = 8,
+    hand_points: list[list[float]] | None = None,
 ) -> dict[str, Any] | None:
     """Turn a low-resolution semantic mask into review-only string geometry."""
     binary = (probability >= float(threshold)).astype(np.uint8)
@@ -440,7 +463,19 @@ def semantic_mask_observation(
     candidates = []
     yoyo_center = np.asarray((yoyo or {}).get("center", [0, 0]), dtype=np.float32)
     yoyo_target_center = yoyo_center * float(meta.scale) + np.asarray([meta.pad_x, meta.pad_y], dtype=np.float32)
+    hand_target_points = [
+        np.asarray(
+            [
+                float(point[0]) * float(meta.scale) + float(meta.pad_x),
+                float(point[1]) * float(meta.scale) + float(meta.pad_y),
+            ],
+            dtype=np.float32,
+        )
+        for point in (hand_points or [])
+        if isinstance(point, (list, tuple)) and len(point) == 2
+    ]
     yoyo_anchor_limit = None
+    yoyo_target_bbox: tuple[int, int, int, int] | None = None
     if yoyo is not None:
         bbox = yoyo.get("bbox") or []
         if len(bbox) == 4:
@@ -450,62 +485,194 @@ def semantic_mask_observation(
             # yoyo radii for string-to-body contact.  This remains much
             # tighter than accepting any background component in the frame.
             yoyo_anchor_limit = max(18.0, 3.0 * float(np.hypot(target_w, target_h) * 0.5))
+            yoyo_target_bbox = (
+                max(0, int(np.floor(float(bbox[0]) * meta.scale + meta.pad_x))),
+                max(0, int(np.floor(float(bbox[1]) * meta.scale + meta.pad_y))),
+                min(meta.target_width, int(np.ceil(float(bbox[2]) * meta.scale + meta.pad_x))),
+                min(meta.target_height, int(np.ceil(float(bbox[3]) * meta.scale + meta.pad_y))),
+            )
     for index in range(1, count):
         area = int(stats[index, cv2.CC_STAT_AREA])
         if area < min_component_pixels:
             continue
-        component = (labels == index).astype(np.uint8)
-        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        component_x = int(stats[index, cv2.CC_STAT_LEFT])
+        component_y = int(stats[index, cv2.CC_STAT_TOP])
+        component_width = int(stats[index, cv2.CC_STAT_WIDTH])
+        component_height = int(stats[index, cv2.CC_STAT_HEIGHT])
+        component = (
+            labels[
+                component_y : component_y + component_height,
+                component_x : component_x + component_width,
+            ]
+            == index
+        ).astype(np.uint8)
+        # Preserve the zero background that surrounded the component in the
+        # full target canvas while avoiding full-frame contour/skeleton work.
+        padded = cv2.copyMakeBorder(component, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+        contours, _ = cv2.findContours(padded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             continue
         contour = max(contours, key=cv2.contourArea)
-        polygon = contour.reshape(-1, 2).astype(np.float32)
+        offset = np.asarray([component_x - 1, component_y - 1], dtype=np.float32)
+        polygon = contour.reshape(-1, 2).astype(np.float32) + offset
         if len(polygon) < 3:
             continue
-        skeleton = _skeletonize(component)
+        skeleton = _skeletonize(padded)
         points = _longest_skeleton_path(skeleton)
+        if len(points):
+            points += offset
         if len(points) < 2:
             centered = polygon - polygon.mean(axis=0)
             _, _, vh = np.linalg.svd(centered, full_matrices=False)
             projection = centered @ vh[0]
             points = polygon[[int(np.argmin(projection)), int(np.argmax(projection))]]
-        mean_probability = float(probability[component > 0].mean())
+        probability_crop = probability[
+            component_y : component_y + component_height,
+            component_x : component_x + component_width,
+        ]
+        mean_probability = float(probability_crop[component > 0].mean())
         component_center = np.asarray(centroids[index], dtype=np.float32)
         if yoyo:
             point_distance = float(np.min(np.linalg.norm(polygon - yoyo_target_center, axis=1)))
             distance = min(float(np.linalg.norm(component_center - yoyo_target_center)), point_distance)
         else:
             distance = 0.0
+        yoyo_body_overlap_fraction = 0.0
+        if yoyo_target_bbox is not None and area > 0:
+            x1, y1, x2, y2 = yoyo_target_bbox
+            overlap_x1 = max(x1, component_x)
+            overlap_y1 = max(y1, component_y)
+            overlap_x2 = min(x2, component_x + component_width)
+            overlap_y2 = min(y2, component_y + component_height)
+            if overlap_x2 > overlap_x1 and overlap_y2 > overlap_y1:
+                yoyo_body_overlap_fraction = float(
+                    component[
+                        overlap_y1 - component_y : overlap_y2 - component_y,
+                        overlap_x1 - component_x : overlap_x2 - component_x,
+                    ].sum()
+                    / area
+                )
         candidates.append(
             {
                 "area": area,
                 "mean_probability": mean_probability,
                 "distance_to_yoyo_target_px": distance,
+                "yoyo_body_overlap_fraction": yoyo_body_overlap_fraction,
                 "polygon": polygon,
                 "points": points,
             }
         )
     if not candidates:
         return None
+    all_candidates = list(candidates)
     # For known attachment modes, a component that is nowhere near the yoyo
     # is almost certainly a background edge.  Keep 4A (detached yoyo) open;
     # it is the explicit case where a string need not touch the detected ball.
+    selection_mode = "confidence"
+    hand_supported_ids: set[int] = set()
     if yoyo_anchor_limit is not None and attachment_class in {"hand_and_yoyo_attached", "hand_detached"}:
-        anchored = [item for item in candidates if item["distance_to_yoyo_target_px"] <= yoyo_anchor_limit]
+        anchored = [
+            item
+            for item in candidates
+            if item["distance_to_yoyo_target_px"] <= yoyo_anchor_limit
+            and item["yoyo_body_overlap_fraction"] < 0.60
+        ]
         if anchored:
+            anchored.sort(
+                key=lambda item: (
+                    item["distance_to_yoyo_target_px"],
+                    -item["mean_probability"],
+                    -item["area"],
+                )
+            )
             candidates = anchored
+            selection_mode = "yoyo_anchor"
+            if attachment_class == "hand_and_yoyo_attached" and hand_target_points:
+                hand_limit = max(
+                    48.0,
+                    0.025 * float(np.hypot(meta.original_width, meta.original_height)),
+                ) * float(meta.scale)
+
+                def point_distance(item: dict[str, Any], point: np.ndarray) -> float:
+                    contour = np.asarray(item["polygon"], dtype=np.float32).reshape(-1, 1, 2)
+                    return abs(
+                        float(
+                            cv2.pointPolygonTest(
+                                contour,
+                                (float(point[0]), float(point[1])),
+                                True,
+                            )
+                        )
+                    )
+
+                def component_distance(left: dict[str, Any], right: dict[str, Any]) -> float:
+                    left_polygon = np.asarray(left["polygon"], dtype=np.float32).reshape(-1, 2)
+                    right_polygon = np.asarray(right["polygon"], dtype=np.float32).reshape(-1, 2)
+                    return min(
+                        min(point_distance(right, point) for point in left_polygon),
+                        min(point_distance(left, point) for point in right_polygon),
+                    )
+
+                all_non_body = [
+                    item
+                    for item in all_candidates
+                    if item["yoyo_body_overlap_fraction"] < 0.60
+                ]
+                direct_hand = [
+                    item
+                    for item in all_non_body
+                    if min(point_distance(item, point) for point in hand_target_points) <= hand_limit
+                ]
+                anchored_ids = {id(item) for item in anchored}
+                direct_hand_ids = {id(item) for item in direct_hand}
+                linked_hand = [
+                    item
+                    for item in all_non_body
+                    if id(item) not in anchored_ids
+                    and id(item) not in direct_hand_ids
+                    and direct_hand
+                    and min(component_distance(item, seed) for seed in direct_hand) <= hand_limit
+                ]
+                primary = anchored[0]
+                ordered = [primary]
+                ordered.extend(
+                    sorted(
+                        (item for item in direct_hand if item is not primary),
+                        key=lambda item: min(point_distance(item, point) for point in hand_target_points),
+                    )
+                )
+                ordered.extend(
+                    sorted(
+                        linked_hand,
+                        key=lambda item: min(component_distance(item, seed) for seed in direct_hand),
+                    )
+                )
+                ordered_ids = {id(item) for item in ordered}
+                ordered.extend(item for item in anchored[1:] if id(item) not in ordered_ids)
+                candidates = ordered
+                hand_supported_ids = {
+                    id(item)
+                    for item in direct_hand + linked_hand
+                    if id(item) not in anchored_ids
+                }
+                if hand_supported_ids:
+                    selection_mode = "yoyo_and_hand_anchors"
         else:
             return None
-    if yoyo is not None:
-        candidates.sort(key=lambda item: (item["distance_to_yoyo_target_px"], -item["mean_probability"], -item["area"]))
-    else:
-        candidates.sort(key=lambda item: (-item["mean_probability"], -item["area"]))
+    if selection_mode == "confidence":
+        if yoyo is not None:
+            candidates.sort(key=lambda item: (item["distance_to_yoyo_target_px"], -item["mean_probability"], -item["area"]))
+        else:
+            candidates.sort(key=lambda item: (-item["mean_probability"], -item["area"]))
     selected = candidates[:max(1, int(max_components))]
     selected_polygons = [restore_coordinates(item["polygon"], meta) for item in selected]
     selected_polylines = [restore_coordinates(item["points"], meta) for item in selected]
     selected = [item for item, polygon, points in zip(selected, selected_polygons, selected_polylines) if len(polygon) >= 3 and len(points) >= 2]
     if not selected:
         return None
+    hand_supported_component_count = sum(id(item) in hand_supported_ids for item in selected)
+    if selection_mode == "yoyo_and_hand_anchors" and hand_supported_component_count == 0:
+        selection_mode = "yoyo_anchor"
     selected_polygons = [restore_coordinates(item["polygon"], meta) for item in selected]
     selected_polylines = [restore_coordinates(item["points"], meta) for item in selected]
     primary = selected[0]
@@ -526,7 +693,10 @@ def semantic_mask_observation(
         "probability_threshold": round(float(threshold), 4),
         "mask_area_target_px": int(sum(item["area"] for item in selected)),
         "component_count": len(selected),
+        "component_selection": selection_mode,
+        "hand_supported_component_count": hand_supported_component_count,
         "distance_to_yoyo_px": round(primary_distance_px, 2) if primary_distance_px is not None else None,
+        "yoyo_body_overlap_fraction": round(float(primary["yoyo_body_overlap_fraction"]), 4),
         "anchored_to_yoyo": bool(yoyo is not None and not spatially_ambiguous),
         "spatially_ambiguous": spatially_ambiguous,
     }

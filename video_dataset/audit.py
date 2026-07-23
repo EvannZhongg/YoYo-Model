@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -11,17 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from annotation.review import validate_review_gate
+from common.files import sha256_file
 
 ACCEPTED_REVIEW = {"approved", "reviewed"}
 SPLITS = ("train", "val", "test")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -59,7 +51,7 @@ def audit(dataset_dir: str | Path) -> dict[str, Any]:
         path = Path(str(source.get("path", "")))
         if not path.exists():
             errors.append({"kind": "missing_source_video", "path": str(path), "video_id": source.get("video_id")})
-        elif source.get("sha256") and _sha256(path) != str(source["sha256"]):
+        elif source.get("sha256") and sha256_file(path) != str(source["sha256"]):
             errors.append({"kind": "source_sha256_mismatch", "path": str(path), "video_id": source.get("video_id")})
 
     frames = _jsonl(root / "frames.jsonl")

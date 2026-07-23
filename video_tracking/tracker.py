@@ -9,10 +9,10 @@ allows a later string segmentation model to consume the same data.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import math
+import time
 from collections import Counter
 from datetime import datetime, timezone
 import uuid
@@ -22,6 +22,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
     is_semantic_checkpoint,
@@ -36,6 +37,11 @@ from video_tracking.trick_tokens import export_trick_tokens
 
 
 LOG_FILE = BASE_DIR / "track_video.log"
+POSE_EDGES = (
+    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
+    (0, 1), (1, 3), (0, 2), (2, 4),
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -121,6 +127,52 @@ def _polygon_centerline(polygon: np.ndarray) -> list[list[float]]:
     return [[float(value) for value in point] for point in endpoints]
 
 
+def _semantic_inference_parameters(
+    model_config: dict[str, Any],
+    scale_value: float,
+) -> tuple[int, int, float]:
+    scale = float(scale_value)
+    if not 0.5 <= scale <= 2.0:
+        raise ValueError("semantic_inference_scale must be between 0.5 and 2.0")
+    base_width = int(model_config["input_width"])
+    base_height = int(model_config["input_height"])
+    input_width = max(32, int(round(base_width * scale / 16.0)) * 16)
+    input_height = max(32, int(round(base_height * scale / 16.0)) * 16)
+    component_area_scale = (input_width * input_height) / max(1.0, float(base_width * base_height))
+    return input_width, input_height, component_area_scale
+
+
+def _inference_interval_frames(video_fps: float, target_fps: float) -> int:
+    """Return an adaptive frame interval; zero target means every frame."""
+    if float(target_fps) <= 0.0 or float(video_fps) <= 0.0:
+        return 1
+    return max(1, int(round(float(video_fps) / float(target_fps))))
+
+
+def _should_reacquire_string(
+    scheduled_inference: bool,
+    model_loaded: bool,
+    yoyo: dict[str, Any] | None,
+    previous_string: dict[str, Any] | None,
+    current_string: dict[str, Any] | None,
+) -> bool:
+    """Re-run the model when an anchored track cannot cross a cadence gap."""
+    return bool(
+        not scheduled_inference
+        and model_loaded
+        and yoyo is not None
+        and current_string is None
+    )
+
+
+def _can_seed_previous_string(string: dict[str, Any] | None) -> bool:
+    return bool(
+        string is not None
+        and not string.get("spatially_ambiguous")
+        and not string.get("hand_anchor_mismatch")
+    )
+
+
 def _predict_string_model(
     model,
     frame: np.ndarray,
@@ -129,6 +181,8 @@ def _predict_string_model(
     imgsz: int,
     device: str,
     attachment_class: str,
+    semantic_inference_scale: float = 1.0,
+    wrists: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -136,22 +190,33 @@ def _predict_string_model(
         checkpoint = model["checkpoint"]
         model_device = model["device"]
         model_config = checkpoint["model_config"]
+        scale = float(semantic_inference_scale)
+        input_width, input_height, component_area_scale = _semantic_inference_parameters(model_config, scale)
         probability, meta = predict_letterboxed(
             model["model"],
             frame,
-            int(model_config["input_width"]),
-            int(model_config["input_height"]),
+            input_width,
+            input_height,
             model_device,
         )
         threshold = max(float(checkpoint.get("threshold", 0.5)), float(confidence))
-        return semantic_mask_observation(
+        observation = semantic_mask_observation(
             probability,
             meta,
             threshold=threshold,
             yoyo=yoyo,
             attachment_class=attachment_class,
-            min_component_pixels=8,
+            min_component_pixels=max(1, int(round(8 * component_area_scale))),
+            hand_points=[
+                [float(wrist["x"]), float(wrist["y"])]
+                for wrist in (wrists or [])
+                if "x" in wrist and "y" in wrist
+            ],
         )
+        if observation is not None:
+            observation["inference_scale"] = round(scale, 4)
+            observation["inference_size"] = [input_width, input_height]
+        return observation
     kwargs: dict[str, Any] = {"source": frame, "conf": confidence, "imgsz": imgsz, "verbose": False}
     if device:
         kwargs["device"] = device
@@ -202,35 +267,193 @@ def _predict_string_model(
     }
 
 
-def _predict_pose(model, frame: np.ndarray) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _select_pose_person(
+    points: np.ndarray,
+    confidence: np.ndarray,
+    boxes: np.ndarray,
+    box_confidence: np.ndarray,
+    yoyo: dict[str, Any] | None,
+    width: int,
+    height: int,
+    previous_person_bbox: list[float] | None = None,
+) -> tuple[int, dict[str, Any]] | None:
+    if len(points) == 0:
+        return None
+    yoyo_center = np.asarray((yoyo or {}).get("center", []), dtype=np.float32)
+    has_yoyo = yoyo_center.shape == (2,)
+    diagonal = max(1.0, float(np.hypot(width, height)))
+    previous_box = np.asarray(previous_person_bbox or [], dtype=np.float32)
+    has_previous = bool(
+        previous_box.shape == (4,)
+        and previous_box[2] > previous_box[0]
+        and previous_box[3] > previous_box[1]
+    )
+    candidates = []
+    for index, person_points in enumerate(points):
+        person_confidence = confidence[index] if index < len(confidence) else np.ones(len(person_points), dtype=np.float32)
+        visible = person_confidence >= 0.20
+        visible_wrists = [wrist for wrist in (9, 10) if wrist < len(person_points) and visible[wrist]]
+        wrist_distance = (
+            min(float(np.linalg.norm(person_points[wrist] - yoyo_center)) for wrist in visible_wrists)
+            if has_yoyo and visible_wrists
+            else diagonal
+        )
+        mean_visible_confidence = float(person_confidence[visible].mean()) if np.any(visible) else 0.0
+        box = boxes[index] if index < len(boxes) else np.zeros(4, dtype=np.float32)
+        box_area = max(0.0, float(box[2] - box[0])) * max(0.0, float(box[3] - box[1]))
+        temporal_iou = _bbox_iou(
+            [float(value) for value in box],
+            [float(value) for value in previous_box],
+        ) if has_previous else 0.0
+        temporal_center_distance = (
+            float(np.linalg.norm(
+                np.asarray([(box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0])
+                - np.asarray([(previous_box[0] + previous_box[2]) / 2.0, (previous_box[1] + previous_box[3]) / 2.0])
+            ))
+            if has_previous else diagonal
+        )
+        cold_start_score = (
+            int(bool(visible_wrists)),
+            -wrist_distance / diagonal if has_yoyo else 0.0,
+            len(visible_wrists),
+            int(visible.sum()),
+            mean_visible_confidence,
+            float(box_confidence[index]) if index < len(box_confidence) else 0.0,
+            box_area / max(1.0, float(width * height)),
+        )
+        temporal_score = (
+            temporal_iou,
+            -temporal_center_distance / diagonal,
+            *cold_start_score,
+        )
+        candidates.append({
+            "index": index,
+            "wrist_distance": wrist_distance,
+            "visible_count": int(visible.sum()),
+            "visible_wrist_count": len(visible_wrists),
+            "box": box,
+            "cold_start_score": cold_start_score,
+            "temporal_score": temporal_score,
+            "temporal_iou": temporal_iou,
+            "temporal_center_distance": temporal_center_distance,
+        })
+    temporal_candidates = [
+        item for item in candidates
+        if item["temporal_iou"] >= 0.05
+        or item["temporal_center_distance"] / diagonal <= 0.12
+    ] if has_previous else []
+    temporal_reference_used = bool(temporal_candidates)
+    candidate_pool = temporal_candidates if temporal_reference_used else candidates
+    score_field = "temporal_score" if temporal_reference_used else "cold_start_score"
+    chosen = max(candidate_pool, key=lambda item: item[score_field])
+    selected = int(chosen["index"])
+    wrist_distance = float(chosen["wrist_distance"])
+    visible_count = int(chosen["visible_count"])
+    visible_wrist_count = int(chosen["visible_wrist_count"])
+    selected_box = chosen["box"]
+    review_reasons: list[str] = []
+    if len(points) > 1 and not temporal_reference_used:
+        review_reasons.append("multiple_people_cold_start")
+        if not has_yoyo:
+            review_reasons.append("yoyo_absent_without_temporal_reference")
+    if has_previous and not temporal_reference_used:
+        review_reasons.append("temporal_reference_rejected")
+    if temporal_reference_used and float(chosen["temporal_iou"]) < 0.10:
+        review_reasons.append("low_temporal_iou")
+    return selected, {
+        "selection_method": (
+            "temporal_continuity_then_visible_wrists_yoyo_proximity_pose_quality"
+            if temporal_reference_used
+            else "visible_wrists_yoyo_proximity_then_pose_quality"
+        ),
+        "person_index": int(selected),
+        "person_count": int(len(points)),
+        "bbox": [round(float(value), 2) for value in selected_box],
+        "visible_keypoint_count": int(visible_count),
+        "visible_wrist_count": int(visible_wrist_count),
+        "nearest_wrist_to_yoyo_px": round(float(wrist_distance), 2) if has_yoyo and visible_wrist_count else None,
+        "temporal_reference_available": bool(has_previous),
+        "temporal_reference_used": temporal_reference_used,
+        "temporal_bbox_iou": round(float(chosen["temporal_iou"]), 4) if has_previous else None,
+        "temporal_center_distance_px": (
+            round(float(chosen["temporal_center_distance"]), 2) if has_previous else None
+        ),
+        "needs_review": bool(review_reasons),
+        "review_reasons": review_reasons,
+    }
+
+
+def _predict_pose(
+    model,
+    frame: np.ndarray,
+    yoyo: dict[str, Any] | None = None,
+    imgsz: int = 640,
+    device: str = "",
+    previous_person_bbox: list[float] | None = None,
+    temporal_reference_age_frames: int | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     if model is None:
-        return [], []
+        return [], [], {"status": "disabled_or_unavailable"}
     try:
-        result = model.predict(source=frame, verbose=False)[0]
+        kwargs: dict[str, Any] = {"source": frame, "imgsz": int(imgsz), "verbose": False}
+        if str(device).strip():
+            kwargs["device"] = str(device).strip()
+        result = model.predict(**kwargs)[0]
         keypoints = getattr(result, "keypoints", None)
         if keypoints is None or keypoints.xy is None:
-            return [], []
-        points = keypoints.xy[0].cpu().numpy()
-        confidence = None
-        if getattr(keypoints, "conf", None) is not None:
-            confidence = keypoints.conf[0].cpu().numpy()
+            return [], [], {"status": "no_person"}
+        all_points = keypoints.xy.cpu().numpy()
+        all_confidence = (
+            keypoints.conf.cpu().numpy()
+            if getattr(keypoints, "conf", None) is not None
+            else np.ones(all_points.shape[:2], dtype=np.float32)
+        )
+        boxes = (
+            result.boxes.xyxy.cpu().numpy()
+            if getattr(result, "boxes", None) is not None and result.boxes.xyxy is not None
+            else np.zeros((len(all_points), 4), dtype=np.float32)
+        )
+        box_confidence = (
+            result.boxes.conf.cpu().numpy()
+            if getattr(result, "boxes", None) is not None and result.boxes.conf is not None
+            else np.zeros(len(all_points), dtype=np.float32)
+        )
+        selection = _select_pose_person(
+            all_points, all_confidence, boxes, box_confidence, yoyo,
+            frame.shape[1], frame.shape[0], previous_person_bbox,
+        )
+        if selection is None:
+            return [], [], {"status": "no_person"}
+        selected, metadata = selection
+        points = all_points[selected]
+        confidence = all_confidence[selected]
         # COCO pose indexes: left/right wrist are 9/10.
         wrists: list[dict[str, Any]] = []
         for index, name in ((9, "left_wrist"), (10, "right_wrist")):
             if index >= len(points):
                 continue
-            conf = float(confidence[index]) if confidence is not None and index < len(confidence) else 1.0
+            conf = float(confidence[index]) if index < len(confidence) else 1.0
             if conf < 0.20:
                 continue
             wrists.append({"name": name, "x": float(points[index][0]), "y": float(points[index][1]), "confidence": conf})
         pose = []
         for index, point in enumerate(points):
-            conf = float(confidence[index]) if confidence is not None and index < len(confidence) else 1.0
+            conf = float(confidence[index]) if index < len(confidence) else 1.0
             pose.append({"index": index, "x": float(point[0]), "y": float(point[1]), "confidence": conf})
-        return wrists, pose
+        metadata.update({
+            "status": "ok",
+            "box_confidence": round(float(box_confidence[selected]), 4),
+            "temporal_reference_age_frames": (
+                int(temporal_reference_age_frames)
+                if metadata.get("temporal_reference_available")
+                and temporal_reference_age_frames is not None
+                else None
+            ),
+        })
+        return wrists, pose, metadata
     except Exception as exc:
         logger.debug("Pose inference failed: %s", exc)
-        return [], []
+        return [], [], {"status": "error", "error_type": type(exc).__name__}
 
 
 def _extract_detections(result, class_names: dict[int, str]) -> list[dict[str, Any]]:
@@ -265,10 +488,27 @@ def _draw_frame(
     trace_length: int,
     line_thickness: int,
     text_scale: float,
+    output_size: tuple[int, int] | None = None,
+    pose: list[dict[str, Any]] | None = None,
 ) -> np.ndarray:
-    canvas = frame.copy()
+    source_height, source_width = frame.shape[:2]
+    output_width, output_height = output_size or (source_width, source_height)
+    scale_x = float(output_width) / max(1.0, float(source_width))
+    scale_y = float(output_height) / max(1.0, float(source_height))
+    canvas = (
+        frame.copy()
+        if (output_width, output_height) == (source_width, source_height)
+        else cv2.resize(frame, (output_width, output_height), interpolation=cv2.INTER_AREA)
+    )
+
+    def scaled_points(values: Any) -> np.ndarray:
+        points = np.asarray(values, dtype=np.float32).reshape(-1, 2).copy()
+        points[:, 0] *= scale_x
+        points[:, 1] *= scale_y
+        return points.round().astype(np.int32)
+
     for detection in detections:
-        x1, y1, x2, y2 = [int(value) for value in detection["bbox"]]
+        x1, y1, x2, y2 = [int(value) for value in scaled_points(np.asarray(detection["bbox"]).reshape(2, 2)).reshape(-1)]
         class_id = detection["class_id"]
         color = class_colors.setdefault(class_id, ((37 * (class_id + 1)) % 255, 180, 255))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
@@ -282,27 +522,50 @@ def _draw_frame(
             trace.append((int(detection["center"][0]), int(detection["center"][1])))
             del trace[:-trace_length]
             if len(trace) > 1:
-                cv2.polylines(canvas, [np.asarray(trace, dtype=np.int32)], False, color, line_thickness)
+                cv2.polylines(canvas, [scaled_points(trace)], False, color, line_thickness)
+    pose_by_index = {int(point.get("index", -1)): point for point in (pose or [])}
+    for start_index, end_index in POSE_EDGES:
+        start, end = pose_by_index.get(start_index), pose_by_index.get(end_index)
+        if not start or not end or float(start.get("confidence", 0.0)) < 0.20 or float(end.get("confidence", 0.0)) < 0.20:
+            continue
+        edge = scaled_points([[start["x"], start["y"]], [end["x"], end["y"]]])
+        cv2.line(canvas, tuple(edge[0]), tuple(edge[1]), (70, 190, 90), 1, cv2.LINE_AA)
+    for point_data in pose_by_index.values():
+        if float(point_data.get("confidence", 0.0)) < 0.20:
+            continue
+        point = tuple(scaled_points([[point_data["x"], point_data["y"]]])[0])
+        cv2.circle(canvas, point, 2, (70, 190, 90), -1, cv2.LINE_AA)
     for wrist in wrists:
-        point = (int(wrist["x"]), int(wrist["y"]))
+        point = tuple(scaled_points([[wrist["x"], wrist["y"]]])[0])
         cv2.circle(canvas, point, 6, (0, 220, 255), -1)
         cv2.putText(canvas, wrist["name"], (point[0] + 7, point[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 255), 1, cv2.LINE_AA)
     if string is not None:
         polygons = string.get("polygons") or ([string["polygon"]] if string.get("polygon") else [])
         if polygons:
             mask_layer = canvas.copy()
-            polygon_arrays = [np.asarray(polygon, dtype=np.float32).round().astype(np.int32) for polygon in polygons]
+            polygon_arrays = [scaled_points(polygon) for polygon in polygons]
             cv2.fillPoly(mask_layer, polygon_arrays, (255, 80, 30))
             canvas = cv2.addWeighted(mask_layer, 0.28, canvas, 0.72, 0)
             cv2.polylines(canvas, polygon_arrays, True, (255, 80, 30), 1)
         polylines = string.get("polylines") or ([string["points"]] if string.get("points") else [])
-        point_arrays = [np.asarray(points, dtype=np.float32).round().astype(np.int32) for points in polylines if len(points) >= 2]
+        point_arrays = [scaled_points(points) for points in polylines if len(points) >= 2]
         for points in point_arrays:
             cv2.polylines(canvas, [points], False, (255, 80, 30), 2)
         label = f"string {string.get('method', 'estimate')} {float(string.get('confidence', 0.0)):.2f} / review"
         label_point = tuple(point_arrays[0][0]) if point_arrays else (12, 42)
         cv2.putText(canvas, label, label_point, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 80, 30), 1, cv2.LINE_AA)
     return canvas
+
+
+def _visualization_size(width: int, height: int, max_width: int) -> tuple[int, int]:
+    """Return even preview dimensions without changing source-space metadata."""
+    target_width = int(max_width)
+    if target_width <= 0 or width <= target_width:
+        return int(width), int(height)
+    output_width = max(2, target_width - target_width % 2)
+    output_height = max(2, int(round(float(height) * output_width / max(1, width))))
+    output_height -= output_height % 2
+    return output_width, max(2, output_height)
 
 
 def _bbox_iou(left: list[float], right: list[float]) -> float:
@@ -315,7 +578,71 @@ def _bbox_iou(left: list[float], right: list[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
-def _pick_yoyo(detections: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, list[str]]:
+def _assign_tracker_ids(detections: list[dict[str, Any]], tracked: Any) -> None:
+    """Match ByteTrack outputs back to detector rows without assuming order."""
+    tracked_ids = getattr(tracked, "tracker_id", None)
+    tracked_boxes = getattr(tracked, "xyxy", None)
+    if tracked_ids is None or tracked_boxes is None:
+        return
+    tracked_classes = getattr(tracked, "class_id", None)
+    candidates: list[tuple[float, int, int]] = []
+    for detection_index, detection in enumerate(detections):
+        for tracked_index, tracked_box in enumerate(tracked_boxes):
+            if (
+                tracked_classes is not None
+                and tracked_index < len(tracked_classes)
+                and int(tracked_classes[tracked_index]) != int(detection["class_id"])
+            ):
+                continue
+            overlap = _bbox_iou(detection["bbox"], [float(value) for value in tracked_box])
+            if overlap >= 0.1:
+                candidates.append((overlap, detection_index, tracked_index))
+    used_detections: set[int] = set()
+    used_tracks: set[int] = set()
+    for _, detection_index, tracked_index in sorted(candidates, reverse=True):
+        if detection_index in used_detections or tracked_index in used_tracks:
+            continue
+        detections[detection_index]["track_id"] = int(tracked_ids[tracked_index])
+        used_detections.add(detection_index)
+        used_tracks.add(tracked_index)
+
+
+def _carry_preferred_track_id(
+    detection: dict[str, Any] | None,
+    preferred_track_id: int | None,
+    previous_bbox: list[float] | None,
+    gap_frames: int,
+    max_gap_frames: int,
+    multiple_yoyo: bool,
+) -> bool:
+    """Bridge short ByteTrack ID gaps only for one spatially continuous yoyo."""
+    if (
+        detection is None
+        or detection.get("track_id") is not None
+        or preferred_track_id is None
+        or previous_bbox is None
+        or multiple_yoyo
+        or gap_frames < 1
+        or gap_frames > max_gap_frames
+    ):
+        return False
+    current_bbox = detection["bbox"]
+    previous_center = ((previous_bbox[0] + previous_bbox[2]) / 2, (previous_bbox[1] + previous_bbox[3]) / 2)
+    current_center = ((current_bbox[0] + current_bbox[2]) / 2, (current_bbox[1] + current_bbox[3]) / 2)
+    distance = math.hypot(current_center[0] - previous_center[0], current_center[1] - previous_center[1])
+    previous_diagonal = math.hypot(previous_bbox[2] - previous_bbox[0], previous_bbox[3] - previous_bbox[1])
+    current_diagonal = math.hypot(current_bbox[2] - current_bbox[0], current_bbox[3] - current_bbox[1])
+    if distance > 2.0 * max(1.0, previous_diagonal, current_diagonal):
+        return False
+    detection["track_id"] = int(preferred_track_id)
+    detection["track_id_source"] = "temporal_carry"
+    return True
+
+
+def _pick_yoyo(
+    detections: list[dict[str, Any]],
+    preferred_track_id: int | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
     yoyos = [item for item in detections if item["class_name"].lower() in {"yoyo", "yo-yo", "yoyo_body"}]
     if not yoyos:
         return None, ["no_yoyo"]
@@ -326,6 +653,10 @@ def _pick_yoyo(detections: list[dict[str, Any]]) -> tuple[dict[str, Any] | None,
             continue
         distinct.append(candidate)
     flags = ["multiple_yoyo"] if len(distinct) > 1 else []
+    if preferred_track_id is not None:
+        stable = next((item for item in distinct if item.get("track_id") == preferred_track_id), None)
+        if stable is not None:
+            return stable, flags
     return distinct[0], flags
 
 
@@ -396,19 +727,50 @@ def _segments_from_records(
             bounded_candidates.append((chunk_start, chunk_end, True))
             chunk_start = chunk_end + 1
 
-    for segment_index, (start, end, duration_limited) in enumerate(bounded_candidates, start=1):
+    padded_candidates: list[dict[str, Any]] = []
+    for start, end, duration_limited in bounded_candidates:
         padded_start = max(0, start - padding)
         padded_end = min(len(records) - 1, end + padding)
         if max_export_length and padded_end - padded_start + 1 > max_export_length:
             padded_end = padded_start + max_export_length - 1
+        padded_candidates.append(
+            {
+                "active_start": start,
+                "active_end": end,
+                "padded_start": padded_start,
+                "padded_end": padded_end,
+                "duration_limited": duration_limited,
+                "padding_trimmed_for_neighbor": False,
+            }
+        )
+
+    for left, right in zip(padded_candidates, padded_candidates[1:]):
+        if left["padded_end"] < right["padded_start"]:
+            continue
+        boundary = (int(left["active_end"]) + int(right["active_start"])) // 2
+        left["padded_end"] = min(int(left["padded_end"]), boundary)
+        right["padded_start"] = max(int(right["padded_start"]), boundary + 1)
+        left["padding_trimmed_for_neighbor"] = True
+        right["padding_trimmed_for_neighbor"] = True
+
+    for segment_index, candidate in enumerate(padded_candidates, start=1):
+        start = int(candidate["active_start"])
+        end = int(candidate["active_end"])
+        padded_start = int(candidate["padded_start"])
+        padded_end = int(candidate["padded_end"])
+        duration_limited = bool(candidate["duration_limited"])
         result.append(
             {
                 "segment_id": segment_index,
                 "start_frame": records[padded_start]["frame_index"],
                 "end_frame": records[padded_end]["frame_index"],
+                "active_start_frame": records[start]["frame_index"],
+                "active_end_frame": records[end]["frame_index"],
                 "start_time_s": records[padded_start]["timestamp_s"],
                 "end_time_s": records[padded_end]["timestamp_s"],
                 "duration_s": (records[padded_end]["frame_index"] - records[padded_start]["frame_index"] + 1) / fps,
+                "boundary_policy": "non_overlapping_midpoint",
+                "padding_trimmed_for_neighbor": bool(candidate["padding_trimmed_for_neighbor"]),
                 "reason": "activity_with_duration_limit" if duration_limited else "yoyo_motion_or_hand_distance",
                 "needs_review": True,
                 "review_status": "auto_candidate_needs_review",
@@ -445,14 +807,6 @@ def _write_segments(source: Path, output_dir: Path, segments: list[dict[str, Any
     return outputs
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def track_video(
     source_video_path: str | Path,
     weights_path: str | Path = TRACKING_CONFIG.weights_path,
@@ -464,12 +818,15 @@ def track_video(
     trace_length: int = TRACKING_CONFIG.trace_length,
     line_thickness: int = TRACKING_CONFIG.line_thickness,
     text_scale: float = TRACKING_CONFIG.text_scale,
+    visualization_max_width: int = TRACKING_CONFIG.visualization_max_width,
     pose_weights_path: str | Path | None = None,
     enable_pose: bool = False,
     auto_download_pose: bool = False,
     string_weights_path: str | Path | None = None,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
+    string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
+    string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
@@ -487,6 +844,10 @@ def track_video(
     allowed_attachment_classes = {"hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"}
     if string_attachment_class not in allowed_attachment_classes:
         raise ValueError(f"Unsupported string attachment class: {string_attachment_class}")
+    if not 0.5 <= float(string_inference_scale) <= 2.0:
+        raise ValueError("string_inference_scale must be between 0.5 and 2.0")
+    if float(string_inference_fps) < 0.0:
+        raise ValueError("string_inference_fps must be non-negative")
     max_segment_seconds = 180.0 if max_segment_seconds <= 0 else min(float(max_segment_seconds), 180.0)
     source_video_path, weights_path, output_dir = Path(source_video_path), Path(weights_path), Path(output_dir)
     if not source_video_path.exists():
@@ -509,12 +870,16 @@ def track_video(
     if not capture.isOpened():
         raise RuntimeError(f"Could not open input video: {source_video_path}")
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
+    string_inference_interval = _inference_interval_frames(fps, string_inference_fps)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    output_width, output_height = _visualization_size(width, height, visualization_max_width)
     start_frame = max(0, int(round(float(start_seconds) * fps)))
     if start_frame:
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    writer = cv2.VideoWriter(
+        str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (output_width, output_height)
+    )
     if not writer.isOpened():
         capture.release()
         raise RuntimeError(f"Could not create output video: {output_path}")
@@ -531,11 +896,18 @@ def track_video(
     missing_streak = 0
     previous_gray: np.ndarray | None = None
     previous_string: dict[str, Any] | None = None
+    selected_track_id: int | None = None
+    selected_track_bbox: list[float] | None = None
+    selected_track_frame: int | None = None
+    selected_pose_bbox: list[float] | None = None
+    selected_pose_frame: int | None = None
     traces: dict[int, list[tuple[int, int]]] = {}
     colors: dict[int, tuple[int, int, int]] = {}
     frame_index = start_frame
     processed_frames = 0
+    string_inference_frames = 0
     metadata_file = open(json_path, "w", encoding="utf-8") if export_json else None
+    loop_started = time.perf_counter()
     while True:
         ok, frame = capture.read()
         if not ok or (max_frames and processed_frames >= max_frames):
@@ -547,26 +919,63 @@ def track_video(
         detections_raw = _extract_detections(result, class_names)
         ultralytics_detections = sv.Detections.from_ultralytics(result)
         tracked = tracker.update_with_detections(ultralytics_detections)
-        ids = tracked.tracker_id if tracked.tracker_id is not None else []
-        for index, detection in enumerate(detections_raw):
-            if index < len(ids):
-                detection["track_id"] = int(ids[index])
-        yoyo, flags = _pick_yoyo(detections_raw)
+        _assign_tracker_ids(detections_raw, tracked)
+        yoyo, flags = _pick_yoyo(detections_raw, selected_track_id)
+        _carry_preferred_track_id(
+            yoyo,
+            selected_track_id,
+            selected_track_bbox,
+            frame_index - selected_track_frame if selected_track_frame is not None else 0,
+            max(2, int(round(fps * 0.25))),
+            "multiple_yoyo" in flags,
+        )
+        if yoyo is not None and yoyo.get("track_id") is not None:
+            selected_track_id = int(yoyo["track_id"])
+            selected_track_bbox = [float(value) for value in yoyo["bbox"]]
+            selected_track_frame = frame_index
         center = tuple(yoyo["center"]) if yoyo else None
         speed = 0.0 if center is None or previous_center is None else math.hypot(center[0] - previous_center[0], center[1] - previous_center[1]) * fps
-        wrists, pose = _predict_pose(pose_model, frame)
+        pose_reference_age = (
+            frame_index - selected_pose_frame if selected_pose_frame is not None else None
+        )
+        pose_reference_bbox = (
+            selected_pose_bbox
+            if pose_reference_age is not None
+            and pose_reference_age <= max(2, int(round(fps * 0.25)))
+            else None
+        )
+        wrists, pose, pose_person = _predict_pose(
+            pose_model,
+            frame,
+            yoyo,
+            imgsz,
+            device,
+            previous_person_bbox=pose_reference_bbox,
+            temporal_reference_age_frames=pose_reference_age,
+        )
+        if pose_person.get("status") == "ok" and len(pose_person.get("bbox", [])) == 4:
+            selected_pose_bbox = [float(value) for value in pose_person["bbox"]]
+            selected_pose_frame = frame_index
         distance_to_hand = None
         if center and wrists:
             distance_to_hand = min(math.hypot(item["x"] - center[0], item["y"] - center[1]) for item in wrists)
-        model_string = _predict_string_model(
-            string_model,
-            frame,
-            yoyo,
-            string_confidence,
-            imgsz,
-            device,
-            string_attachment_class,
+        scheduled_string_inference = bool(
+            string_model is not None and processed_frames % string_inference_interval == 0
         )
+        model_string = None
+        if scheduled_string_inference:
+            model_string = _predict_string_model(
+                string_model,
+                frame,
+                yoyo,
+                string_confidence,
+                imgsz,
+                device,
+                string_attachment_class,
+                string_inference_scale,
+                wrists,
+            )
+            string_inference_frames += 1
         string = estimate_string(
             frame,
             yoyo,
@@ -578,7 +987,43 @@ def track_video(
             max_propagation_frames=string_max_propagation_frames,
             max_forward_backward_error=string_flow_fb_max_error,
             fusion_distance_px=string_fusion_distance_px,
+            # A loaded segmentation model returning no component is negative
+            # evidence. Do not replace it with a weaker HSV/Hough proposal.
+            allow_color_fallback=string_model is None,
         )
+        reacquired_string = _should_reacquire_string(
+            scheduled_string_inference,
+            string_model is not None,
+            yoyo,
+            previous_string,
+            string,
+        )
+        if reacquired_string:
+            model_string = _predict_string_model(
+                string_model,
+                frame,
+                yoyo,
+                string_confidence,
+                imgsz,
+                device,
+                string_attachment_class,
+                string_inference_scale,
+                wrists,
+            )
+            string_inference_frames += 1
+            string = estimate_string(
+                frame,
+                yoyo,
+                wrists,
+                previous_gray,
+                previous_string,
+                string_attachment_class,
+                observation=model_string,
+                max_propagation_frames=string_max_propagation_frames,
+                max_forward_backward_error=string_flow_fb_max_error,
+                fusion_distance_px=string_fusion_distance_px,
+                allow_color_fallback=False,
+            )
         if yoyo and yoyo["confidence"] < 0.35:
             flags.append("low_confidence")
         edge_clipped = bool(yoyo and (yoyo["bbox"][0] <= 1 or yoyo["bbox"][1] <= 1 or yoyo["bbox"][2] >= width - 1 or yoyo["bbox"][3] >= height - 1))
@@ -586,6 +1031,8 @@ def track_video(
             flags.append("edge_clipped")
         if enable_pose and not wrists:
             flags.append("pose_missing")
+        if enable_pose and pose_person.get("needs_review"):
+            flags.append("pose_identity_needs_review")
         if string is not None:
             if string.get("needs_review", True):
                 flags.append("string_needs_review")
@@ -597,6 +1044,8 @@ def track_video(
                 flags.append("string_temporal_conflict")
             if string.get("spatially_ambiguous"):
                 flags.append("string_spatially_ambiguous")
+            if string.get("hand_anchor_mismatch"):
+                flags.append("string_hand_anchor_mismatch")
         elif yoyo:
             flags.append("string_not_observed")
             if previous_string is not None:
@@ -621,14 +1070,35 @@ def track_video(
             activity_speed_diagonal_per_s,
         )
         record = {
-            "schema_version": "1.1",
+            "schema_version": "1.2",
             "frame_index": frame_index,
             "timestamp_s": frame_index / fps,
             "detections": detections_raw,
             "yoyo": yoyo,
             "hands": wrists,
             "pose": pose,
+            "pose_person": pose_person,
             "string": string,
+            "string_model_inference": {
+                "status": (
+                    "ran"
+                    if scheduled_string_inference or reacquired_string
+                    else "skipped_interval"
+                    if string_model is not None
+                    else "disabled_or_unavailable"
+                ),
+                "target_fps": float(string_inference_fps),
+                "interval_frames": int(string_inference_interval),
+                "reason": (
+                    "scheduled"
+                    if scheduled_string_inference
+                    else "flow_reacquire"
+                    if reacquired_string
+                    else "interval"
+                    if string_model is not None
+                    else "model_unavailable"
+                ),
+            },
             "string_attachment_class": string_attachment_class,
             "visibility": {
                 "state": visibility_state,
@@ -655,6 +1125,8 @@ def track_video(
                 trace_length,
                 line_thickness,
                 text_scale,
+                (output_width, output_height),
+                pose,
             )
         )
         previous_center = center
@@ -663,7 +1135,7 @@ def track_video(
         # outside the frame; its record remains explicitly review-only.
         previous_string = (
             string
-            if string is not None and not string.get("spatially_ambiguous")
+            if _can_seed_previous_string(string)
             else None
         )
         frame_index += 1
@@ -672,6 +1144,8 @@ def track_video(
     writer.release()
     if metadata_file:
         metadata_file.close()
+    loop_seconds = max(0.0, time.perf_counter() - loop_started)
+    loop_fps = float(processed_frames / loop_seconds) if loop_seconds > 0.0 else 0.0
     segments = _segments_from_records(
         records,
         fps,
@@ -685,7 +1159,10 @@ def track_video(
     segments_path = run_dir / "segments.json"
     segments_path.write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        review_sheet_path = make_tracking_review_sheet(run_dir)
+        review_sheet_path = make_tracking_review_sheet(
+            run_dir,
+            source_video_path=source_video_path,
+        )
     except Exception as exc:
         logger.warning("Could not create tracking review sheet: %s", exc)
         review_sheet_path = None
@@ -695,31 +1172,64 @@ def track_video(
         logger.warning("Could not export tracking frame features: %s", exc)
         frame_feature_outputs = {"jsonl": "", "npz": "", "manifest": ""}
     bad_case_counts = Counter(flag for record in records for flag in record["bad_case"])
+    component_selection_counts = Counter(
+        str(record["string"].get("component_selection"))
+        for record in records
+        if record.get("string") and record["string"].get("component_selection")
+    )
+    string_geometry_counts = {
+        "component_selection_counts": dict(sorted(component_selection_counts.items())),
+        "hand_supported_observation_frames": sum(
+            int((record.get("string") or {}).get("hand_supported_component_count", 0) > 0)
+            for record in records
+        ),
+        "multi_component_observation_frames": sum(
+            int(len((record.get("string") or {}).get("polylines") or []) > 1)
+            for record in records
+        ),
+        "multi_component_flow_frames": sum(
+            int((record.get("string") or {}).get("flow_component_count", 0) > 1)
+            for record in records
+        ),
+        "partial_component_flow_loss_frames": sum(
+            int(bool((record.get("string") or {}).get("flow_partial_component_loss")))
+            for record in records
+        ),
+    }
     run_manifest = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "run_id": run_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_video": str(source_video_path.resolve()),
-        "source_video_sha256": _sha256(source_video_path),
+        "source_video_sha256": sha256_file(source_video_path),
         "weights": str(weights_path.resolve()),
-        "weights_sha256": _sha256(weights_path),
+        "weights_sha256": sha256_file(weights_path),
         "string_model_kind": (
             string_model.get("kind", "yolo_segmentation") if isinstance(string_model, dict) else "yolo_segmentation"
         ) if string_model is not None else "disabled_or_unavailable",
         "string_weights_sha256": (
-            _sha256(Path(string_weights_path or TRACKING_CONFIG.string_weights_path))
+            sha256_file(Path(string_weights_path or TRACKING_CONFIG.string_weights_path))
             if string_model is not None else ""
+        ),
+        "pose_weights_sha256": (
+            sha256_file(Path(pose_weights_path))
+            if pose_model is not None and pose_weights_path and Path(pose_weights_path).is_file()
+            else ""
         ),
         "parameters": {
             "confidence": confidence,
             "iou": iou,
             "imgsz": imgsz,
             "device": device,
+            "visualization_max_width": int(visualization_max_width),
             "pose_enabled": enable_pose,
             "pose_weights": str(pose_weights_path or ""),
             "string_model_enabled": bool(enable_string_model),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
             "string_confidence": string_confidence,
+            "string_inference_scale": float(string_inference_scale),
+            "string_inference_fps": float(string_inference_fps),
+            "string_inference_interval_frames": int(string_inference_interval),
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_fusion_distance_px": float(string_fusion_distance_px),
@@ -733,11 +1243,19 @@ def track_video(
             "max_frames": max_frames,
         },
         "frame_count": processed_frames,
+        "string_inference_frame_count": string_inference_frames,
+        "performance": {
+            "tracking_loop_seconds": round(loop_seconds, 4),
+            "tracking_loop_fps": round(loop_fps, 4),
+        },
         "fps": fps,
         "width": width,
         "height": height,
+        "output_width": output_width,
+        "output_height": output_height,
         "segments_count": len(segments),
         "bad_case_counts": dict(sorted(bad_case_counts.items())),
+        "string_geometry_counts": string_geometry_counts,
         "outputs": {
             "tracked_video": str(output_path),
             "frames_jsonl": str(json_path) if export_json else "",
@@ -751,6 +1269,7 @@ def track_video(
         },
         "limitations": [
             "String observations are review-only; model/color observations are fused with forward/backward-checked optical flow and propagation is capped by string_max_propagation_frames.",
+            "In attached mode, hand-supported semantic components are retained only when observed near a visible wrist or one component-gap from such an observation; gaps remain separate polylines.",
             "string_without_yoyo marks frames where a visible string estimate persists while the yoyo is out of frame or occluded; these frames require manual review.",
             "not_visible_or_occluded does not distinguish occlusion from an off-camera yoyo without manual review.",
             "Segments are heuristic candidates; only approved valid segments become clip-tokens and irrelevant intervals are excluded.",
@@ -787,10 +1306,16 @@ def track_video(
         "run_manifest": str(run_manifest_path),
         "run_dir": str(run_dir),
         "bad_case_counts": dict(sorted(bad_case_counts.items())),
+        "string_geometry_counts": string_geometry_counts,
         "weights": str(weights_path),
         "pose_weights": pose_error or str(pose_weights_path or "") if enable_pose else "",
         "string_model": string_model_status,
         "frame_count": processed_frames,
+        "output_width": output_width,
+        "output_height": output_height,
+        "string_inference_frame_count": string_inference_frames,
+        "tracking_loop_seconds": round(loop_seconds, 4),
+        "tracking_loop_fps": round(loop_fps, 4),
         "fps": fps,
         "confidence": confidence,
         "iou": iou,
@@ -808,12 +1333,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iou", type=float, default=TRACKING_CONFIG.iou)
     parser.add_argument("--imgsz", type=int, default=TRACKING_CONFIG.imgsz)
     parser.add_argument("--device", default=TRACKING_CONFIG.device)
+    parser.add_argument(
+        "--visualization-max-width",
+        type=int,
+        default=TRACKING_CONFIG.visualization_max_width,
+        help="Maximum annotated preview width; 0 preserves source resolution.",
+    )
     parser.add_argument("--pose-weights", default="")
     parser.add_argument("--pose", action="store_true", help="Run optional YOLO pose inference for wrists/body landmarks.")
     parser.add_argument("--auto-download-pose", action="store_true")
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
+    parser.add_argument(
+        "--string-inference-scale",
+        type=float,
+        default=TRACKING_CONFIG.string_inference_scale,
+        help="Semantic input scale in [0.5, 2.0]; 2.0 preserves more thin-string pixels at higher cost.",
+    )
+    parser.add_argument(
+        "--string-inference-fps",
+        type=float,
+        default=TRACKING_CONFIG.string_inference_fps,
+        help="Target semantic-model cadence; 0 runs semantic inference on every frame.",
+    )
     parser.add_argument("--string-max-propagation-frames", type=int, default=TRACKING_CONFIG.string_max_propagation_frames)
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
     parser.add_argument("--string-fusion-distance-px", type=float, default=TRACKING_CONFIG.string_fusion_distance_px)
@@ -849,12 +1392,15 @@ def main() -> int:
         iou=args.iou,
         imgsz=args.imgsz,
         device=args.device,
+        visualization_max_width=args.visualization_max_width,
         pose_weights_path=args.pose_weights or None,
         enable_pose=args.pose,
         auto_download_pose=args.auto_download_pose,
         string_weights_path=args.string_weights,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
+        string_inference_scale=args.string_inference_scale,
+        string_inference_fps=args.string_inference_fps,
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         string_fusion_distance_px=args.string_fusion_distance_px,

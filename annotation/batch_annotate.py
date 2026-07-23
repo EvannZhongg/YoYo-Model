@@ -4,6 +4,7 @@ from pathlib import Path
 
 from annotation.annotator import annotate_image_for_dataset, has_complete_annotation
 from annotation.prompts import YOYO_DETECTION_PROMPT
+from common.files import collect_files
 from config import BASE_DIR, DATASET_CONFIG, MODEL_CONFIG
 
 
@@ -17,18 +18,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-
-def collect_images(input_dir: Path) -> list[Path]:
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Dataset image directory does not exist: {input_dir}")
-
-    pattern = "**/*" if DATASET_CONFIG.recursive else "*"
-    return sorted(
-        path
-        for path in input_dir.glob(pattern)
-        if path.is_file() and path.suffix.lower() in DATASET_CONFIG.image_extensions
-    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,7 +36,11 @@ def main() -> int:
     args = parse_args()
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
-    image_paths = collect_images(input_dir)
+    image_paths = collect_files(
+        input_dir,
+        DATASET_CONFIG.image_extensions,
+        recursive=DATASET_CONFIG.recursive,
+    )
 
     if args.limit > 0:
         image_paths = image_paths[: args.limit]

@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from annotation.video_frame_annotator import draw_visualization
+from video_dataset.split_policy import parse_source_groups
 
 
 def _points(annotation: dict[str, Any]) -> list[list[float]]:
@@ -119,7 +120,7 @@ def _draw_mask_preview(source: Path, annotation: dict[str, Any], output: Path) -
 
 def prelabel_annotation(label_path: Path, dataset_dir: Path, force: bool = False) -> dict[str, Any]:
     annotation = json.loads(label_path.read_text(encoding="utf-8"))
-    if annotation.get("string_review_status") in {"approved", "reviewed", "rejected"} and not force:
+    if annotation.get("string_review_status") in {"approved", "reviewed", "rejected", "unresolved"} and not force:
         return {"label": str(label_path), "status": "skipped_reviewed"}
     if annotation.get("string_visibility") not in {"visible", "partial"}:
         return {"label": str(label_path), "status": "skipped_visibility"}
@@ -170,13 +171,18 @@ def main() -> int:
     parser.add_argument("--split", choices=["all", "train", "val", "test"], default="all")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--exclude-source-groups", default="", help="Comma-separated source groups excluded before proposal generation.")
     args = parser.parse_args()
     dataset_dir = Path(args.dataset_dir)
     paths = sorted((dataset_dir / "annotations" / "labels").rglob("*.json"))
     selected = []
+    excluded_groups = parse_source_groups(args.exclude_source_groups)
     for path in paths:
         data = json.loads(path.read_text(encoding="utf-8"))
         if args.split != "all" and data.get("split") != args.split:
+            continue
+        source_group = str(data.get("source_group") or data.get("video_id") or "").strip()
+        if source_group in excluded_groups:
             continue
         selected.append(path)
     if args.limit > 0:

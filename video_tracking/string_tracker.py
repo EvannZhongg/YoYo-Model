@@ -140,69 +140,270 @@ def propagate_optical_flow(
     width: int,
     height: int,
     max_forward_backward_error: float = 4.0,
+    allow_full_frame_fallback: bool = True,
 ) -> dict[str, Any] | None:
     if previous_gray is None or not previous_points or len(previous_points) < 2:
         return None
     # A two-point centerline is easy to lose at an endpoint. Track interior
     # samples as well, then return them as a short polyline for later fusion.
     track_points = _resample_polyline(previous_points, max(4, min(16, len(previous_points) * 4)))
-    p0 = track_points.reshape(-1, 1, 2)
-    p1, status, error = cv2.calcOpticalFlowPyrLK(
+
+    def calculate(
+        previous_image: np.ndarray,
+        current_image: np.ndarray,
+        offset: np.ndarray,
+        region: str,
+        region_fraction: float,
+    ) -> dict[str, Any] | None:
+        local_track_points = track_points - offset
+        p0 = local_track_points.reshape(-1, 1, 2)
+        p1, status, error = cv2.calcOpticalFlowPyrLK(
+            previous_image,
+            current_image,
+            p0,
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03),
+        )
+        if p1 is None or status is None:
+            return None
+        valid = status.reshape(-1).astype(bool)
+        if int(valid.sum()) < max(2, len(track_points) - 2):
+            return None
+        local_points = p1.reshape(-1, 2)
+        mean_error = float(np.mean(error.reshape(-1)[valid])) if error is not None else 10.0
+        if not np.isfinite(mean_error) or mean_error > 35.0:
+            return None
+        # Forward-backward consistency rejects drift onto a nearby background edge.
+        reverse, reverse_status, _ = cv2.calcOpticalFlowPyrLK(
+            current_image,
+            previous_image,
+            local_points.reshape(-1, 1, 2),
+            None,
+            winSize=(21, 21),
+            maxLevel=3,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03),
+        )
+        if reverse is None or reverse_status is None:
+            return None
+        backward_valid = valid & reverse_status.reshape(-1).astype(bool)
+        if int(backward_valid.sum()) < max(2, int(valid.sum()) - 1):
+            return None
+        fb_error = np.linalg.norm(reverse.reshape(-1, 2) - local_track_points, axis=1)
+        mean_fb_error = float(np.mean(fb_error[backward_valid]))
+        if not np.isfinite(mean_fb_error) or mean_fb_error > max(0.5, float(max_forward_backward_error)):
+            return None
+        points = local_points + offset
+        clipped = _clip_points(points.tolist(), width, height)
+        if len(clipped) < 2:
+            return None
+        confidence = min(0.72, max(0.20, 0.72 - mean_error / 100.0 - mean_fb_error / 25.0))
+        return {
+            "points": clipped,
+            "confidence": round(float(confidence), 4),
+            "method": "lucas_kanade_optical_flow",
+            "needs_review": True,
+            "flow_error": round(mean_error, 3),
+            "flow_forward_backward_error": round(mean_fb_error, 3),
+            "flow_valid_point_ratio": round(float(backward_valid.sum() / max(1, len(track_points))), 4),
+            "flow_region": region,
+            "flow_region_fraction": round(float(region_fraction), 6),
+        }
+
+    margin = 192
+    x1 = max(0, int(math.floor(float(track_points[:, 0].min()))) - margin)
+    y1 = max(0, int(math.floor(float(track_points[:, 1].min()))) - margin)
+    x2 = min(width, int(math.ceil(float(track_points[:, 0].max()))) + margin + 1)
+    y2 = min(height, int(math.ceil(float(track_points[:, 1].max()))) + margin + 1)
+    region_fraction = float(max(0, x2 - x1) * max(0, y2 - y1) / max(1, width * height))
+    if x2 > x1 and y2 > y1 and region_fraction < 0.80:
+        offset = np.asarray([x1, y1], dtype=np.float32)
+        result = calculate(
+            previous_gray[y1:y2, x1:x2],
+            gray[y1:y2, x1:x2],
+            offset,
+            "roi",
+            region_fraction,
+        )
+        if result is not None:
+            return result
+        if not allow_full_frame_fallback:
+            return None
+    return calculate(
         previous_gray,
         gray,
-        p0,
-        None,
-        winSize=(21, 21),
-        maxLevel=3,
-        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03),
+        np.zeros(2, dtype=np.float32),
+        "full_frame_fallback" if region_fraction < 0.80 else "full_frame",
+        1.0,
     )
-    if p1 is None or status is None:
+
+
+def _propagate_string_geometry(
+    previous_gray: np.ndarray | None,
+    gray: np.ndarray,
+    previous_string: dict[str, Any],
+    width: int,
+    height: int,
+    max_forward_backward_error: float,
+    allow_full_frame_fallback: bool,
+) -> dict[str, Any] | None:
+    polylines = previous_string.get("polylines") or [previous_string.get("points") or []]
+    propagated_components = []
+    for index, points in enumerate(polylines):
+        propagated = propagate_optical_flow(
+            previous_gray,
+            gray,
+            points,
+            width,
+            height,
+            max_forward_backward_error=max_forward_backward_error,
+            allow_full_frame_fallback=allow_full_frame_fallback,
+        )
+        # The first polyline is the yoyo-side primary component. Losing it
+        # removes the observation anchor and requires semantic reacquisition.
+        if index == 0 and propagated is None:
+            return None
+        if propagated is not None:
+            propagated_components.append(propagated)
+    if not propagated_components:
         return None
-    valid = status.reshape(-1).astype(bool)
-    if int(valid.sum()) < max(2, len(track_points) - 2):
-        return None
-    points = p1.reshape(-1, 2)
-    mean_error = float(np.mean(error.reshape(-1)[valid])) if error is not None else 10.0
-    if not np.isfinite(mean_error) or mean_error > 35.0:
-        return None
-    # Forward-backward consistency rejects drift onto a nearby background edge.
-    reverse, reverse_status, _ = cv2.calcOpticalFlowPyrLK(
-        gray,
-        previous_gray,
-        points.reshape(-1, 1, 2),
-        None,
-        winSize=(21, 21),
-        maxLevel=3,
-        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.03),
+    result = dict(propagated_components[0])
+    result["points"] = propagated_components[0]["points"]
+    result["polylines"] = [item["points"] for item in propagated_components]
+    result["confidence"] = round(
+        float(np.mean([float(item.get("confidence", 0.0)) for item in propagated_components])),
+        4,
     )
-    if reverse is None or reverse_status is None:
-        return None
-    backward_valid = valid & reverse_status.reshape(-1).astype(bool)
-    if int(backward_valid.sum()) < max(2, int(valid.sum()) - 1):
-        return None
-    fb_error = np.linalg.norm(reverse.reshape(-1, 2) - track_points, axis=1)
-    mean_fb_error = float(np.mean(fb_error[backward_valid]))
-    if not np.isfinite(mean_fb_error) or mean_fb_error > max(0.5, float(max_forward_backward_error)):
-        return None
-    clipped = _clip_points(points.tolist(), width, height)
-    if len(clipped) < 2:
-        return None
-    confidence = min(0.72, max(0.20, 0.72 - mean_error / 100.0 - mean_fb_error / 25.0))
-    return {
-        "points": clipped,
-        "confidence": round(float(confidence), 4),
-        "method": "lucas_kanade_optical_flow",
-        "needs_review": True,
-        "flow_error": round(mean_error, 3),
-        "flow_forward_backward_error": round(mean_fb_error, 3),
-        "flow_valid_point_ratio": round(float(backward_valid.sum() / max(1, len(track_points))), 4),
-    }
+    result["flow_component_count"] = len(propagated_components)
+    result["flow_source_component_count"] = len(polylines)
+    result["flow_partial_component_loss"] = len(propagated_components) < len(polylines)
+    result["flow_forward_backward_error"] = round(
+        max(float(item.get("flow_forward_backward_error", 0.0)) for item in propagated_components),
+        3,
+    )
+    result["flow_regions"] = [str(item.get("flow_region", "unknown")) for item in propagated_components]
+    if previous_string.get("component_selection"):
+        result["source_component_selection"] = previous_string["component_selection"]
+    if previous_string.get("hand_supported_component_count") is not None:
+        result["source_hand_supported_component_count"] = int(
+            previous_string["hand_supported_component_count"]
+        )
+    return result
 
 
 def _annotate_observation(observation: dict[str, Any], propagation_age: int = 0) -> dict[str, Any]:
     result = dict(observation)
     result["propagation_age_frames"] = int(max(0, propagation_age))
     result.setdefault("source_methods", [str(result.get("method", "unknown"))])
+    return result
+
+
+def _valid_geometry_sequence(value: Any, minimum_points: int) -> list[list[float]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    points = []
+    for point in value:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            continue
+        try:
+            x, y = float(point[0]), float(point[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x) and math.isfinite(y):
+            points.append([x, y])
+    return points if len(points) >= minimum_points else []
+
+
+def _observation_geometry(observation: dict[str, Any]) -> list[tuple[list[list[float]], bool]]:
+    """Collect review geometry as (points, closed) without inventing connections."""
+    geometry: list[tuple[list[list[float]], bool]] = []
+    points = _valid_geometry_sequence(observation.get("points"), 1)
+    if points:
+        geometry.append((points, False))
+    for polyline in observation.get("polylines") or []:
+        points = _valid_geometry_sequence(polyline, 1)
+        if points:
+            geometry.append((points, False))
+    polygons = observation.get("polygons") or (
+        [observation["polygon"]] if observation.get("polygon") else []
+    )
+    for polygon in polygons:
+        points = _valid_geometry_sequence(polygon, 3)
+        if points:
+            geometry.append((points, True))
+    return geometry
+
+
+def _point_to_segment_distance(point: np.ndarray, start: np.ndarray, end: np.ndarray) -> float:
+    segment = end - start
+    length_squared = float(np.dot(segment, segment))
+    if length_squared <= 1e-12:
+        return float(np.linalg.norm(point - start))
+    fraction = max(0.0, min(1.0, float(np.dot(point - start, segment) / length_squared)))
+    return float(np.linalg.norm(point - (start + fraction * segment)))
+
+
+def _geometry_to_wrist_distance(
+    geometry: list[tuple[list[list[float]], bool]],
+    wrists: list[dict[str, Any]],
+) -> float | None:
+    distances: list[float] = []
+    for wrist in wrists:
+        try:
+            point = np.asarray([float(wrist["x"]), float(wrist["y"])], dtype=np.float32)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not np.isfinite(point).all():
+            continue
+        for points, closed in geometry:
+            array = np.asarray(points, dtype=np.float32)
+            if closed and cv2.pointPolygonTest(array, (float(point[0]), float(point[1])), False) >= 0:
+                distances.append(0.0)
+                continue
+            distances.extend(float(np.linalg.norm(point - vertex)) for vertex in array)
+            pairs = list(zip(array, array[1:]))
+            if closed:
+                pairs.append((array[-1], array[0]))
+            distances.extend(_point_to_segment_distance(point, start, end) for start, end in pairs)
+    return min(distances) if distances else None
+
+
+def _annotate_hand_anchor(
+    observation: dict[str, Any],
+    wrists: list[dict[str, Any]],
+    attachment_class: str,
+    width: int,
+    height: int,
+) -> dict[str, Any]:
+    result = dict(observation)
+    threshold = max(48.0, 0.025 * math.hypot(width, height))
+    distance = None
+    status = "not_applicable"
+    mismatch = False
+    if attachment_class == "hand_and_yoyo_attached":
+        geometry = _observation_geometry(result)
+        if not wrists:
+            status = "no_visible_wrist"
+        elif not geometry:
+            status = "no_geometry"
+        else:
+            distance = _geometry_to_wrist_distance(geometry, wrists)
+            if distance is None:
+                status = "no_visible_wrist"
+            else:
+                mismatch = distance > threshold
+                status = "mismatch" if mismatch else "matched"
+    result.update(
+        {
+            "hand_anchor_status": status,
+            "distance_to_nearest_wrist_px": round(distance, 2) if distance is not None else None,
+            "hand_anchor_threshold_px": round(threshold, 2),
+            "hand_anchor_mismatch": mismatch,
+        }
+    )
+    if mismatch:
+        result["needs_review"] = True
     return result
 
 
@@ -230,9 +431,13 @@ def _fuse_observations(
     weight_observation = observation_confidence / total
     fused_points = observed * weight_observation + flow * (1.0 - weight_observation)
     result = dict(observation)
+    fused_points = [[round(float(x), 2), round(float(y), 2)] for x, y in fused_points]
+    fused_polylines = list(observation.get("polylines") or [])
+    if fused_polylines:
+        fused_polylines[0] = fused_points
     result.update(
         {
-            "points": [[round(float(x), 2), round(float(y), 2)] for x, y in fused_points],
+            "points": fused_points,
             "method": "temporal_fusion",
             "confidence": round(
                 min(0.9, max(observation_confidence, flow_confidence) + 0.08 * (1.0 - disagreement / distance_limit)),
@@ -245,6 +450,8 @@ def _fuse_observations(
             "propagation_age_frames": 0,
         }
     )
+    if fused_polylines:
+        result["polylines"] = fused_polylines
     return result
 
 
@@ -259,26 +466,32 @@ def estimate_string(
     max_propagation_frames: int = 12,
     max_forward_backward_error: float = 4.0,
     fusion_distance_px: float = 48.0,
+    allow_color_fallback: bool = True,
 ) -> dict[str, Any] | None:
     """Estimate a string while preserving uncertainty in the returned record."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     width, height = frame.shape[1], frame.shape[0]
+
+    def finalize(result: dict[str, Any]) -> dict[str, Any]:
+        return _annotate_hand_anchor(result, wrists, attachment_class, width, height)
+
     propagated = None
     if previous_string and previous_string.get("points"):
         previous_age = int(previous_string.get("propagation_age_frames", 0))
         if previous_age < max(0, int(max_propagation_frames)):
-            propagated = propagate_optical_flow(
+            propagated = _propagate_string_geometry(
                 previous_gray,
                 gray,
-                previous_string["points"],
+                previous_string,
                 width,
                 height,
-                max_forward_backward_error=max_forward_backward_error,
+                max_forward_backward_error,
+                yoyo is None,
             )
             if propagated is not None:
                 propagated = _annotate_observation(propagated, previous_age + 1)
     observed = _annotate_observation(observation) if observation is not None else None
-    if observed is None and yoyo is not None:
+    if observed is None and yoyo is not None and allow_color_fallback:
         color_observation = _color_line_observation(
             frame,
             yoyo,
@@ -303,7 +516,7 @@ def estimate_string(
     if observed is not None and propagated is not None:
         fused = _fuse_observations(observed, propagated, width, height, fusion_distance_px)
         if fused is not None:
-            return fused
+            return finalize(fused)
         # A fresh observation anchors the track after disagreement, but keep
         # the conflict visible for manual review instead of hiding it.
         if float(observed.get("confidence", 0.0)) >= float(propagated.get("confidence", 0.0)) or int(propagated.get("propagation_age_frames", 0)) >= 3:
@@ -317,22 +530,13 @@ def estimate_string(
                     ),
                 }
             )
-            return observed
+            return finalize(observed)
         propagated["temporal_conflict"] = True
-        return propagated
+        return finalize(propagated)
     if observed is not None:
-        return observed
+        return finalize(observed)
     if propagated is not None:
-        return propagated
-    if yoyo is not None and wrists and attachment_class == "hand_and_yoyo_attached":
-        center = yoyo["center"]
-        wrist = min(wrists, key=lambda item: (item["x"] - center[0]) ** 2 + (item["y"] - center[1]) ** 2)
-        distance = math.hypot(wrist["x"] - center[0], wrist["y"] - center[1])
-        if distance >= 8:
-            return _annotate_observation({
-                "points": [[float(wrist["x"]), float(wrist["y"])], [float(center[0]), float(center[1])]],
-                "confidence": 0.20,
-                "method": "hand_to_yoyo_geometric_prior",
-                "needs_review": True,
-            })
+        return finalize(propagated)
+    # Wrist/yoyo proximity is useful metadata, but it is not visual evidence
+    # that a string segment is present between those points.
     return None

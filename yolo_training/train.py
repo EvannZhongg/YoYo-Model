@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import json
 import logging
 import platform
@@ -7,6 +6,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from common.files import sha256_file
 from config import BASE_DIR, DATASET_CONFIG, YOLO_CONFIG
 from yolo_training.download_model import download_model
 from yolo_training.prepare_dataset import prepare_yolo_dataset
@@ -44,14 +44,6 @@ def parse_args() -> argparse.Namespace:
 
 def parse_batch(value: str):
     return value if value == "auto" else int(value)
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def main() -> int:

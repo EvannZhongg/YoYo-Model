@@ -13,6 +13,7 @@ import yaml
 from PIL import Image
 
 from config import BASE_DIR, DATASET_CONFIG, YOLO_CONFIG
+from video_dataset.split_policy import derived_split, parse_source_groups, remove_cross_split_duplicate_hashes
 
 
 LOG_FILE = BASE_DIR / "prepare_yolo_dataset.log"
@@ -36,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-unreviewed", action="store_true", help="Include auto/unreviewed labels. Not recommended.")
     parser.add_argument("--seed", type=int, default=YOLO_CONFIG.seed, help="Shuffle seed.")
     parser.add_argument("--clear", action="store_true", help="Clear output directory before generating the dataset.")
+    parser.add_argument("--holdout-source-groups", default="", help="Comma-separated source groups routed wholly to derived test.")
+    parser.add_argument("--exclude-original-test", action="store_true", help="Exclude previously inspected canonical test sources.")
     return parser.parse_args()
 
 
@@ -183,6 +186,8 @@ def prepare_yolo_dataset(
     clear: bool = False,
     group_by_source: bool = True,
     include_unreviewed: bool = False,
+    holdout_source_groups: set[str] | None = None,
+    exclude_original_test: bool = False,
 ) -> dict[str, Any]:
     labels_dir = annotations_dir / "labels"
     if not labels_dir.exists():
@@ -205,10 +210,49 @@ def prepare_yolo_dataset(
         if image_path is None:
             skipped.append((label_path, "image not found"))
             continue
-        items.append((label_path, image_path, annotation))
+        group = source_group(annotation, label_path)
+        split, split_skip = derived_split(
+            str(annotation.get("split", "")),
+            group,
+            holdout_source_groups,
+            exclude_original_test,
+        )
+        if split is None:
+            skipped.append((label_path, str(split_skip)))
+            continue
+        derived_annotation = dict(annotation)
+        derived_annotation["split"] = split
+        items.append((label_path, image_path, derived_annotation))
 
     train_items, val_items, test_items, split_groups = split_items(items, train_split, seed, group_by_source=group_by_source)
     split_map = {"train": train_items, "val": val_items, "test": test_items}
+    hash_records = []
+    for split_name, split_values in split_map.items():
+        for item in split_values:
+            hash_records.append(
+                {
+                    "split": split_name,
+                    "item": item,
+                    "image_sha256": hashlib.sha256(item[1].read_bytes()).hexdigest(),
+                }
+            )
+    hash_records, duplicate_drops = remove_cross_split_duplicate_hashes(hash_records)
+    split_map = {
+        split_name: [record["item"] for record in hash_records if record["split"] == split_name]
+        for split_name in ("train", "val", "test")
+    }
+    train_items, val_items, test_items = (split_map[name] for name in ("train", "val", "test"))
+    for record in duplicate_drops:
+        skipped.append(
+            (
+                record["item"][0],
+                f"duplicate_image_hash_owned_by_{record['duplicate_owner_split']}",
+            )
+        )
+    split_groups = {
+        name: sorted({source_group(item[2], item[0]) for item in values})
+        for name, values in split_map.items()
+    }
     written_images = 0
     written_boxes = 0
 
@@ -255,12 +299,18 @@ def prepare_yolo_dataset(
         "test_count": len(test_items),
         "written_images": written_images,
         "written_boxes": written_boxes,
+        "cross_split_duplicate_hashes_removed": len(duplicate_drops),
         "skipped": [{"label": str(path), "reason": reason} for path, reason in skipped],
         "split_strategy": "source_group" if group_by_source else "image_level_legacy",
         "source_groups": split_groups,
         "class_names": list(YOLO_CONFIG.class_names),
         "seed": seed,
         "train_split": train_split,
+        "derived_split_policy": {
+            "holdout_source_groups": sorted(holdout_source_groups or set()),
+            "exclude_original_test": bool(exclude_original_test),
+            "canonical_annotations_unchanged": True,
+        },
     }
     with open(output_dir / "manifest.json", "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=2)
@@ -277,6 +327,8 @@ def main() -> int:
         clear=args.clear,
         group_by_source=not args.allow_image_level_split,
         include_unreviewed=args.include_unreviewed,
+        holdout_source_groups=parse_source_groups(args.holdout_source_groups),
+        exclude_original_test=args.exclude_original_test,
     )
     logger.info("YOLO dataset prepared: %s", manifest["output_dir"])
     logger.info("data.yaml: %s", manifest["data_yaml"])

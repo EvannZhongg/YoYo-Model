@@ -13,6 +13,7 @@ from typing import Any
 
 import cv2
 from ultralytics import YOLO
+from video_dataset.split_policy import parse_source_groups
 
 
 def select_candidates(
@@ -24,10 +25,20 @@ def select_candidates(
     split: str,
     max_videos: int,
     max_candidates_per_video: int,
+    exclude_source_groups: set[str] | str | None = None,
 ) -> dict[str, Any]:
     manifest = json.loads((dataset_dir / "sources.json").read_text(encoding="utf-8"))
     sources = manifest["sources"]
     sources = [source for source in sources if split == "all" or source["split"] == split]
+    excluded_groups = (
+        parse_source_groups(exclude_source_groups)
+        if isinstance(exclude_source_groups, str)
+        else {str(value).strip() for value in (exclude_source_groups or set()) if str(value).strip()}
+    )
+    sources = [
+        source for source in sources
+        if str(source.get("source_group") or source.get("video_id") or "").strip() not in excluded_groups
+    ]
     if max_videos > 0:
         sources = sources[:max_videos]
     model = YOLO(str(weights))
@@ -113,6 +124,7 @@ def select_candidates(
         "total_frame_records": len(records),
         "frames_jsonl": str(frame_manifest_path.resolve()),
         "weights": str(weights.resolve()),
+        "exclude_source_groups": sorted(excluded_groups),
     }
     (dataset_dir / "candidate_selection.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -128,6 +140,7 @@ def main() -> int:
     parser.add_argument("--split", choices=["all", "train", "val", "test"], default="all")
     parser.add_argument("--max-videos", type=int, default=0)
     parser.add_argument("--max-candidates-per-video", type=int, default=0)
+    parser.add_argument("--exclude-source-groups", default="", help="Comma-separated source groups excluded before detector inference.")
     args = parser.parse_args()
     result = select_candidates(
         Path(args.dataset_dir),
@@ -138,6 +151,7 @@ def main() -> int:
         args.split,
         args.max_videos,
         args.max_candidates_per_video,
+        args.exclude_source_groups,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

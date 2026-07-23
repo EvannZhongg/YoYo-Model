@@ -6,13 +6,15 @@ import numpy as np
 import torch
 
 from string_segmentation.evaluate_semantic import _artifact_suffix, _check_dataset_manifest
-from string_segmentation.semantic_metrics import metrics_at_threshold
+from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
     LetterboxMeta,
     TinyUNet,
     build_string_model,
     focal_dice_loss,
     load_checkpoint,
+    normalize_image,
+    normalize_image_for_inference,
     render_yolo_segmentation,
     save_checkpoint,
     semantic_mask_observation,
@@ -20,6 +22,47 @@ from string_segmentation.semantic_model import (
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_inference_normalization_matches_training_normalization(self):
+        image = np.random.default_rng(42).integers(0, 256, size=(37, 53, 3), dtype=np.uint8)
+
+        expected = normalize_image(image).unsqueeze(0)
+        actual = normalize_image_for_inference(image, "cpu")
+
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-6, rtol=0.0))
+
+    def test_validation_selection_balances_string_quality_and_presence(self):
+        reliable = {
+            "tolerant": {"f1": 0.55},
+            "image_presence": {"f1": 1.0},
+            "negative_mean_false_positive_pixels": 0.0,
+            "pixel": {"dice": 0.20},
+        }
+        false_positive_prone = {
+            "tolerant": {"f1": 0.65},
+            "image_presence": {"f1": 0.50},
+            "negative_mean_false_positive_pixels": 1000.0,
+            "pixel": {"dice": 0.25},
+        }
+        self.assertGreater(
+            balanced_validation_key(reliable),
+            balanced_validation_key(false_positive_prone),
+        )
+
+    def test_validation_selection_breaks_balanced_ties_with_negative_pixels(self):
+        clean = {
+            "tolerant": {"f1": 0.60},
+            "image_presence": {"f1": 0.80},
+            "negative_mean_false_positive_pixels": 0.0,
+            "pixel": {"dice": 0.20},
+        }
+        noisy = {
+            "tolerant": {"f1": 0.60},
+            "image_presence": {"f1": 0.80},
+            "negative_mean_false_positive_pixels": 50.0,
+            "pixel": {"dice": 0.20},
+        }
+        self.assertGreater(balanced_validation_key(clean), balanced_validation_key(noisy))
+
     def test_dataset_mismatch_requires_explicit_opt_in(self):
         with self.assertRaisesRegex(RuntimeError, "allow-dataset-mismatch"):
             _check_dataset_manifest("training-hash", "evaluation-hash", False)
@@ -122,6 +165,85 @@ class SemanticStringTests(unittest.TestCase):
             min_component_pixels=1,
         )
         self.assertIsNone(result)
+
+    def test_attached_mode_rejects_component_inside_yoyo_body(self):
+        probability = np.zeros((64, 96), dtype=np.float32)
+        probability[43:53, 72:84] = 0.95
+        meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
+        yoyo = {"center": [78, 48], "bbox": [70, 40, 86, 56]}
+        result = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            yoyo=yoyo,
+            attachment_class="hand_and_yoyo_attached",
+            min_component_pixels=1,
+        )
+        self.assertIsNone(result)
+
+    def test_attached_mode_keeps_string_extending_outside_yoyo_body(self):
+        probability = np.zeros((64, 96), dtype=np.float32)
+        probability[47:50, 20:81] = 0.95
+        meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
+        yoyo = {"center": [78, 48], "bbox": [70, 40, 86, 56]}
+        result = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            yoyo=yoyo,
+            attachment_class="hand_and_yoyo_attached",
+            min_component_pixels=1,
+        )
+        self.assertIsNotNone(result)
+        self.assertLess(result["yoyo_body_overlap_fraction"], 0.60)
+
+    def test_attached_mode_retains_observed_hand_supported_components(self):
+        probability = np.zeros((600, 1000), dtype=np.float32)
+        probability[296:305, 820:901] = 0.95  # yoyo-side primary
+        probability[296:305, 100:181] = 0.95  # direct wrist support
+        probability[296:305, 210:401] = 0.95  # one-hop continuation
+        probability[100:109, 100:181] = 0.95  # unrelated background
+        meta = LetterboxMeta(1000, 600, 1000, 600, 1000, 600, 0, 0, 1.0)
+        yoyo = {"center": [900, 300], "bbox": [880, 280, 920, 320]}
+
+        without_hands = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            yoyo=yoyo,
+            attachment_class="hand_and_yoyo_attached",
+            min_component_pixels=1,
+        )
+        with_hands = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            yoyo=yoyo,
+            attachment_class="hand_and_yoyo_attached",
+            min_component_pixels=1,
+            hand_points=[[100.0, 300.0]],
+        )
+        capped = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            yoyo=yoyo,
+            attachment_class="hand_and_yoyo_attached",
+            min_component_pixels=1,
+            max_components=1,
+            hand_points=[[100.0, 300.0]],
+        )
+
+        self.assertIsNotNone(without_hands)
+        self.assertIsNotNone(with_hands)
+        self.assertEqual(without_hands["component_count"], 1)
+        self.assertEqual(with_hands["component_selection"], "yoyo_and_hand_anchors")
+        self.assertEqual(with_hands["component_count"], 3)
+        self.assertEqual(with_hands["hand_supported_component_count"], 2)
+        self.assertTrue(all(min(point[1] for point in polygon) > 250 for polygon in with_hands["polygons"]))
+        self.assertIsNotNone(capped)
+        self.assertEqual(capped["component_selection"], "yoyo_anchor")
+        self.assertEqual(capped["hand_supported_component_count"], 0)
 
     def test_unknown_mode_keeps_far_component_as_ambiguous(self):
         probability = np.zeros((64, 96), dtype=np.float32)
