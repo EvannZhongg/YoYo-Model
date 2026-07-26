@@ -34,6 +34,25 @@ def _metric_summary(metrics: dict[str, Any]) -> dict[str, Any]:
         result["image_presence_f1"] = values["image_presence"].get("f1")
     if "negative_mean_false_positive_pixels" in values:
         result["negative_mean_false_positive_pixels"] = values.get("negative_mean_false_positive_pixels")
+    ultralytics_keys = {
+        "metrics/precision(B)": "box_precision",
+        "metrics/recall(B)": "box_recall",
+        "metrics/mAP50(B)": "map50",
+        "metrics/mAP50-95(B)": "map50_95",
+        "metrics/precision(M)": "mask_precision",
+        "metrics/recall(M)": "mask_recall",
+        "metrics/mAP50(M)": "mask_map50",
+        "metrics/mAP50-95(M)": "mask_map50_95",
+        "metrics/accuracy_top1": "top1_accuracy",
+        "metrics/accuracy_top5": "top5_accuracy",
+    }
+    for source, target in ultralytics_keys.items():
+        if source in values:
+            result[target] = values[source]
+    if "macro_recall" in values:
+        result["macro_recall"] = values["macro_recall"]
+    if "per_class_recall" in values:
+        result["per_class_recall"] = values["per_class_recall"]
     result["split"] = metrics.get("split")
     return {key: value for key, value in result.items() if value is not None}
 
@@ -42,6 +61,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
     runs_dir = runs_dir or base_dir / "runs"
     default_yoyo = TRACKING_CONFIG.weights_path.resolve()
     default_string = TRACKING_CONFIG.string_weights_path.resolve()
+    default_orientation = TRACKING_CONFIG.orientation_weights_path.resolve()
     entries: list[dict[str, Any]] = []
     represented_weights: set[Path] = set()
     metric_names = ("test_metrics_current.json", "test_metrics.json", "test_segmentation_metrics.json", "test_semantic_metrics.json")
@@ -71,6 +91,8 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
             roles.append("default_yoyo_detector")
         if weights == default_string:
             roles.append("default_string_model")
+        if weights == default_orientation:
+            roles.append("default_orientation_model")
         entries.append(
             {
                 "model_id": run_dir.relative_to(runs_dir).as_posix(),
@@ -100,6 +122,8 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
             roles.append("default_yoyo_detector")
         if weights == default_string:
             roles.append("default_string_model")
+        if weights == default_orientation:
+            roles.append("default_orientation_model")
         entries.append(
             {
                 "model_id": run_dir.relative_to(runs_dir).as_posix(),
@@ -119,6 +143,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
         "runs_dir": str(runs_dir.resolve()),
         "default_yoyo_weights": str(default_yoyo),
         "default_string_weights": str(default_string),
+        "default_orientation_weights": str(default_orientation),
         "model_count": len(entries),
         "complete_model_count": sum(bool(item["complete"]) for item in entries),
         "models": entries,

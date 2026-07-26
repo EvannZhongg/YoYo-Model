@@ -1,8 +1,4 @@
-"""Convert tracking metadata into fixed-width frame features.
-
-These are internal features carried by a future clip-token. They are not the
-clip-token itself: a clip-token is one reviewed, valid trick video segment.
-"""
+"""Convert full-video tracking metadata into fixed-width frame features."""
 
 from __future__ import annotations
 
@@ -57,6 +53,7 @@ STRING_POINT_COUNT = 8
 STRING_COMPONENT_COUNT = 8
 STRING_COMPONENT_POINT_COUNT = 4
 POSE_POINT_COUNT = 17
+ORIENTATION_CLASSES = ("horizontal", "normal", "not_applicable")
 
 
 def feature_names() -> list[str]:
@@ -109,6 +106,9 @@ def feature_names() -> list[str]:
         names.extend((f"{side}_hand_present", f"{side}_hand_x", f"{side}_hand_y", f"{side}_hand_confidence"))
     for index in range(POSE_POINT_COUNT):
         names.extend((f"pose_{index}_x", f"pose_{index}_y", f"pose_{index}_confidence"))
+    names.extend(("orientation_present", "orientation_confidence"))
+    names.extend(f"orientation_{name}" for name in ORIENTATION_CLASSES)
+    names.append("orientation_age_s")
     names.extend(f"bad_case_{name}" for name in BAD_CASE_VOCAB)
     return names
 
@@ -268,6 +268,18 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
         for index in range(POSE_POINT_COUNT):
             point = pose_by_index.get(index)
             vector.extend((float(point.get("x", 0.0)) / width if point else 0.0, float(point.get("y", 0.0)) / height if point else 0.0, float(point.get("confidence", 0.0)) if point else 0.0))
+        orientation = record.get("trick_orientation") or None
+        orientation_label = str((orientation or {}).get("label", ""))
+        if orientation_label not in ORIENTATION_CLASSES:
+            orientation_label = ""
+        vector.extend(
+            (
+                1.0 if orientation else 0.0,
+                float((orientation or {}).get("confidence", 0.0)),
+            )
+        )
+        vector.extend(1.0 if orientation_label == name else 0.0 for name in ORIENTATION_CLASSES)
+        vector.append(float((orientation or {}).get("age_frames", 0)) / max(fps, 1.0))
         bad_cases = set(record.get("bad_case") or [])
         vector.extend(1.0 if name in bad_cases else 0.0 for name in BAD_CASE_VOCAB)
         semantic = {
@@ -288,6 +300,9 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
                 (string or {}).get("flow_partial_component_loss", False)
             ),
             "visibility": visibility,
+            "trick_orientation": orientation_label or None,
+            "orientation_confidence": float((orientation or {}).get("confidence", 0.0)),
+            "orientation_age_frames": int((orientation or {}).get("age_frames", 0)),
             "bad_case": sorted(bad_cases),
         }
         vectors.append(vector)
@@ -316,7 +331,7 @@ def export_tracking_features(records: list[dict[str, Any]], run_dir: str | Path,
         feature_names=np.asarray(feature_names()),
     )
     manifest = {
-        "schema_version": "yoyo_tracking_frame_features_v7",
+        "schema_version": "yoyo_tracking_frame_features_v8",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "frame_count": len(rows),
         "feature_count": len(feature_names()),
@@ -329,11 +344,12 @@ def export_tracking_features(records: list[dict[str, Any]], run_dir: str | Path,
         "string_attachment_classes": list(STRING_ATTACHMENT_CLASSES),
         "string_hand_anchor_statuses": list(STRING_HAND_ANCHOR_STATUSES),
         "pose_point_count": POSE_POINT_COUNT,
+        "orientation_classes": list(ORIENTATION_CLASSES),
         "bad_case_vocab": list(BAD_CASE_VOCAB),
         "image_size": [width, height],
         "fps": fps,
         "missing_value_policy": "numeric zeros with explicit present/confidence/visibility features",
-        "sequence_policy": "Full-video frame features; a future clip-token may slice this sequence by reviewed trick boundaries.",
+        "sequence_policy": "Full-video frame features aligned one-to-one with tracking metadata.",
         "outputs": {"jsonl": str(jsonl_path), "npz": str(npz_path)},
     }
     manifest_path = run_dir / "frame_feature_manifest.json"

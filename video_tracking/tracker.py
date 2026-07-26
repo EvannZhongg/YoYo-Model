@@ -1,4 +1,4 @@
-"""YOYO video tracking, metadata export, and heuristic trick segmentation.
+"""YOYO video tracking and frame-level metadata export.
 
 The detector is intentionally kept separate from the annotation protocol.  A
 tracking run always produces machine-readable per-frame records, even when a
@@ -31,9 +31,9 @@ from string_segmentation.semantic_model import (
     semantic_mask_observation,
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
+from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
 from video_tracking.string_tracker import estimate_string
 from video_tracking.tokenize import export_tracking_features
-from video_tracking.trick_tokens import export_trick_tokens
 
 
 LOG_FILE = BASE_DIR / "track_video.log"
@@ -490,6 +490,7 @@ def _draw_frame(
     text_scale: float,
     output_size: tuple[int, int] | None = None,
     pose: list[dict[str, Any]] | None = None,
+    trick_orientation: dict[str, Any] | None = None,
 ) -> np.ndarray:
     source_height, source_width = frame.shape[:2]
     output_width, output_height = output_size or (source_width, source_height)
@@ -554,6 +555,21 @@ def _draw_frame(
         label = f"string {string.get('method', 'estimate')} {float(string.get('confidence', 0.0)):.2f} / review"
         label_point = tuple(point_arrays[0][0]) if point_arrays else (12, 42)
         cv2.putText(canvas, label, label_point, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 80, 30), 1, cv2.LINE_AA)
+    if trick_orientation is not None:
+        orientation_label = (
+            f"orientation {trick_orientation.get('label', 'unknown')} "
+            f"{float(trick_orientation.get('confidence', 0.0)):.2f}"
+        )
+        cv2.putText(
+            canvas,
+            orientation_label,
+            (12, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (60, 230, 240),
+            2,
+            cv2.LINE_AA,
+        )
     return canvas
 
 
@@ -660,151 +676,22 @@ def _pick_yoyo(
     return distinct[0], flags
 
 
-def _is_trick_active(
-    yoyo: dict[str, Any] | None,
-    speed_px_s: float,
-    distance_to_hand_px: float | None,
-    width: int,
-    height: int,
-    speed_diagonal_per_s: float,
-) -> bool:
-    """Use a resolution/FPS-independent speed threshold for clip candidates."""
-    if yoyo is None:
-        return False
-    diagonal = math.hypot(width, height)
-    speed_threshold = max(25.0, max(0.0, float(speed_diagonal_per_s)) * diagonal)
-    separated_from_hand = distance_to_hand_px is not None and distance_to_hand_px >= 0.08 * diagonal
-    return bool(speed_px_s >= speed_threshold or separated_from_hand)
-
-
-def _segments_from_records(
-    records: list[dict[str, Any]],
-    fps: float,
-    padding_seconds: float,
-    min_segment_seconds: float,
-    max_gap_seconds: float,
-    max_segment_seconds: float,
-) -> list[dict[str, Any]]:
-    if not records:
-        return []
-    # Only exported valid segments are capped; source-video processing is not.
-    max_segment_seconds = 180.0 if max_segment_seconds <= 0 else min(float(max_segment_seconds), 180.0)
-    active = [bool(item.get("active")) for item in records]
-    max_gap = max(1, int(round(fps * max_gap_seconds)))
-    min_length = max(1, int(round(fps * min_segment_seconds)))
-    candidates: list[tuple[int, int]] = []
-    start = None
-    gap = 0
-    for index, is_active in enumerate(active):
-        if is_active and start is None:
-            start = index
-            gap = 0
-        elif start is not None and not is_active:
-            gap += 1
-            if gap > max_gap:
-                end = index - gap
-                if end - start + 1 >= min_length:
-                    candidates.append((start, end))
-                start = None
-                gap = 0
-    if start is not None:
-        end = len(records) - 1 - gap
-        if end - start + 1 >= min_length:
-            candidates.append((start, end))
-    padding = int(round(fps * padding_seconds))
-    # Padding is part of the exported clip, so reserve room for both sides.
-    max_export_length = max(min_length, int(round(fps * max_segment_seconds))) if max_segment_seconds > 0 else 0
-    max_active_length = max(min_length, max_export_length - 2 * padding) if max_export_length else 0
-    result = []
-    bounded_candidates: list[tuple[int, int, bool]] = []
-    for start, end in candidates:
-        if not max_active_length or end - start + 1 <= max_active_length:
-            bounded_candidates.append((start, end, False))
-            continue
-        chunk_start = start
-        while chunk_start <= end:
-            chunk_end = min(end, chunk_start + max_active_length - 1)
-            bounded_candidates.append((chunk_start, chunk_end, True))
-            chunk_start = chunk_end + 1
-
-    padded_candidates: list[dict[str, Any]] = []
-    for start, end, duration_limited in bounded_candidates:
-        padded_start = max(0, start - padding)
-        padded_end = min(len(records) - 1, end + padding)
-        if max_export_length and padded_end - padded_start + 1 > max_export_length:
-            padded_end = padded_start + max_export_length - 1
-        padded_candidates.append(
-            {
-                "active_start": start,
-                "active_end": end,
-                "padded_start": padded_start,
-                "padded_end": padded_end,
-                "duration_limited": duration_limited,
-                "padding_trimmed_for_neighbor": False,
-            }
-        )
-
-    for left, right in zip(padded_candidates, padded_candidates[1:]):
-        if left["padded_end"] < right["padded_start"]:
-            continue
-        boundary = (int(left["active_end"]) + int(right["active_start"])) // 2
-        left["padded_end"] = min(int(left["padded_end"]), boundary)
-        right["padded_start"] = max(int(right["padded_start"]), boundary + 1)
-        left["padding_trimmed_for_neighbor"] = True
-        right["padding_trimmed_for_neighbor"] = True
-
-    for segment_index, candidate in enumerate(padded_candidates, start=1):
-        start = int(candidate["active_start"])
-        end = int(candidate["active_end"])
-        padded_start = int(candidate["padded_start"])
-        padded_end = int(candidate["padded_end"])
-        duration_limited = bool(candidate["duration_limited"])
-        result.append(
-            {
-                "segment_id": segment_index,
-                "start_frame": records[padded_start]["frame_index"],
-                "end_frame": records[padded_end]["frame_index"],
-                "active_start_frame": records[start]["frame_index"],
-                "active_end_frame": records[end]["frame_index"],
-                "start_time_s": records[padded_start]["timestamp_s"],
-                "end_time_s": records[padded_end]["timestamp_s"],
-                "duration_s": (records[padded_end]["frame_index"] - records[padded_start]["frame_index"] + 1) / fps,
-                "boundary_policy": "non_overlapping_midpoint",
-                "padding_trimmed_for_neighbor": bool(candidate["padding_trimmed_for_neighbor"]),
-                "reason": "activity_with_duration_limit" if duration_limited else "yoyo_motion_or_hand_distance",
-                "needs_review": True,
-                "review_status": "auto_candidate_needs_review",
-                "trick_label": "",
-                "review_notes": "",
-            }
-        )
-    return result
-
-
-def _write_segments(source: Path, output_dir: Path, segments: list[dict[str, Any]], fps: float, width: int, height: int) -> list[dict[str, Any]]:
-    if not segments:
-        return []
-    clip_dir = output_dir / "clips"
-    clip_dir.mkdir(parents=True, exist_ok=True)
-    outputs = []
-    for segment in segments:
-        path = clip_dir / f"{source.stem}_trick_{segment['segment_id']:03d}.mp4"
-        capture = cv2.VideoCapture(str(source))
-        capture.set(cv2.CAP_PROP_POS_FRAMES, segment["start_frame"])
-        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-        frame_index = segment["start_frame"]
-        while frame_index <= segment["end_frame"]:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            writer.write(frame)
-            frame_index += 1
-        writer.release()
-        capture.release()
-        segment = dict(segment)
-        segment["output_video"] = str(path)
-        outputs.append(segment)
-    return outputs
+def _orientation_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    predictions = [record["trick_orientation"] for record in records if record.get("trick_orientation")]
+    if not predictions:
+        return {"label": "unknown", "observed_frames": 0, "label_counts": {}, "mean_confidence": 0.0}
+    counts = Counter(str(value.get("label", "unknown")) for value in predictions)
+    label = counts.most_common(1)[0][0]
+    selected = [value for value in predictions if value.get("label") == label]
+    return {
+        "label": label,
+        "observed_frames": len(predictions),
+        "label_counts": dict(sorted(counts.items())),
+        "mean_confidence": round(
+            sum(float(value.get("confidence", 0.0)) for value in selected) / max(1, len(selected)),
+            6,
+        ),
+    }
 
 
 def track_video(
@@ -831,13 +718,11 @@ def track_video(
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
     string_attachment_class: str = TRACKING_CONFIG.string_attachment_class,
+    orientation_weights_path: str | Path | None = None,
+    enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
+    orientation_imgsz: int = TRACKING_CONFIG.orientation_imgsz,
+    orientation_inference_fps: float = TRACKING_CONFIG.orientation_inference_fps,
     export_json: bool = True,
-    export_clips: bool = True,
-    activity_speed_diagonal_per_s: float = TRACKING_CONFIG.activity_speed_diagonal_per_s,
-    padding_seconds: float = 0.4,
-    min_segment_seconds: float = 0.5,
-    max_gap_seconds: float = 0.4,
-    max_segment_seconds: float = TRACKING_CONFIG.max_segment_seconds,
     start_seconds: float = 0.0,
     max_frames: int = 0,
 ) -> dict[str, Any]:
@@ -848,7 +733,8 @@ def track_video(
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
         raise ValueError("string_inference_fps must be non-negative")
-    max_segment_seconds = 180.0 if max_segment_seconds <= 0 else min(float(max_segment_seconds), 180.0)
+    if float(orientation_inference_fps) < 0.0:
+        raise ValueError("orientation_inference_fps must be non-negative")
     source_video_path, weights_path, output_dir = Path(source_video_path), Path(weights_path), Path(output_dir)
     if not source_video_path.exists():
         raise FileNotFoundError(f"Video file not found: {source_video_path}")
@@ -860,6 +746,11 @@ def track_video(
     class_names = {int(key): str(value) for key, value in dict(getattr(model, "names", {}) or {}).items()}
     pose_model, pose_error = _load_pose_model(pose_weights_path, auto_download_pose) if enable_pose else (None, None)
     string_model, string_model_status = _load_string_model(string_weights_path, enable_string_model, device)
+    resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
+    orientation_model, orientation_model_status = load_orientation_model(
+        resolved_orientation_weights,
+        enable_orientation_model,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     run_dir = output_dir / f"{source_video_path.stem}_{run_id}"
@@ -871,6 +762,7 @@ def track_video(
         raise RuntimeError(f"Could not open input video: {source_video_path}")
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
     string_inference_interval = _inference_interval_frames(fps, string_inference_fps)
+    orientation_inference_interval = _inference_interval_frames(fps, orientation_inference_fps)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     output_width, output_height = _visualization_size(width, height, visualization_max_width)
@@ -906,6 +798,9 @@ def track_video(
     frame_index = start_frame
     processed_frames = 0
     string_inference_frames = 0
+    orientation_inference_frames = 0
+    last_orientation: dict[str, Any] | None = None
+    last_orientation_frame: int | None = None
     metadata_file = open(json_path, "w", encoding="utf-8") if export_json else None
     loop_started = time.perf_counter()
     while True:
@@ -1024,6 +919,33 @@ def track_video(
                 fusion_distance_px=string_fusion_distance_px,
                 allow_color_fallback=False,
             )
+        scheduled_orientation_inference = bool(
+            orientation_model is not None and processed_frames % orientation_inference_interval == 0
+        )
+        orientation_inference_error = None
+        if scheduled_orientation_inference:
+            try:
+                trick_orientation = predict_orientation(
+                    orientation_model,
+                    frame,
+                    yoyo,
+                    wrists,
+                    string,
+                    orientation_imgsz,
+                    device,
+                )
+            except Exception as exc:
+                logger.warning("Orientation inference failed at frame %s: %s", frame_index, exc)
+                orientation_inference_error = type(exc).__name__
+                age = frame_index - last_orientation_frame if last_orientation_frame is not None else 0
+                trick_orientation = carry_orientation(last_orientation, age)
+            orientation_inference_frames += 1
+            if trick_orientation is not None:
+                last_orientation = trick_orientation
+                last_orientation_frame = frame_index
+        else:
+            age = frame_index - last_orientation_frame if last_orientation_frame is not None else 0
+            trick_orientation = carry_orientation(last_orientation, age)
         if yoyo and yoyo["confidence"] < 0.35:
             flags.append("low_confidence")
         edge_clipped = bool(yoyo and (yoyo["bbox"][0] <= 1 or yoyo["bbox"][1] <= 1 or yoyo["bbox"][2] >= width - 1 or yoyo["bbox"][3] >= height - 1))
@@ -1061,14 +983,6 @@ def track_video(
             missing_streak += 1
             visibility_state = "likely_out_of_frame" if last_seen_edge_clipped else "not_visible_or_occluded"
             flags.append(visibility_state)
-        active = _is_trick_active(
-            yoyo,
-            speed,
-            distance_to_hand,
-            width,
-            height,
-            activity_speed_diagonal_per_s,
-        )
         record = {
             "schema_version": "1.2",
             "frame_index": frame_index,
@@ -1079,6 +993,21 @@ def track_video(
             "pose": pose,
             "pose_person": pose_person,
             "string": string,
+            "trick_orientation": trick_orientation,
+            "orientation_model_inference": {
+                "status": (
+                    "error_carried" if orientation_inference_error and trick_orientation is not None
+                    else "error" if orientation_inference_error
+                    else "ran"
+                    if scheduled_orientation_inference
+                    else "carried"
+                    if trick_orientation is not None
+                    else "disabled_or_unavailable"
+                ),
+                "target_fps": float(orientation_inference_fps),
+                "interval_frames": int(orientation_inference_interval),
+                "error_type": orientation_inference_error,
+            },
             "string_model_inference": {
                 "status": (
                     "ran"
@@ -1107,7 +1036,6 @@ def track_video(
             },
             "motion_speed_px_s": speed,
             "distance_to_hand_px": distance_to_hand,
-            "active": active,
             "bad_case": sorted(set(flags)),
             "quality": "review" if flags else "ok",
         }
@@ -1127,6 +1055,7 @@ def track_video(
                 text_scale,
                 (output_width, output_height),
                 pose,
+                trick_orientation,
             )
         )
         previous_center = center
@@ -1146,18 +1075,6 @@ def track_video(
         metadata_file.close()
     loop_seconds = max(0.0, time.perf_counter() - loop_started)
     loop_fps = float(processed_frames / loop_seconds) if loop_seconds > 0.0 else 0.0
-    segments = _segments_from_records(
-        records,
-        fps,
-        padding_seconds,
-        min_segment_seconds,
-        max_gap_seconds,
-        max_segment_seconds,
-    )
-    if export_clips:
-        segments = _write_segments(source_video_path, run_dir, segments, fps, width, height)
-    segments_path = run_dir / "segments.json"
-    segments_path.write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         review_sheet_path = make_tracking_review_sheet(
             run_dir,
@@ -1216,6 +1133,11 @@ def track_video(
             if pose_model is not None and pose_weights_path and Path(pose_weights_path).is_file()
             else ""
         ),
+        "orientation_weights_sha256": (
+            sha256_file(resolved_orientation_weights)
+            if orientation_model is not None and resolved_orientation_weights.is_file()
+            else ""
+        ),
         "parameters": {
             "confidence": confidence,
             "iou": iou,
@@ -1234,16 +1156,18 @@ def track_video(
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_fusion_distance_px": float(string_fusion_distance_px),
             "string_attachment_class": string_attachment_class,
-            "activity_speed_diagonal_per_s": float(activity_speed_diagonal_per_s),
-            "padding_seconds": padding_seconds,
-            "min_segment_seconds": min_segment_seconds,
-            "max_gap_seconds": max_gap_seconds,
-            "max_segment_seconds": max_segment_seconds,
+            "orientation_model_enabled": bool(enable_orientation_model),
+            "orientation_weights": str(resolved_orientation_weights),
+            "orientation_imgsz": int(orientation_imgsz),
+            "orientation_inference_fps": float(orientation_inference_fps),
+            "orientation_inference_interval_frames": int(orientation_inference_interval),
             "start_seconds": start_seconds,
             "max_frames": max_frames,
         },
         "frame_count": processed_frames,
         "string_inference_frame_count": string_inference_frames,
+        "orientation_inference_frame_count": orientation_inference_frames,
+        "orientation_summary": _orientation_summary(records),
         "performance": {
             "tracking_loop_seconds": round(loop_seconds, 4),
             "tracking_loop_fps": round(loop_fps, 4),
@@ -1253,14 +1177,11 @@ def track_video(
         "height": height,
         "output_width": output_width,
         "output_height": output_height,
-        "segments_count": len(segments),
         "bad_case_counts": dict(sorted(bad_case_counts.items())),
         "string_geometry_counts": string_geometry_counts,
         "outputs": {
             "tracked_video": str(output_path),
             "frames_jsonl": str(json_path) if export_json else "",
-            "segments_json": str(segments_path),
-            "clips": [item.get("output_video", "") for item in segments if item.get("output_video")],
             "review_sheet": str(review_sheet_path or ""),
             "review_index": str(run_dir / "tracking_review_index.json") if review_sheet_path else "",
             "frame_features_jsonl": frame_feature_outputs["jsonl"],
@@ -1272,37 +1193,20 @@ def track_video(
             "In attached mode, hand-supported semantic components are retained only when observed near a visible wrist or one component-gap from such an observation; gaps remain separate polylines.",
             "string_without_yoyo marks frames where a visible string estimate persists while the yoyo is out of frame or occluded; these frames require manual review.",
             "not_visible_or_occluded does not distinguish occlusion from an off-camera yoyo without manual review.",
-            "Segments are heuristic candidates; only approved valid segments become clip-tokens and irrelevant intervals are excluded.",
+            "trick_orientation is the supported coarse three-way frame classification.",
         ],
     }
     run_manifest_path = run_dir / "run.json"
     run_manifest_path.write_text(json.dumps(run_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        trick_token_outputs = export_trick_tokens(segments_path)
-    except Exception as exc:
-        logger.warning("Could not export trick clip-token manifest: %s", exc)
-        trick_token_outputs = {"jsonl": "", "manifest": "", "token_count": 0}
-    run_manifest["outputs"].update(
-        {
-            "trick_tokens_jsonl": trick_token_outputs["jsonl"],
-            "trick_token_manifest": trick_token_outputs["manifest"],
-        }
-    )
-    run_manifest_path.write_text(json.dumps(run_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info("Tracking complete: frames=%s video=%s metadata=%s segments=%s", processed_frames, output_path, json_path if export_json else "disabled", len(segments))
+    logger.info("Tracking complete: frames=%s video=%s metadata=%s", processed_frames, output_path, json_path if export_json else "disabled")
     return {
         "source_video": str(source_video_path),
         "output_video": str(output_path),
         "metadata_jsonl": str(json_path) if export_json else "",
-        "segments_json": str(segments_path),
         "review_sheet": str(review_sheet_path or ""),
         "frame_features_jsonl": frame_feature_outputs["jsonl"],
         "frame_features_npz": frame_feature_outputs["npz"],
         "frame_feature_manifest": frame_feature_outputs["manifest"],
-        "trick_tokens_jsonl": trick_token_outputs["jsonl"],
-        "trick_token_manifest": trick_token_outputs["manifest"],
-        "trick_token_count": trick_token_outputs["token_count"],
-        "segments": segments,
         "run_manifest": str(run_manifest_path),
         "run_dir": str(run_dir),
         "bad_case_counts": dict(sorted(bad_case_counts.items())),
@@ -1310,10 +1214,13 @@ def track_video(
         "weights": str(weights_path),
         "pose_weights": pose_error or str(pose_weights_path or "") if enable_pose else "",
         "string_model": string_model_status,
+        "orientation_model": orientation_model_status,
         "frame_count": processed_frames,
         "output_width": output_width,
         "output_height": output_height,
         "string_inference_frame_count": string_inference_frames,
+        "orientation_inference_frame_count": orientation_inference_frames,
+        "orientation_summary": _orientation_summary(records),
         "tracking_loop_seconds": round(loop_seconds, 4),
         "tracking_loop_fps": round(loop_fps, 4),
         "fps": fps,
@@ -1365,19 +1272,17 @@ def parse_args() -> argparse.Namespace:
         choices=["hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"],
         default=TRACKING_CONFIG.string_attachment_class,
     )
-    parser.add_argument("--no-json", action="store_true")
-    parser.add_argument("--no-clips", action="store_true")
+    parser.add_argument("--orientation-weights", default=str(TRACKING_CONFIG.orientation_weights_path))
+    parser.add_argument("--no-orientation-model", action="store_true")
+    parser.add_argument("--orientation-imgsz", type=int, default=TRACKING_CONFIG.orientation_imgsz)
     parser.add_argument(
-        "--activity-speed-diagonal-per-s",
+        "--orientation-inference-fps",
         type=float,
-        default=TRACKING_CONFIG.activity_speed_diagonal_per_s,
-        help="Minimum active-trick yoyo speed in image diagonals per second.",
+        default=TRACKING_CONFIG.orientation_inference_fps,
+        help="Target coarse-orientation classifier cadence; 0 runs it on every frame.",
     )
+    parser.add_argument("--no-json", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
-    parser.add_argument("--padding-seconds", type=float, default=0.4)
-    parser.add_argument("--min-segment-seconds", type=float, default=0.5)
-    parser.add_argument("--max-gap-seconds", type=float, default=0.4)
-    parser.add_argument("--max-segment-seconds", type=float, default=TRACKING_CONFIG.max_segment_seconds)
     parser.add_argument("--start-seconds", type=float, default=0.0)
     return parser.parse_args()
 
@@ -1405,13 +1310,11 @@ def main() -> int:
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         string_fusion_distance_px=args.string_fusion_distance_px,
         string_attachment_class=args.string_attachment_class,
+        orientation_weights_path=args.orientation_weights,
+        enable_orientation_model=not args.no_orientation_model,
+        orientation_imgsz=args.orientation_imgsz,
+        orientation_inference_fps=args.orientation_inference_fps,
         export_json=not args.no_json,
-        export_clips=not args.no_clips,
-        activity_speed_diagonal_per_s=args.activity_speed_diagonal_per_s,
-        padding_seconds=args.padding_seconds,
-        min_segment_seconds=args.min_segment_seconds,
-        max_gap_seconds=args.max_gap_seconds,
-        max_segment_seconds=args.max_segment_seconds,
         start_seconds=args.start_seconds,
         max_frames=args.max_frames,
     )

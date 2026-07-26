@@ -32,11 +32,18 @@ def tracking_review_caption(record: dict) -> str:
         reasons = ",".join(str(value) for value in (pose_person.get("review_reasons") or []))
         pose_status = f"review:{reasons or 'identity'}"
     bad_cases = ",".join(str(value) for value in (record.get("bad_case") or [])) or "ok"
+    orientation = record.get("trick_orientation") or {}
+    orientation_text = (
+        f"{orientation.get('label')}:{float(orientation.get('confidence', 0.0)):.3f}"
+        if orientation
+        else "none:-"
+    )
     return (
         f"f{int(record.get('frame_index', 0))} | {float(record.get('timestamp_s', 0.0)):.2f}s"
         f" | yoyo={'yes' if record.get('yoyo') else 'no'}"
         f" | string={method}:{confidence_text} components={components}"
-        f" | hand={anchor_status}{anchor_distance} | pose={pose_status} | bad={bad_cases}"
+        f" | hand={anchor_status}{anchor_distance} | pose={pose_status}"
+        f" | orientation={orientation_text} | bad={bad_cases}"
     )
 
 

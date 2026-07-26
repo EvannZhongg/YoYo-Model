@@ -58,6 +58,10 @@ credentials*.json
 /videos/
 /archive/
 
+# Local Codex skills and agent workspace state
+/skills/
+/.workbuddy/
+
 # Downloaded models, training runs, and inference output
 /models/*
 !/models/.gitkeep

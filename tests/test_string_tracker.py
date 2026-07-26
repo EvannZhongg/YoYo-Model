@@ -521,7 +521,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertEqual(float(vectors[0, feature_index]), 1.0)
 
-    def test_v7_features_preserve_independent_string_components(self):
+    def test_v8_features_preserve_independent_string_components(self):
         record = {
             "frame_index": 12,
             "timestamp_s": 0.24,
@@ -548,8 +548,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
         names = feature_names()
         vector = vectors[0]
 
-        self.assertEqual(len(names), 251)
-        self.assertEqual(len(set(names)), 251)
+        self.assertEqual(len(names), 257)
+        self.assertEqual(len(set(names)), 257)
         self.assertAlmostEqual(float(vector[names.index("string_component_count_ratio")]), 0.25)
         self.assertAlmostEqual(
             float(vector[names.index("string_hand_supported_component_count_ratio")]),
@@ -563,7 +563,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(rows[0]["string_component_count"], 2)
         self.assertEqual(rows[0]["string_hand_anchor_status"], "matched")
 
-    def test_v7_feature_manifest_declares_component_contract(self):
+    def test_v8_feature_manifest_declares_component_contract(self):
         record = {
             "frame_index": 0,
             "timestamp_s": 0.0,
@@ -578,8 +578,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
             with np.load(outputs["npz"]) as archive:
                 exported_names = archive["feature_names"].tolist()
 
-        self.assertEqual(manifest["schema_version"], "yoyo_tracking_frame_features_v7")
-        self.assertEqual(manifest["feature_count"], 251)
+        self.assertEqual(manifest["schema_version"], "yoyo_tracking_frame_features_v8")
+        self.assertEqual(manifest["feature_count"], 257)
         self.assertEqual(manifest["string_component_count"], 8)
         self.assertEqual(manifest["string_component_point_count"], 4)
         self.assertIn("never interpolate across components", manifest["string_component_order_policy"])

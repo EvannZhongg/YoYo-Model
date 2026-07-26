@@ -172,6 +172,16 @@ def _string_caption(record: dict[str, Any]) -> str:
     return caption
 
 
+def _orientation_caption(record: dict[str, Any]) -> str:
+    orientation = record.get("trick_orientation") or {}
+    if not orientation:
+        return "orientation=none"
+    return (
+        f"orientation={orientation.get('label', 'unknown')} "
+        f"conf={float(orientation.get('confidence', 0.0)):.3f}"
+    )
+
+
 def make_tracking_review_sheet(
     run_dir: str | Path,
     max_samples: int = 24,
@@ -237,7 +247,8 @@ def make_tracking_review_sheet(
             1,
             cv2.LINE_AA,
         )
-        cv2.putText(canvas, _pose_caption(record)[:72], (x + 4, y + thumb_height + 59), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (130, 75, 20), 1, cv2.LINE_AA)
+        pose_orientation = f"{_pose_caption(record)} {_orientation_caption(record)}"
+        cv2.putText(canvas, pose_orientation[:72], (x + 4, y + thumb_height + 59), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (130, 75, 20), 1, cv2.LINE_AA)
         cv2.putText(canvas, bad[:72], (x + 4, y + thumb_height + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (0, 80, 180), 1, cv2.LINE_AA)
         if anchor_mismatch:
             cv2.rectangle(canvas, (x + 1, y + 1), (x + thumb_width - 2, y + thumb_height - 2), (0, 0, 255), 4)

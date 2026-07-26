@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from common.files import sha256_file
 from config import SEMANTIC_STRING_CONFIG
@@ -29,11 +29,32 @@ from string_segmentation.semantic_model import (
 )
 
 
-def _loader(dataset, batch: int, workers: int, shuffle: bool) -> DataLoader:
+def _reviewed_sample_weights(dataset: ReviewedStringDataset, negative_sample_weight: float) -> list[float]:
+    return [
+        float(negative_sample_weight) if not label_path.read_text(encoding="utf-8").strip() else 1.0
+        for _, label_path in dataset.pairs
+    ]
+
+
+def _loader(
+    dataset,
+    batch: int,
+    workers: int,
+    shuffle: bool,
+    negative_sample_weight: float = 1.0,
+) -> DataLoader:
+    sampler = None
+    if shuffle and float(negative_sample_weight) != 1.0:
+        sampler = WeightedRandomSampler(
+            _reviewed_sample_weights(dataset, negative_sample_weight),
+            num_samples=len(dataset),
+            replacement=True,
+        )
     return DataLoader(
         dataset,
         batch_size=max(1, int(batch)),
-        shuffle=shuffle,
+        shuffle=shuffle and sampler is None,
+        sampler=sampler,
         num_workers=max(0, int(workers)),
         pin_memory=torch.cuda.is_available(),
         persistent_workers=workers > 0,
@@ -65,6 +86,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
     parser.add_argument("--hard-negative-weight", type=float, default=0.05)
+    parser.add_argument(
+        "--negative-sample-weight",
+        type=float,
+        default=4.0,
+        help="Relative sampling weight for reviewed empty-mask train images; 1 disables rebalancing.",
+    )
     parser.add_argument("--seed", type=int, default=SEMANTIC_STRING_CONFIG.seed)
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--initial-weights", default="")
@@ -83,6 +110,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--pretrained-backbone is only supported by lraspp_mobilenet_v3")
     if args.hard_negative_weight < 0:
         raise ValueError("hard-negative weight must be non-negative")
+    if args.negative_sample_weight <= 0:
+        raise ValueError("negative sample weight must be positive")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
         raise ValueError("early-stopping patience must be non-negative and minimum epochs must be positive")
     if args.input_width % 16 or args.input_height % 16:
@@ -132,7 +161,13 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         args.min_mask_width_px,
         augment=False,
     )
-    train_loader = _loader(train_dataset, args.batch, args.workers, True)
+    train_loader = _loader(
+        train_dataset,
+        args.batch,
+        args.workers,
+        True,
+        args.negative_sample_weight,
+    )
     val_loader = _loader(val_dataset, args.batch, args.workers, False)
     model_config = {
         "architecture": str(args.architecture),
@@ -296,6 +331,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "device": str(device),
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
+            "negative_sample_weight": float(args.negative_sample_weight),
             "early_stopping_patience": int(args.early_stopping_patience),
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
             **model_config,

@@ -6,7 +6,6 @@ import numpy as np
 from video_tracking.tracker import (
     _assign_tracker_ids,
     _carry_preferred_track_id,
-    _is_trick_active,
     _pick_yoyo,
     _semantic_inference_parameters,
 )
@@ -95,12 +94,6 @@ class YoyoSelectionTests(unittest.TestCase):
         self.assertFalse(
             _carry_preferred_track_id(ambiguous, 7, [100, 100, 200, 200], 2, 12, multiple_yoyo=True)
         )
-
-    def test_activity_threshold_is_not_multiplied_by_fps(self):
-        yoyo = detection([100, 100, 180, 180])
-        # 0.08 * sqrt(3840^2 + 2160^2) is about 352 px/s.
-        self.assertTrue(_is_trick_active(yoyo, 400.0, None, 3840, 2160, 0.08))
-        self.assertFalse(_is_trick_active(yoyo, 200.0, None, 3840, 2160, 0.08))
 
     def test_semantic_inference_scale_preserves_stride_and_area_filter(self):
         width, height, area_scale = _semantic_inference_parameters(

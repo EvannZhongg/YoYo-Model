@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -19,9 +20,22 @@ from string_segmentation.semantic_model import (
     save_checkpoint,
     semantic_mask_observation,
 )
+from string_segmentation.train_semantic import _reviewed_sample_weights
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_reviewed_negative_sampling_weights_only_empty_masks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            positive = Path(directory) / "positive.txt"
+            negative = Path(directory) / "negative.txt"
+            positive.write_text("0 0.1 0.1 0.2 0.1 0.2 0.2\n", encoding="utf-8")
+            negative.write_text("", encoding="utf-8")
+            dataset = SimpleNamespace(pairs=[(None, positive), (None, negative)])
+
+            weights = _reviewed_sample_weights(dataset, 4.0)
+
+        self.assertEqual(weights, [1.0, 4.0])
+
     def test_inference_normalization_matches_training_normalization(self):
         image = np.random.default_rng(42).integers(0, 256, size=(37, 53, 3), dtype=np.uint8)
 
