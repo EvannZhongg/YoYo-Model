@@ -59,7 +59,8 @@ credentials*.json
 /archive/
 
 # Local Codex skills and agent workspace state
-/skills/
+/skills/*
+!/skills/rebuild-leakage-safe-dataset/
 /.workbuddy/
 
 # Downloaded models, training runs, and inference output
