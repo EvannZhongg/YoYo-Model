@@ -24,9 +24,11 @@ from config import BASE_DIR
 
 
 SCHEMA_VERSION = "yoyo_multitask_dataset_v3"
+SOURCE_POLICY = "all_non_score_annotations; quality_approved; image_sha256_deduplicated; source_group_isolated"
 VALID_ORIENTATIONS = ("normal", "horizontal", "not_applicable")
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible"}
 SPLITS = ("train", "val", "test")
+EXCLUDED_ANNOTATION_DIRS = {"score_annotations"}
 
 
 @dataclass(frozen=True)
@@ -127,17 +129,32 @@ def _load_samples(source_roots: Iterable[Path]) -> tuple[list[Sample], list[dict
                 continue
             assert image_path is not None
             image_digest = sha256_file(image_path)
+            declared_digest = str(annotation.get("image_sha256") or "").strip()
+            if declared_digest and declared_digest != image_digest:
+                excluded.append({"label": str(label_path), "reason": "image_sha256_mismatch"})
+                continue
             sample = Sample(root.name, label_path.resolve(), image_path, image_digest, annotation)
             previous = samples_by_hash.get(image_digest)
             if previous is not None:
-                excluded.append(
-                    {
-                        "label": str(previous.label_path),
-                        "reason": f"duplicate_image_replaced_by={label_path}",
-                    }
-                )
+                previous_rank = (str(previous.annotation.get("updated_at_utc") or ""), str(previous.label_path))
+                sample_rank = (str(sample.annotation.get("updated_at_utc") or ""), str(sample.label_path))
+                if sample_rank <= previous_rank:
+                    excluded.append({"label": str(label_path), "reason": f"duplicate_image_superseded_by={previous.label_path}"})
+                    continue
+                excluded.append({"label": str(previous.label_path), "reason": f"duplicate_image_replaced_by={label_path}"})
             samples_by_hash[image_digest] = sample
     return sorted(samples_by_hash.values(), key=lambda item: (item.source_group, item.dataset, str(item.label_path))), excluded
+
+
+def discover_annotation_sources(annotations_dir: Path = BASE_DIR / "annotations") -> list[Path]:
+    """Return every direct annotation export containing labels, excluding task-specific stores."""
+    root = annotations_dir.resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"annotations directory not found: {root}")
+    return sorted(
+        (path.resolve() for path in root.iterdir() if path.is_dir() and path.name not in EXCLUDED_ANNOTATION_DIRS and (path / "labels").is_dir()),
+        key=lambda path: path.name,
+    )
 
 
 def _split_quotas(group_count: int, val_ratio: float, test_ratio: float) -> dict[str, int]:
@@ -161,7 +178,10 @@ def _group_features(samples: list[Sample]) -> dict[str, Counter[str]]:
         values["samples"] += 1
         values[f"orientation:{sample.orientation}"] += 1
         values["yoyo_positive"] += int(sample.has_yoyo)
+        values["yoyo_negative"] += int(not sample.has_yoyo)
         values["string_positive"] += int(sample.has_string)
+        values["string_negative"] += int(not sample.has_string)
+        values[f"string_visibility:{sample.annotation['string_visibility']}"] += 1
     return dict(result)
 
 
@@ -171,7 +191,11 @@ def _assignment_score(
     ratios: dict[str, float],
 ) -> float:
     totals = sum(features.values(), Counter())
-    keys = ["samples", "yoyo_positive", "string_positive", *(f"orientation:{v}" for v in VALID_ORIENTATIONS)]
+    keys = [
+        "samples", "yoyo_positive", "yoyo_negative", "string_positive", "string_negative",
+        *(f"orientation:{value}" for value in VALID_ORIENTATIONS),
+        *(f"string_visibility:{value}" for value in sorted(VALID_STRING_VISIBILITY)),
+    ]
     split_counts = {split: Counter() for split in SPLITS}
     for group, split in assignment.items():
         split_counts[split].update(features[group])
@@ -179,10 +203,11 @@ def _assignment_score(
     for split in SPLITS:
         for key in keys:
             target = totals[key] * ratios[split]
-            weight = 4.0 if key == "samples" else 1.0
+            weight = 8.0 if key == "samples" else 1.0
             score += weight * ((split_counts[split][key] - target) ** 2) / max(1.0, target)
-        for orientation in VALID_ORIENTATIONS:
-            if totals[f"orientation:{orientation}"] and not split_counts[split][f"orientation:{orientation}"]:
+        for key in keys[1:]:
+            supporting_groups = sum(bool(values[key]) for values in features.values())
+            if supporting_groups >= len(SPLITS) and not split_counts[split][key]:
                 score += 100.0
     return score
 
@@ -196,14 +221,14 @@ def assign_source_splits(
 ) -> dict[str, str]:
     features = _group_features(samples)
     groups = sorted(features)
-    quotas = _split_quotas(len(groups), val_ratio, test_ratio)
-    ratios = {split: quotas[split] / len(groups) for split in SPLITS}
-    slots = [split for split in SPLITS for _ in range(quotas[split])]
+    _split_quotas(len(groups), val_ratio, test_ratio)
+    ratios = {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio}
     rng = random.Random(seed)
     best: tuple[float, tuple[str, ...], dict[str, str]] | None = None
     for _ in range(max(1, attempts)):
-        candidate_slots = list(slots)
-        rng.shuffle(candidate_slots)
+        candidate_slots = rng.choices(SPLITS, weights=[ratios[split] for split in SPLITS], k=len(groups))
+        if set(candidate_slots) != set(SPLITS):
+            continue
         assignment = dict(zip(groups, candidate_slots, strict=True))
         score = _assignment_score(assignment, features, ratios)
         signature = tuple(assignment[group] for group in groups)
@@ -315,9 +340,15 @@ def build_training_dataset(
     line_width_px: int = 8,
     clear: bool = False,
 ) -> dict[str, Any]:
-    roots = [Path(value).resolve() for value in source_roots]
-    if {root.name for root in roots} != {"video_v2", "video_v3"}:
-        raise ValueError("Fresh training sources must be exactly video_v2 and video_v3")
+    roots = sorted({Path(value).resolve() for value in source_roots}, key=lambda path: path.name)
+    if not roots:
+        raise ValueError("At least one annotation source is required")
+    forbidden = [root for root in roots if root.name in EXCLUDED_ANNOTATION_DIRS]
+    if forbidden:
+        raise ValueError(f"Task-specific annotation stores cannot be training sources: {forbidden}")
+    missing_labels = [root for root in roots if not (root / "labels").is_dir()]
+    if missing_labels:
+        raise FileNotFoundError(f"labels directory not found for annotation sources: {missing_labels}")
     if val_ratio <= 0 or test_ratio <= 0 or val_ratio + test_ratio >= 1:
         raise ValueError("val_ratio and test_ratio must be positive and sum to less than 1")
     samples, excluded = _load_samples(roots)
@@ -335,7 +366,7 @@ def build_training_dataset(
         "line_width_px": line_width_px,
         "assignment": assignment,
     }
-    dataset_id = f"yoyo_v2v3_{hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()[:12]}"
+    dataset_id = f"yoyo_unified_{hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()[:12]}"
     output_dir = output_dir.resolve()
     if output_dir.exists():
         if not clear:
@@ -347,6 +378,8 @@ def build_training_dataset(
     orientation_root = output_dir / "orientation"
     transfer_modes: Counter[str] = Counter()
     counts: dict[str, Counter[str]] = {split: Counter() for split in SPLITS}
+    overall_distribution: Counter[str] = Counter()
+    source_distribution: dict[str, Counter[str]] = defaultdict(Counter)
     records: list[dict[str, Any]] = []
     orientation_train_images: dict[str, list[Path]] = defaultdict(list)
     for sample in samples:
@@ -385,7 +418,22 @@ def build_training_dataset(
         counts[split]["samples"] += 1
         counts[split][f"orientation:{sample.orientation}"] += 1
         counts[split]["yoyo_positive"] += int(sample.has_yoyo)
+        counts[split]["yoyo_negative"] += int(not sample.has_yoyo)
         counts[split]["string_positive"] += int(sample.has_string)
+        counts[split]["string_negative"] += int(not sample.has_string)
+        counts[split][f"string_visibility:{sample.annotation['string_visibility']}"] += 1
+        counts[split][f"source_dataset:{sample.dataset}"] += 1
+        distribution_values = {
+            "samples": 1,
+            f"orientation:{sample.orientation}": 1,
+            "yoyo_positive": int(sample.has_yoyo),
+            "yoyo_negative": int(not sample.has_yoyo),
+            "string_positive": int(sample.has_string),
+            "string_negative": int(not sample.has_string),
+            f"string_visibility:{sample.annotation['string_visibility']}": 1,
+        }
+        overall_distribution.update(distribution_values)
+        source_distribution[sample.dataset].update(distribution_values)
         records.append(
             {
                 "dataset": sample.dataset,
@@ -413,12 +461,30 @@ def build_training_dataset(
     detection_yaml = _write_yaml(detection_root, "yoyo")
     string_yaml = _write_yaml(string_root, "string")
     source_groups = {split: sorted(group for group, value in assignment.items() if value == split) for split in SPLITS}
+    included_by_source = Counter(sample.dataset for sample in samples)
+    excluded_by_source = Counter()
+    for item in excluded:
+        label = Path(item["label"])
+        for root in roots:
+            if label.is_relative_to(root):
+                excluded_by_source[root.name] += 1
+                break
+    source_inventory = {
+        root.name: {
+            "root": str(root),
+            "labels_discovered": len(list((root / "labels").rglob("*.json"))),
+            "samples_included": included_by_source[root.name],
+            "records_excluded": excluded_by_source[root.name],
+        }
+        for root in roots
+    }
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "dataset_id": dataset_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "source_policy": "video_v2_and_video_v3_imported_once; video_v1_forbidden; unified_canonical_dataset",
+        "source_policy": SOURCE_POLICY,
         "import_sources": [str(root) for root in roots],
+        "source_inventory": source_inventory,
         "source_annotation_sha256": annotation_sha256,
         "output_dir": str(output_dir),
         "split_policy": {
@@ -426,8 +492,16 @@ def build_training_dataset(
             "seed": seed,
             "val_ratio": val_ratio,
             "test_ratio": test_ratio,
+            "target_sample_ratios": {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio},
+            "actual_sample_ratios": {
+                split: counts[split]["samples"] / len(samples) for split in SPLITS
+            },
             "source_groups": source_groups,
-            "leakage": {},
+            "leakage": {
+                "source_group_overlap_count": 0,
+                "image_sha256_overlap_count": 0,
+                "guarantee": "each source_group and deduplicated image_sha256 belongs to exactly one split",
+            },
         },
         "tasks": {
             "detection": {"data": str(detection_yaml), "classes": ["yoyo"]},
@@ -446,8 +520,15 @@ def build_training_dataset(
             },
         },
         "counts": {split: dict(sorted(value.items())) for split, value in counts.items()},
+        "distributions": {
+            "overall": dict(sorted(overall_distribution.items())),
+            "by_source_dataset": {
+                source: dict(sorted(values.items())) for source, values in sorted(source_distribution.items())
+            },
+        },
         "sample_count": len(samples),
         "source_group_count": len(assignment),
+        "excluded_count": len(excluded),
         "excluded": excluded,
         "image_materialization": dict(transfer_modes),
         "records": records,
@@ -469,8 +550,8 @@ def build_training_dataset(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build the fresh v2/v3 multitask training dataset.")
-    parser.add_argument("--source", action="append", default=[], help="Source root; defaults to datasets/video_v2 and video_v3.")
+    parser = argparse.ArgumentParser(description="Build the unified multitask dataset from all non-score annotation exports.")
+    parser.add_argument("--source", action="append", default=[], help="Annotation root; repeat to override automatic annotations/ discovery.")
     parser.add_argument("--output-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset"))
     parser.add_argument("--seed", type=int, default=20260726)
     parser.add_argument("--val-ratio", type=float, default=0.15)
@@ -482,7 +563,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    sources = [Path(value) for value in args.source] or [BASE_DIR / "datasets" / "video_v2", BASE_DIR / "datasets" / "video_v3"]
+    sources = [Path(value) for value in args.source] or discover_annotation_sources()
     manifest = build_training_dataset(
         sources,
         Path(args.output_dir),

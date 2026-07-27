@@ -7,8 +7,16 @@ from unittest.mock import patch
 from app import create_demo, run_video_tracking
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
 from workbench.score_annotation import (
+    ANCHOR_SOURCES,
+    EXCLUSION_REASONS,
     MAJOR_PENALTIES,
     SCHEMA_VERSION,
+    delete_score_annotation,
+    list_score_annotations,
+    load_score_annotation,
+    load_score_annotation_session,
+    resolve_score_video_source,
+    save_score_annotation,
     score_annotation_component_kwargs,
     validate_score_annotation,
 )
@@ -39,30 +47,159 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn('accept="video/*"', html)
         self.assertIn("Evidence interval", html)
         self.assertIn("动作名称", html)
-        self.assertEqual(html.count('class="ysa__track-row"'), 3)
+        self.assertIn("记录起点", html)
+        self.assertEqual(html.count('class="ysa__track-row'), 4)
         self.assertIn('data-track="positive"', html)
         self.assertIn('data-track="negative"', html)
         self.assertIn('data-track="major_penalty"', html)
-        self.assertIn("localStorage.setItem", javascript)
+        self.assertIn('data-track="excluded"', html)
+        self.assertIn("不可标记原因", html)
+        self.assertIn("标记不可用起点", html)
+        self.assertIn("annotations/score_annotations", html)
+        self.assertIn("server.save_score_annotation", javascript)
+        self.assertIn("server.list_score_annotations", javascript)
+        self.assertIn("server.load_score_annotation_session", javascript)
+        self.assertIn("resumeManagedSession(session)", javascript)
+        self.assertNotIn("videoFile.click()", javascript)
+        self.assertNotIn("localStorage", javascript)
         self.assertIn("video.currentTime + 1 / fps()", javascript)
-        self.assertIn("yoyo-score-annotation:v1:", javascript)
         self.assertIn("beginClipDrag", javascript)
+        self.assertIn("beginPlayheadDrag", javascript)
         self.assertIn("beginTrackDraft", javascript)
+        self.assertIn("beginExclusionDrag", javascript)
+        self.assertIn("training_eligible:false", javascript)
+        self.assertIn("frames_overlapping_excluded_intervals_are_ineligible", javascript)
+        self.assertIn("与不可标记片段重叠", javascript)
+        self.assertIn("setAnchorFromCurrent", javascript)
+        self.assertIn('loadEvent(event.event_id, false)', javascript)
+        self.assertIn("Anchor 已更新", javascript)
+        self.assertIn('anchor_source:anchorSource', javascript)
+        self.assertIn('scoreEvent.timing.anchor_source = "manual"', javascript)
+        self.assertIn('pendingEventAnchor === null ? "evidence_end_default" : "manual"', javascript)
+        self.assertIn("flushCurrentSessionBeforeSwitch", javascript)
+        self.assertIn("if (!await flushCurrentSessionBeforeSwitch())", javascript)
+        self.assertIn("当前区间尚未完成，未切换视频", javascript)
         self.assertIn("syncSelectedFromEditor", javascript)
+        self.assertIn("pendingEventStart", javascript)
+        self.assertIn("结束并添加", javascript)
+        self.assertIn("事件已自动更新", javascript)
+        self.assertNotIn("保存修改", javascript)
+        self.assertIn("cursor:col-resize", component["css_template"])
+        self.assertIn(".ysa__clip-anchor::after", component["css_template"])
+        self.assertIn("拖动定位播放帧", html)
+        self.assertEqual(len(component["server_functions"]), 6)
+
+    def test_score_annotation_disk_storage_round_trip_and_delete(self):
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "annotation_id": "annotation-1",
+            "revision": 1,
+            "video": {
+                "file_name": "contest.mp4",
+                "browser_identity": "contest.mp4:12345:1700000000000",
+                "source_path": "videos/contest.mp4",
+            },
+            "competition": {"division": "2A"},
+            "annotator": {"judge": "judge2"},
+            "events": [],
+            "excluded_intervals": [{
+                "exclusion_id": "excluded-1",
+                "start_s": 4.0,
+                "end_s": 5.5,
+                "reason": "defocus",
+                "training_eligible": False,
+            }],
+            "created_at": "2026-07-26T00:00:00Z",
+            "updated_at": "2026-07-26T00:00:01Z",
+        }
+        with TemporaryDirectory() as directory, patch(
+            "workbench.score_annotation.SCORE_ANNOTATION_DIR", Path(directory) / "scores"
+        ):
+            saved = save_score_annotation(document)
+            document["revision"] = 2
+            document["updated_at"] = "2026-07-26T00:00:02Z"
+            updated = save_score_annotation(json.dumps(document))
+            loaded = load_score_annotation(document["video"]["browser_identity"])
+            listed = list_score_annotations()
+
+            self.assertEqual(saved["storage_key"], updated["storage_key"])
+            self.assertEqual(loaded["document"]["revision"], 2)
+            self.assertFalse(loaded["document"]["excluded_intervals"][0]["training_eligible"])
+            self.assertEqual(len(listed), 1)
+            self.assertTrue(Path(updated["path"]).is_file())
+            self.assertTrue(delete_score_annotation(updated["storage_key"]))
+            self.assertEqual(list_score_annotations(), [])
+            with self.assertRaisesRegex(ValueError, "invalid"):
+                delete_score_annotation("../outside.json")
+
+    def test_score_annotation_session_resolves_video_from_required_source_path(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            video_dir = root / "videos"
+            video_dir.mkdir()
+            video_path = video_dir / "contest.mp4"
+            video_path.write_bytes(b"score-video")
+            modified_ms = int(video_path.stat().st_mtime * 1000)
+            document = {
+                "schema_version": SCHEMA_VERSION,
+                "annotation_id": "annotation-source",
+                "revision": 1,
+                "video": {
+                    "file_name": video_path.name,
+                    "file_size_bytes": video_path.stat().st_size,
+                    "last_modified_ms": modified_ms,
+                    "browser_identity": f"{video_path.name}:{video_path.stat().st_size}:{modified_ms}",
+                    "source_path": "videos/contest.mp4",
+                },
+                "competition": {"division": "1A"},
+                "annotator": {"judge": "judge1"},
+                "events": [],
+                "excluded_intervals": [],
+            }
+            with (
+                patch("workbench.score_annotation.BASE_DIR", root),
+                patch("workbench.score_annotation.SCORE_VIDEO_DIRS", (video_dir,)),
+                patch("workbench.score_annotation.SCORE_ANNOTATION_DIR", root / "scores"),
+                patch("workbench.score_annotation.gr.set_static_paths") as set_static_paths,
+            ):
+                saved = save_score_annotation(document)
+                self.assertEqual(
+                    resolve_score_video_source(document["video"]),
+                    "videos/contest.mp4",
+                )
+                session = load_score_annotation_session(saved["storage_key"])
+
+            self.assertEqual(Path(session["video_path"]), video_path.resolve())
+            set_static_paths.assert_called_once_with(paths=[video_path.resolve()])
+
+    def test_score_annotation_requires_managed_video_source_path(self):
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "video": {},
+            "competition": {"division": "1A"},
+            "annotator": {"judge": "judge1"},
+            "events": [],
+        }
+        with self.assertRaisesRegex(ValueError, "video.source_path is required"):
+            validate_score_annotation(document)
+        document["video"]["source_path"] = "../outside.mp4"
+        with self.assertRaisesRegex(ValueError, "invalid video.source_path"):
+            validate_score_annotation(document)
 
     def test_score_annotation_schema_accepts_complete_overlapping_intervals(self):
         document = {
             "schema_version": SCHEMA_VERSION,
+            "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "1A"},
             "annotator": {"judge": "judge1"},
             "events": [
                 {
                     "label": {"family": "positive", "score_delta": 7},
-                    "timing": {"evidence_start_s": 1.0, "anchor_s": 2.5, "evidence_end_s": 3.0},
+                    "timing": {"evidence_start_s": 1.0, "anchor_s": 2.5, "evidence_end_s": 3.0, "anchor_source": "manual"},
                 },
                 {
                     "label": {"family": "major_penalty", "penalty_type": "disassembly", "score_delta": -5},
-                    "timing": {"evidence_start_s": 2.8, "anchor_s": 3.2, "evidence_end_s": 4.0},
+                    "timing": {"evidence_start_s": 2.8, "anchor_s": 3.2, "evidence_end_s": 4.0, "anchor_source": "evidence_end_default"},
                 },
             ],
         }
@@ -70,10 +207,38 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         validate_score_annotation(document)
         self.assertEqual(MAJOR_PENALTIES["restart"]["score_delta"], -1)
         self.assertEqual(MAJOR_PENALTIES["discard"]["score_delta"], -3)
+        self.assertEqual(ANCHOR_SOURCES, ("evidence_end_default", "manual"))
+        self.assertEqual(EXCLUSION_REASONS, ("defocus", "occlusion", "corrupted_frames", "other"))
+
+    def test_score_annotation_schema_validates_training_exclusions(self):
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "video": {"source_path": "videos/contest.mp4"},
+            "competition": {"division": "1A"},
+            "annotator": {"judge": "judge1"},
+            "events": [],
+            "excluded_intervals": [{
+                "exclusion_id": "excluded-1",
+                "start_s": 1.0,
+                "end_s": 2.0,
+                "reason": "defocus",
+                "training_eligible": False,
+            }],
+        }
+
+        validate_score_annotation(document)
+        document["excluded_intervals"][0]["training_eligible"] = True
+        with self.assertRaisesRegex(ValueError, "training_eligible"):
+            validate_score_annotation(document)
+        document["excluded_intervals"][0]["training_eligible"] = False
+        document["excluded_intervals"][0]["end_s"] = 1.0
+        with self.assertRaisesRegex(ValueError, "start_s < end_s"):
+            validate_score_annotation(document)
 
     def test_score_annotation_schema_rejects_anchor_outside_evidence(self):
         document = {
             "schema_version": SCHEMA_VERSION,
+            "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "5A"},
             "annotator": {"judge": "judge1"},
             "events": [{
@@ -83,6 +248,30 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(ValueError, "evidence_start"):
+            validate_score_annotation(document)
+
+    def test_score_annotation_schema_rejects_invalid_anchor_source(self):
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "video": {"source_path": "videos/contest.mp4"},
+            "competition": {"division": "1A"},
+            "annotator": {"judge": "judge1"},
+            "events": [{
+                "label": {"family": "positive", "score_delta": 2},
+                "timing": {
+                    "evidence_start_s": 1.0,
+                    "anchor_s": 2.0,
+                    "evidence_end_s": 2.0,
+                    "anchor_source": "automatic",
+                },
+            }],
+        }
+
+        with self.assertRaisesRegex(ValueError, "anchor_source"):
+            validate_score_annotation(document)
+
+        del document["events"][0]["timing"]["anchor_source"]
+        with self.assertRaisesRegex(ValueError, "anchor_source"):
             validate_score_annotation(document)
 
     @patch("app._tracking_review_gallery", return_value=[])

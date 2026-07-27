@@ -78,7 +78,7 @@ tracking:
   auto_download_pose: false
   # Unified-dataset LR-ASPP model. Predictions remain review-only and never
   # become label truth.
-  string_weights_path: "runs/v2v3/yoyo_v2v3_c48ce78a1181_semantic_string_neg4/weights/best.pt"
+  string_weights_path: "runs/candidates/yoyo_unified_6c7b1181cfe5_semantic_string_lraspp_clean-neg4-hn01-v1/weights/best.pt"
   enable_string_model: true
   string_confidence: 0.20
   # Match the input scale used for independent test evaluation.

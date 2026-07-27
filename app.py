@@ -11,6 +11,7 @@ from config import BASE_DIR, DATASET_CONFIG, MODEL_CONFIG, TRACKING_CONFIG
 from video_tracking.frame_review import append_tracking_frame_review, load_tracking_frame_selection
 from video_tracking.tracker import track_video
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
+from workbench.dataset_annotation import dataset_annotation_component_kwargs
 from workbench.score_annotation import score_annotation_component_kwargs
 from workbench.tracking import tracking_review_gallery as _tracking_review_gallery
 
@@ -295,6 +296,9 @@ def create_demo():
                     [dataset_input_dir, dataset_output_dir, dataset_prompt, dataset_model, dataset_min_pixels, dataset_max_pixels],
                     [dataset_status],
                 )
+
+            with gr.Tab("数据标注"):
+                gr.HTML(**dataset_annotation_component_kwargs())
 
             with gr.Tab("Unified Training"):
                 training_dataset = gr.Textbox(label="Unified Dataset", value=str(unified_dataset))

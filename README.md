@@ -18,6 +18,13 @@ datasets/yoyo_dataset/
 
 `manifest.json` 是训练数据身份和来源隔离策略的唯一依据。训练和评估都会校验 manifest；不要在模型训练完成后重建或修改对应 manifest。
 
+数据集由 `annotations/` 下所有包含 `labels/` 的直接子目录统一构建，自动排除 `score_annotations/`。构建过程只纳入质量审核通过的标注，按图像 SHA-256 全局去重，并按来源视频组隔离、按标签分布优化 `train/val/test` 拆分：
+
+```powershell
+.\.venv\Scripts\python.exe prepare_training_v2.py --clear
+.\.venv\Scripts\python.exe prepare_orientation_view_v2.py --clear
+```
+
 当前标签包含：
 
 - 悠悠球 bbox
@@ -82,6 +89,8 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 评估器会校验数据 manifest 和 best weights 的 SHA-256，然后在来源隔离的 test split 上运行。
 
+当前已固化的训练版本、独立测试指标和权重哈希见 [`reports/training_20260727.md`](reports/training_20260727.md)。
+
 ## 完整视频追踪
 
 ```powershell
@@ -113,6 +122,8 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 - 统一数据集训练与评估
 - 悠悠球计分事件标注（三轨剪辑式时间轴、本地视频、Anchor、Evidence interval、自动续标与 JSON 元数据）
 - 完整视频追踪和逐帧审核
+
+计分标注每次修订都会原子写入 `annotations/score_annotations/`。每个 JSON 的 `video.source_path` 指向 `videos/` 下对应的受控源视频；`Score Annotation` 页签中的会话管理抽屉可直接加载视频并继续标注，也可修改组别/裁判、导出或删除会话。该目录属于独立的计分模型 pipeline，目前仅用于数据标注，不接入当前训练。
 
 ## 测试
 

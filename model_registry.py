@@ -58,7 +58,7 @@ def _metric_summary(metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> dict[str, Any]:
-    runs_dir = runs_dir or base_dir / "runs"
+    runs_dir = (runs_dir or base_dir / "runs").resolve()
     default_yoyo = TRACKING_CONFIG.weights_path.resolve()
     default_string = TRACKING_CONFIG.string_weights_path.resolve()
     default_orientation = TRACKING_CONFIG.orientation_weights_path.resolve()
@@ -107,6 +107,8 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
                 "dataset_manifest_sha256_current": current_dataset_sha,
                 "metrics_file": str(metrics_path.resolve()) if metrics_path else "",
                 "metrics": _metric_summary(metrics),
+                "initialization_lineage": manifest.get("initialization_lineage", manifest.get("initialization", {})),
+                "promotion": manifest.get("promotion", {}),
                 "roles": roles,
                 "warnings": warnings,
                 "complete": not warnings,

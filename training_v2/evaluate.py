@@ -28,6 +28,23 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+def _detection_recall_from_confusion(
+    matrix: list[list[float]],
+    class_names: list[str],
+) -> tuple[dict[str, float], list[list[float]]]:
+    class_count = len(class_names)
+    matrix_size = min(len(matrix), class_count + 1)
+    full_matrix = [
+        [float(value) for value in row[:matrix_size]]
+        for row in matrix[:matrix_size]
+    ]
+    per_class_recall: dict[str, float] = {}
+    for true_index, name in enumerate(class_names):
+        support = sum(full_matrix[predicted][true_index] for predicted in range(matrix_size))
+        per_class_recall[name] = full_matrix[true_index][true_index] / support if support else 0.0
+    return per_class_recall, full_matrix
+
+
 def evaluate_run(run_dir: Path, device: str = "0", workers: int = 0) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     run_manifest_path = run_dir / "run_manifest.json"
@@ -69,15 +86,8 @@ def evaluate_run(run_dir: Path, device: str = "0", workers: int = 0) -> dict[str
     if confusion is not None:
         matrix = _json_value(confusion)
         class_names = [str(model.names[index]) for index in sorted(model.names)]
-        class_count = len(class_names)
-        class_matrix = [row[:class_count] for row in matrix[:class_count]]
-        per_class_recall = {}
-        for true_index, name in enumerate(class_names):
-            support = sum(float(class_matrix[predicted][true_index]) for predicted in range(class_count))
-            per_class_recall[name] = (
-                float(class_matrix[true_index][true_index]) / support if support else 0.0
-            )
-        metrics["confusion_matrix_predicted_by_true"] = class_matrix
+        per_class_recall, full_matrix = _detection_recall_from_confusion(matrix, class_names)
+        metrics["confusion_matrix_predicted_by_true"] = full_matrix
         metrics["per_class_recall"] = per_class_recall
         metrics["macro_recall"] = sum(per_class_recall.values()) / max(1, len(per_class_recall))
     result = {
@@ -98,11 +108,16 @@ def evaluate_run(run_dir: Path, device: str = "0", workers: int = 0) -> dict[str
     }
     metrics_path = run_dir / "test_metrics.json"
     metrics_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    promotion_eligible = bool((run_manifest.get("initialization_lineage") or {}).get("promotion_eligible", True))
     run_manifest["promotion"] = {
-        "status": "test_evaluated_candidate",
+        "status": "test_evaluated_candidate" if promotion_eligible else "test_evaluated_ineligible_source_overlap",
         "test_metrics": str(metrics_path),
         "test_metrics_sha256": sha256_file(metrics_path),
-        "note": "Candidate is recorded; deployment defaults are changed only by an explicit promotion step.",
+        "note": (
+            "Candidate is recorded; deployment defaults are changed only by an explicit promotion step."
+            if promotion_eligible
+            else "Evaluation is recorded for analysis only; initialization lineage overlaps evaluation sources."
+        ),
     }
     run_manifest_path.write_text(json.dumps(run_manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return result

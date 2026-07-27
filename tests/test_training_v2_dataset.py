@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from training_v2.prepare_dataset import build_training_dataset
+from training_v2.prepare_dataset import SOURCE_POLICY, build_training_dataset, discover_annotation_sources
 from training_v2.evaluate import _json_value
 from training_v2.orientation_view import build_orientation_view
 
@@ -41,13 +41,12 @@ class FreshTrainingDatasetTests(unittest.TestCase):
 
         self.assertEqual(_json_value(ArrayValue()), [[4, 1], [2, 3]])
 
-    def _write_source(self, root: Path, groups: list[str]) -> None:
+    def _write_source(self, root: Path, groups: list[str], source_tint: int = 120) -> None:
         for group_index, group in enumerate(groups):
             for sample_index, orientation in enumerate(("normal", "horizontal", "not_applicable")):
                 name = f"sample_{sample_index}.jpg"
                 image_path = root / "images" / group / name
                 image_path.parent.mkdir(parents=True, exist_ok=True)
-                source_tint = 30 if root.name == "video_v2" else 180
                 image = Image.new("RGB", (64, 48), (group_index * 20, sample_index * 40, source_tint))
                 image.save(image_path)
                 import hashlib
@@ -63,19 +62,24 @@ class FreshTrainingDatasetTests(unittest.TestCase):
     def test_builds_three_aligned_tasks_with_group_isolation(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
-            v2 = base / "video_v2"
-            v3 = base / "video_v3"
-            self._write_source(v2, ["v2-a", "v2-b", "v2-c"])
-            self._write_source(v3, ["v3-a", "v3-b", "v3-c"])
-            first = build_training_dataset([v2, v3], base / "output-a", seed=7)
-            second = build_training_dataset([v2, v3], base / "output-b", seed=7)
+            nypc = base / "annotations" / "NYPC1A"
+            world = base / "annotations" / "world_final"
+            self._write_source(nypc, ["a", "b", "c"], source_tint=80)
+            self._write_source(world, ["d", "e", "f"], source_tint=180)
+            first = build_training_dataset([nypc, world], base / "output-a", seed=7)
+            second = build_training_dataset([world, nypc], base / "output-b", seed=7)
 
             self.assertEqual(first["dataset_id"], second["dataset_id"])
             self.assertEqual(first["sample_count"], 18)
             self.assertEqual(
                 first["source_policy"],
-                "video_v2_and_video_v3_imported_once; video_v1_forbidden; unified_canonical_dataset",
+                SOURCE_POLICY,
             )
+            self.assertEqual(first["distributions"]["by_source_dataset"]["NYPC1A"]["samples"], 9)
+            self.assertEqual(first["distributions"]["by_source_dataset"]["world_final"]["samples"], 9)
+            self.assertEqual(first["source_inventory"]["NYPC1A"]["labels_discovered"], 9)
+            self.assertEqual(first["source_inventory"]["world_final"]["samples_included"], 9)
+            self.assertEqual(first["split_policy"]["leakage"]["source_group_overlap_count"], 0)
             group_sets = [set(first["split_policy"]["source_groups"][split]) for split in ("train", "val", "test")]
             self.assertFalse(group_sets[0] & group_sets[1])
             self.assertFalse(group_sets[0] & group_sets[2])
@@ -107,16 +111,21 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                 self.assertEqual(class_dirs, ["horizontal", "normal", "not_applicable"])
                 self.assertTrue(all(not any(path.is_dir() for path in (output / "orientation" / split / name).iterdir()) for name in class_dirs))
 
-    def test_rejects_video_v1_as_a_source(self):
+    def test_discovers_all_non_score_annotation_sources(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            v1 = base / "video_v1"
-            v2 = base / "video_v2"
-            v1.mkdir()
-            v2.mkdir()
-            with self.assertRaisesRegex(ValueError, "exactly video_v2 and video_v3"):
-                build_training_dataset([v1, v2], base / "output")
+            annotations = Path(directory) / "annotations"
+            for name in ("NYPC1A", "world_final", "score_annotations", "notes"):
+                (annotations / name).mkdir(parents=True)
+            (annotations / "NYPC1A" / "labels").mkdir()
+            (annotations / "world_final" / "labels").mkdir()
+            (annotations / "score_annotations" / "labels").mkdir()
 
+            self.assertEqual(
+                [path.name for path in discover_annotation_sources(annotations)],
+                ["NYPC1A", "world_final"],
+            )
+            with self.assertRaisesRegex(ValueError, "Task-specific annotation stores"):
+                build_training_dataset([annotations / "score_annotations"], Path(directory) / "output")
 
 if __name__ == "__main__":
     unittest.main()
