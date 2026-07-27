@@ -218,10 +218,25 @@ def assign_source_splits(
     val_ratio: float,
     test_ratio: float,
     attempts: int = 6000,
+    frozen_assignment: dict[str, str] | None = None,
 ) -> dict[str, str]:
     features = _group_features(samples)
     groups = sorted(features)
     _split_quotas(len(groups), val_ratio, test_ratio)
+    if frozen_assignment is not None:
+        invalid = sorted(group for group, split in frozen_assignment.items() if split not in SPLITS)
+        if invalid:
+            raise ValueError(f"Frozen split assignment contains invalid split values: {invalid}")
+        missing = sorted(set(frozen_assignment) - set(groups))
+        if missing:
+            raise ValueError(f"Frozen split source groups are missing from the current annotations: {missing}")
+        assignment = {
+            group: frozen_assignment.get(group, "train")
+            for group in groups
+        }
+        if set(assignment.values()) != set(SPLITS):
+            raise ValueError("Frozen split assignment must preserve non-empty train, val, and test splits")
+        return assignment
     ratios = {"train": 1.0 - val_ratio - test_ratio, "val": val_ratio, "test": test_ratio}
     rng = random.Random(seed)
     best: tuple[float, tuple[str, ...], dict[str, str]] | None = None
@@ -237,6 +252,28 @@ def assign_source_splits(
             best = item
     assert best is not None
     return best[2]
+
+
+def _load_frozen_split_assignment(manifest_path: Path) -> tuple[dict[str, str], str]:
+    manifest_path = manifest_path.resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source_groups = (manifest.get("split_policy") or {}).get("source_groups")
+    if not isinstance(source_groups, dict):
+        raise ValueError(f"Frozen split manifest does not define split_policy.source_groups: {manifest_path}")
+    assignment: dict[str, str] = {}
+    duplicates: set[str] = set()
+    for split in SPLITS:
+        values = source_groups.get(split)
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"Frozen split manifest requires a non-empty {split} source group list")
+        for raw_group in values:
+            group = str(raw_group)
+            if group in assignment:
+                duplicates.add(group)
+            assignment[group] = split
+    if duplicates:
+        raise ValueError(f"Frozen split manifest assigns source groups more than once: {sorted(duplicates)}")
+    return assignment, sha256_file(manifest_path)
 
 
 def _link_or_copy(source: Path, target: Path) -> str:
@@ -339,6 +376,7 @@ def build_training_dataset(
     test_ratio: float = 0.15,
     line_width_px: int = 8,
     clear: bool = False,
+    freeze_splits_from: Path | None = None,
 ) -> dict[str, Any]:
     roots = sorted({Path(value).resolve() for value in source_roots}, key=lambda path: path.name)
     if not roots:
@@ -354,7 +392,18 @@ def build_training_dataset(
     samples, excluded = _load_samples(roots)
     if not samples:
         raise ValueError("No quality-approved samples were found")
-    assignment = assign_source_splits(samples, seed, val_ratio, test_ratio)
+    frozen_assignment: dict[str, str] | None = None
+    frozen_manifest_sha256 = ""
+    if freeze_splits_from is not None:
+        frozen_assignment, frozen_manifest_sha256 = _load_frozen_split_assignment(Path(freeze_splits_from))
+    assignment = assign_source_splits(
+        samples,
+        seed,
+        val_ratio,
+        test_ratio,
+        frozen_assignment=frozen_assignment,
+    )
+    new_train_source_groups = sorted(set(assignment) - set(frozen_assignment or {}))
     annotation_sha256 = _annotation_digest(samples)
     identity = {
         "schema_version": SCHEMA_VERSION,
@@ -488,7 +537,11 @@ def build_training_dataset(
         "source_annotation_sha256": annotation_sha256,
         "output_dir": str(output_dir),
         "split_policy": {
-            "strategy": "source_group_stratified_random_search",
+            "strategy": (
+                "frozen_source_groups_new_sources_train"
+                if frozen_assignment is not None
+                else "source_group_stratified_random_search"
+            ),
             "seed": seed,
             "val_ratio": val_ratio,
             "test_ratio": test_ratio,
@@ -497,6 +550,10 @@ def build_training_dataset(
                 split: counts[split]["samples"] / len(samples) for split in SPLITS
             },
             "source_groups": source_groups,
+            "frozen_from_manifest": str(Path(freeze_splits_from).resolve()) if freeze_splits_from is not None else "",
+            "frozen_from_manifest_sha256": frozen_manifest_sha256,
+            "frozen_source_group_count": len(frozen_assignment or {}),
+            "new_train_source_groups": new_train_source_groups,
             "leakage": {
                 "source_group_overlap_count": 0,
                 "image_sha256_overlap_count": 0,
@@ -558,20 +615,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-ratio", type=float, default=0.15)
     parser.add_argument("--line-width-px", type=int, default=8)
     parser.add_argument("--clear", action="store_true")
+    split_group = parser.add_mutually_exclusive_group()
+    split_group.add_argument(
+        "--freeze-splits-from",
+        default="",
+        help="Preserve source-group splits from this dataset manifest; unseen groups are assigned to train.",
+    )
+    split_group.add_argument(
+        "--resplit",
+        action="store_true",
+        help="Explicitly allow a fresh split instead of preserving an existing output manifest.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     sources = [Path(value) for value in args.source] or discover_annotation_sources()
+    output_dir = Path(args.output_dir)
+    existing_manifest = output_dir / "manifest.json"
+    freeze_splits_from = (
+        Path(args.freeze_splits_from)
+        if args.freeze_splits_from
+        else existing_manifest if args.clear and existing_manifest.is_file() and not args.resplit
+        else None
+    )
     manifest = build_training_dataset(
         sources,
-        Path(args.output_dir),
+        output_dir,
         seed=args.seed,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
         line_width_px=args.line_width_px,
         clear=args.clear,
+        freeze_splits_from=freeze_splits_from,
     )
     print(json.dumps({key: manifest[key] for key in ("dataset_id", "sample_count", "source_group_count", "counts", "output_dir")}, ensure_ascii=False, indent=2))
     return 0

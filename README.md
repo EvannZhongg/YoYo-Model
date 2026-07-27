@@ -25,6 +25,8 @@ datasets/yoyo_dataset/
 .\.venv\Scripts\python.exe prepare_orientation_view_v2.py --clear
 ```
 
+对已有输出执行 `--clear` 时会默认冻结当前 manifest 的来源组拆分：旧来源保留原 `train/val/test`，新增来源只进入 `train`。只有在有意创建全新评估协议时才使用 `--resplit`；也可用 `--freeze-splits-from <manifest.json>` 明确指定拆分血缘。
+
 当前标签包含：
 
 - 悠悠球 bbox

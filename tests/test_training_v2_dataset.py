@@ -5,6 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from common.files import sha256_file
 from training_v2.prepare_dataset import SOURCE_POLICY, build_training_dataset, discover_annotation_sources
 from training_v2.evaluate import _json_value
 from training_v2.orientation_view import build_orientation_view
@@ -126,6 +127,80 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "Task-specific annotation stores"):
                 build_training_dataset([annotations / "score_annotations"], Path(directory) / "output")
+
+    def test_frozen_manifest_preserves_existing_groups_and_assigns_new_groups_to_train(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "annotations" / "world_final"
+            self._write_source(source, ["a", "b", "c", "d", "e", "f"])
+            original = build_training_dataset([source], base / "dataset-v1", seed=11)
+            original_manifest = base / "dataset-v1" / "manifest.json"
+            original_assignment = {
+                group: split
+                for split, groups in original["split_policy"]["source_groups"].items()
+                for group in groups
+            }
+
+            self._write_source(source, ["new-g", "new-h"], source_tint=220)
+            expanded = build_training_dataset(
+                [source],
+                base / "dataset-v2",
+                seed=99,
+                freeze_splits_from=original_manifest,
+            )
+            expanded_assignment = {
+                group: split
+                for split, groups in expanded["split_policy"]["source_groups"].items()
+                for group in groups
+            }
+
+            self.assertEqual(
+                {group: expanded_assignment[group] for group in original_assignment},
+                original_assignment,
+            )
+            self.assertEqual(expanded_assignment["new-g"], "train")
+            self.assertEqual(expanded_assignment["new-h"], "train")
+            self.assertEqual(expanded["split_policy"]["strategy"], "frozen_source_groups_new_sources_train")
+            self.assertEqual(expanded["split_policy"]["frozen_source_group_count"], 6)
+            self.assertEqual(expanded["split_policy"]["new_train_source_groups"], ["new-g", "new-h"])
+            self.assertEqual(expanded["split_policy"]["frozen_from_manifest_sha256"], sha256_file(original_manifest))
+            self.assertEqual(
+                expanded["split_policy"]["source_groups"]["val"],
+                original["split_policy"]["source_groups"]["val"],
+            )
+            self.assertEqual(
+                expanded["split_policy"]["source_groups"]["test"],
+                original["split_policy"]["source_groups"]["test"],
+            )
+
+    def test_frozen_manifest_rejects_missing_or_duplicate_source_groups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            full_source = base / "annotations" / "full"
+            partial_source = base / "annotations" / "partial"
+            self._write_source(full_source, ["a", "b", "c", "d", "e", "f"])
+            original = build_training_dataset([full_source], base / "dataset-v1", seed=13)
+            original_manifest = base / "dataset-v1" / "manifest.json"
+            self._write_source(partial_source, ["a", "b", "c", "d", "e"], source_tint=230)
+
+            with self.assertRaisesRegex(ValueError, "missing from the current annotations"):
+                build_training_dataset(
+                    [partial_source],
+                    base / "missing-output",
+                    freeze_splits_from=original_manifest,
+                )
+
+            duplicate_manifest = base / "duplicate-manifest.json"
+            duplicate = json.loads(json.dumps(original))
+            repeated = duplicate["split_policy"]["source_groups"]["train"][0]
+            duplicate["split_policy"]["source_groups"]["val"].append(repeated)
+            duplicate_manifest.write_text(json.dumps(duplicate), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "more than once"):
+                build_training_dataset(
+                    [full_source],
+                    base / "duplicate-output",
+                    freeze_splits_from=duplicate_manifest,
+                )
 
 if __name__ == "__main__":
     unittest.main()
