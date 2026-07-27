@@ -61,6 +61,41 @@ def _loader(
     )
 
 
+def _initialization_lineage(
+    initial_weights: Path | None,
+    current_groups: dict[str, set[str]],
+) -> dict[str, Any]:
+    if initial_weights is None:
+        return {
+            "kind": "foundation_or_scratch",
+            "parent_run_manifest": "",
+            "evaluation_source_overlap": {"val": [], "test": []},
+            "promotion_eligible": True,
+        }
+
+    parent_manifest_path = initial_weights.resolve().parent.parent / "run_manifest.json"
+    if not parent_manifest_path.exists():
+        return {
+            "kind": "unversioned_checkpoint",
+            "parent_run_manifest": "",
+            "evaluation_source_overlap": {"val": [], "test": []},
+            "promotion_eligible": False,
+        }
+
+    parent = json.loads(parent_manifest_path.read_text(encoding="utf-8"))
+    parent_train = set((parent.get("source_groups") or {}).get("train", []))
+    overlap = {
+        split: sorted(parent_train & current_groups.get(split, set()))
+        for split in ("val", "test")
+    }
+    return {
+        "kind": "versioned_run",
+        "parent_run_manifest": str(parent_manifest_path),
+        "evaluation_source_overlap": overlap,
+        "promotion_eligible": not any(overlap.values()),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the reviewed semantic yoyo-string model.")
     parser.add_argument("--dataset-dir", default=str(SEMANTIC_STRING_CONFIG.dataset_dir))
@@ -179,9 +214,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     initialization: dict[str, Any] = {
         "mode": "imagenet_backbone" if args.pretrained_backbone else "random",
     }
+    initial_weights_path: Path | None = None
     if str(args.initial_weights).strip():
-        initial_weights = Path(args.initial_weights)
-        model, initial_checkpoint = load_checkpoint(initial_weights, device)
+        initial_weights_path = Path(args.initial_weights)
+        model, initial_checkpoint = load_checkpoint(initial_weights_path, device)
         initial_config = initial_checkpoint["model_config"]
         expected = {
             "architecture": str(args.architecture),
@@ -202,8 +238,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(f"Initial semantic checkpoint is incompatible: {mismatches}")
         initialization = {
             "mode": "warm_start",
-            "weights": str(initial_weights.resolve()),
-            "weights_sha256": sha256_file(initial_weights),
+            "weights": str(initial_weights_path.resolve()),
+            "weights_sha256": sha256_file(initial_weights_path),
             "checkpoint_epoch": int(initial_checkpoint.get("epoch", 0)),
             "dataset_manifest_sha256": str(initial_checkpoint.get("dataset_manifest_sha256", "")),
         }
@@ -213,6 +249,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             base_channels=args.base_channels,
             pretrained_backbone=args.pretrained_backbone,
         ).to(device)
+    initialization["lineage"] = _initialization_lineage(initial_weights_path, groups)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs), eta_min=float(args.lr) * 0.05)
     use_amp = device.type == "cuda"
@@ -357,8 +394,23 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         },
         "artifacts": {
             "best": str((weights_dir / "best.pt").resolve()),
+            "best_sha256": sha256_file(weights_dir / "best.pt"),
             "last": str((weights_dir / "last.pt").resolve()),
+            "last_sha256": sha256_file(weights_dir / "last.pt"),
             "history": str(history_path.resolve()),
+            "history_sha256": sha256_file(history_path),
+        },
+        "promotion": {
+            "status": (
+                "candidate"
+                if initialization["lineage"]["promotion_eligible"]
+                else "ineligible_source_overlap_or_unversioned_parent"
+            ),
+            "rule": (
+                "Promote only after semantic evaluation on the untouched test split."
+                if initialization["lineage"]["promotion_eligible"]
+                else "Do not promote: warm-start lineage does not preserve independent evaluation sources."
+            ),
         },
         "limitations": [
             "The reviewed dataset is very small; validation threshold selection is high variance.",

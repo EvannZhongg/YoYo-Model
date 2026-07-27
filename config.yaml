@@ -59,7 +59,7 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_unified_6c7b1181cfe5_detection_yolo11n_clean-v1/weights/best.pt"
+  weights_path: "runs/candidates/yoyo_unified_155860417a19_detection_best_incremental5-lr1e4-v1/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.25
   iou: 0.7

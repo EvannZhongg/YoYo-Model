@@ -20,10 +20,49 @@ from string_segmentation.semantic_model import (
     save_checkpoint,
     semantic_mask_observation,
 )
-from string_segmentation.train_semantic import _reviewed_sample_weights
+from string_segmentation.train_semantic import _initialization_lineage, _reviewed_sample_weights
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_semantic_warm_start_lineage_rejects_evaluation_source_overlap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "parent"
+            weights = run_dir / "weights" / "best.pt"
+            weights.parent.mkdir(parents=True)
+            weights.touch()
+            (run_dir / "run_manifest.json").write_text(
+                '{"source_groups":{"train":["train-a","leaked-val"]}}',
+                encoding="utf-8",
+            )
+
+            lineage = _initialization_lineage(
+                weights,
+                {"train": {"train-b"}, "val": {"leaked-val"}, "test": {"test-a"}},
+            )
+
+        self.assertEqual(lineage["kind"], "versioned_run")
+        self.assertEqual(lineage["evaluation_source_overlap"]["val"], ["leaked-val"])
+        self.assertFalse(lineage["promotion_eligible"])
+
+    def test_semantic_warm_start_lineage_accepts_disjoint_evaluation_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "parent"
+            weights = run_dir / "weights" / "best.pt"
+            weights.parent.mkdir(parents=True)
+            weights.touch()
+            (run_dir / "run_manifest.json").write_text(
+                '{"source_groups":{"train":["train-a"]}}',
+                encoding="utf-8",
+            )
+
+            lineage = _initialization_lineage(
+                weights,
+                {"train": {"train-a", "train-b"}, "val": {"val-a"}, "test": {"test-a"}},
+            )
+
+        self.assertEqual(lineage["evaluation_source_overlap"], {"val": [], "test": []})
+        self.assertTrue(lineage["promotion_eligible"])
+
     def test_reviewed_negative_sampling_weights_only_empty_masks(self):
         with tempfile.TemporaryDirectory() as directory:
             positive = Path(directory) / "positive.txt"
