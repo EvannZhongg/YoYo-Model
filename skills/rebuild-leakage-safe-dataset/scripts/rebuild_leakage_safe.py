@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -70,11 +72,7 @@ def _target_ratios(raw: dict[str, Any]) -> dict[str, float]:
     return ratios
 
 
-def load_manifest(path_value: str | Path) -> ManifestView:
-    path = Path(path_value).resolve()
-    if not path.is_file():
-        raise ContractError(f"manifest does not exist: {path}")
-    raw = _read_json(path)
+def _manifest_view(path: Path, raw: dict[str, Any]) -> ManifestView:
     source_groups = ((raw.get("split_policy") or {}).get("source_groups") or {})
     if not isinstance(source_groups, dict):
         raise ContractError("split_policy.source_groups must be an object")
@@ -148,6 +146,121 @@ def load_manifest(path_value: str | Path) -> ManifestView:
     )
 
 
+def load_manifest(path_value: str | Path) -> ManifestView:
+    path = Path(path_value).resolve()
+    if not path.is_file():
+        raise ContractError(f"manifest does not exist: {path}")
+    return _manifest_view(path, _read_json(path))
+
+
+def _ratio_score(
+    assignment: dict[str, str],
+    group_counts: dict[str, int],
+    ratios: dict[str, float],
+) -> float:
+    split_counts = {split: 0 for split in SPLITS}
+    for group, split in assignment.items():
+        split_counts[split] += group_counts[group]
+    total = sum(split_counts.values())
+    return sum(
+        ((split_counts[split] - total * ratios[split]) ** 2)
+        / max(1.0, total * ratios[split])
+        for split in SPLITS
+    )
+
+
+def build_incremental_plan(
+    baseline: ManifestView,
+    candidate: ManifestView,
+    seed: int,
+    attempts: int,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    missing_groups = sorted(set(baseline.assignment) - set(candidate.assignment))
+    missing_hashes = sorted(set(baseline.records_by_hash) - set(candidate.records_by_hash))
+    if missing_groups:
+        raise ContractError(f"candidate is missing existing source groups: {missing_groups}")
+    if missing_hashes:
+        raise ContractError(f"candidate is missing {len(missing_hashes)} existing image hashes")
+
+    group_counts = {group: 0 for group in candidate.assignment}
+    for record in candidate.records_by_hash.values():
+        group_counts[record["source_group"]] += 1
+    new_groups = sorted(set(candidate.assignment) - set(baseline.assignment))
+    fixed_assignment = {
+        group: baseline.assignment.get(group, "") for group in candidate.assignment
+    }
+
+    if new_groups:
+        combinations = 3 ** len(new_groups)
+        if combinations <= attempts:
+            choices = itertools.product(SPLITS, repeat=len(new_groups))
+        else:
+            rng = random.Random(seed)
+            choices = (
+                tuple(
+                    rng.choices(
+                        SPLITS,
+                        weights=[candidate.target_ratios[split] for split in SPLITS],
+                        k=len(new_groups),
+                    )
+                )
+                for _ in range(attempts)
+            )
+        best: tuple[float, tuple[str, ...]] | None = None
+        for choice in choices:
+            assignment = dict(fixed_assignment)
+            assignment.update(zip(new_groups, choice, strict=True))
+            score = _ratio_score(assignment, group_counts, candidate.target_ratios)
+            item = (score, tuple(choice))
+            if best is None or item < best:
+                best = item
+        assert best is not None
+        fixed_assignment.update(zip(new_groups, best[1], strict=True))
+
+    raw = {
+        "schema_version": "leakage_safe_incremental_plan_v1",
+        "dataset_id": candidate.raw.get("dataset_id", ""),
+        "split_policy": {
+            "strategy": "stable_existing_groups_incremental_balanced",
+            "target_sample_ratios": candidate.target_ratios,
+            "source_groups": {
+                split: sorted(
+                    group for group, value in fixed_assignment.items() if value == split
+                )
+                for split in SPLITS
+            },
+            "leakage": {
+                "source_group_overlap_count": 0,
+                "image_sha256_overlap_count": 0,
+            },
+            "incremental_plan": {
+                "baseline_manifest": str(baseline.path),
+                "baseline_manifest_sha256": sha256_file(baseline.path),
+                "candidate_manifest": str(candidate.path),
+                "candidate_manifest_sha256": sha256_file(candidate.path),
+                "existing_source_group_count": len(baseline.assignment),
+                "new_source_groups": {
+                    split: sorted(
+                        group for group in new_groups if fixed_assignment[group] == split
+                    )
+                    for split in SPLITS
+                },
+                "seed": seed,
+                "attempts": attempts,
+            },
+        },
+        "records": [
+            {
+                "source_group": record["source_group"],
+                "split": fixed_assignment[record["source_group"]],
+                "image_sha256": image_hash,
+            }
+            for image_hash, record in sorted(candidate.records_by_hash.items())
+        ],
+    }
+    return raw, fixed_assignment
+
+
 def verify_manifests(
     baseline: ManifestView,
     rebuilt: ManifestView,
@@ -174,16 +287,22 @@ def verify_manifests(
 
     missing_hashes: list[str] = []
     moved_hashes: list[str] = []
+    regrouped_hashes: list[str] = []
     for image_hash, old_record in baseline.records_by_hash.items():
         new_record = rebuilt.records_by_hash.get(image_hash)
         if new_record is None:
             missing_hashes.append(image_hash)
-        elif new_record["split"] != old_record["split"]:
-            moved_hashes.append(image_hash)
+        else:
+            if new_record["split"] != old_record["split"]:
+                moved_hashes.append(image_hash)
+            if new_record["source_group"] != old_record["source_group"]:
+                regrouped_hashes.append(image_hash)
     if missing_hashes:
         errors.append(f"{len(missing_hashes)} existing image hashes are missing")
     if moved_hashes:
         errors.append(f"{len(moved_hashes)} existing image hashes changed split")
+    if regrouped_hashes:
+        errors.append(f"{len(regrouped_hashes)} existing image hashes changed source group")
 
     new_groups = sorted(set(rebuilt.assignment) - set(baseline.assignment))
     new_groups_by_split = {
@@ -253,6 +372,7 @@ def verify_manifests(
             "missing_existing_groups": missing_groups,
             "missing_existing_hash_count": len(missing_hashes),
             "moved_existing_hash_count": len(moved_hashes),
+            "regrouped_existing_hash_count": len(regrouped_hashes),
             "new_groups_by_split": new_groups_by_split,
             "new_image_count_by_split": {
                 split: len(values) for split, values in new_hashes_by_split.items()
@@ -324,6 +444,42 @@ def run_verify(args: argparse.Namespace) -> int:
         )
     except ContractError as exc:
         result = {"ok": False, "mode": args.mode, "errors": [str(exc)]}
+    if args.report:
+        report_path = Path(args.report).resolve()
+        result["report"] = str(report_path)
+        _write_json(report_path, result)
+    _print(result)
+    return 0 if result["ok"] else 4
+
+
+def run_plan(args: argparse.Namespace) -> int:
+    try:
+        baseline = load_manifest(args.baseline)
+        candidate = load_manifest(args.candidate)
+        output_path = Path(args.output).resolve()
+        if output_path in {baseline.path, candidate.path}:
+            raise ContractError("plan output must differ from baseline and candidate manifests")
+        raw, _ = build_incremental_plan(
+            baseline,
+            candidate,
+            seed=args.seed,
+            attempts=args.attempts,
+        )
+        planned = _manifest_view(output_path, raw)
+        result = verify_manifests(
+            baseline,
+            planned,
+            mode="append-isolated",
+            max_ratio_deviation=args.max_ratio_deviation,
+        )
+        result["candidate_manifest"] = str(candidate.path)
+        result["candidate_manifest_sha256"] = sha256_file(candidate.path)
+        if result["ok"]:
+            _write_json(output_path, raw)
+            result["plan_manifest"] = str(output_path)
+            result["plan_manifest_sha256"] = sha256_file(output_path)
+    except ContractError as exc:
+        result = {"ok": False, "mode": "append-isolated", "errors": [str(exc)]}
     if args.report:
         report_path = Path(args.report).resolve()
         result["report"] = str(report_path)
@@ -413,6 +569,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
 
+    plan = subparsers.add_parser(
+        "plan",
+        help="Preserve old assignments and balance new source groups from a candidate manifest.",
+    )
+    plan.add_argument("--baseline", required=True)
+    plan.add_argument("--candidate", required=True)
+    plan.add_argument("--output", required=True)
+    plan.add_argument("--seed", type=int, default=42)
+    plan.add_argument("--attempts", type=int, default=10000)
+    plan.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    plan.add_argument("--report", default="")
+    plan.set_defaults(handler=run_plan)
+
     verify = subparsers.add_parser("verify", help="Compare an existing baseline and rebuild.")
     verify.add_argument("--baseline", required=True)
     verify.add_argument("--rebuilt", required=True)
@@ -440,6 +609,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if not 0.0 <= float(args.max_ratio_deviation) <= 1.0:
         print("max-ratio-deviation must be between 0 and 1", file=sys.stderr)
+        return 2
+    if hasattr(args, "attempts") and args.attempts < 1:
+        print("attempts must be positive", file=sys.stderr)
         return 2
     return int(args.handler(args))
 

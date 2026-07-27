@@ -60,12 +60,12 @@ class LeakageSafeRebuildTests(unittest.TestCase):
             max_ratio_deviation=1.0,
         )
 
-    def test_append_isolated_allows_new_evaluation_group(self) -> None:
+    def test_append_isolated_allows_new_groups_in_every_split(self) -> None:
         value = manifest(
             {
                 "train": ["train-a", "train-b"],
                 "val": ["val-a", "val-b"],
-                "test": ["test-a"],
+                "test": ["test-a", "test-b"],
             },
             [
                 ("train-a", "train", 1),
@@ -73,11 +73,16 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                 ("test-a", "test", 3),
                 ("train-b", "train", 4),
                 ("val-b", "val", 5),
+                ("test-b", "test", 6),
             ],
         )
         result = self.verify(value)
         self.assertTrue(result["ok"])
         self.assertTrue(result["lineage"]["evaluation_expanded"])
+        self.assertEqual(
+            result["lineage"]["new_image_count_by_split"],
+            {"train": 1, "val": 1, "test": 1},
+        )
 
     def test_strict_eval_rejects_new_evaluation_group(self) -> None:
         value = manifest(
@@ -101,6 +106,15 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         result = self.verify(value)
         self.assertFalse(result["ok"])
         self.assertTrue(result["lineage"]["moved_existing_groups"])
+
+    def test_rejects_existing_image_source_group_change(self) -> None:
+        value = manifest(
+            {"train": ["train-a"], "val": ["val-a"], "test": ["test-a"]},
+            [("val-a", "val", 1), ("val-a", "val", 2), ("test-a", "test", 3)],
+        )
+        result = self.verify(value)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["lineage"]["regrouped_existing_hash_count"], 1)
 
     def test_rejects_missing_old_image(self) -> None:
         value = manifest(
@@ -170,6 +184,53 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         saved_report = json.loads(report.read_text(encoding="utf-8"))
         self.assertTrue(saved_report["ok"])
         self.assertEqual(saved_report["lineage"]["new_image_count_by_split"]["train"], 1)
+
+    def test_plan_preserves_old_splits_and_balances_new_groups(self) -> None:
+        candidate_value = manifest(
+            {
+                "train": ["val-a", "new-a", "new-b", "new-c"],
+                "val": ["train-a"],
+                "test": ["test-a"],
+            },
+            [
+                ("train-a", "val", 1),
+                ("val-a", "train", 2),
+                ("test-a", "test", 3),
+                ("new-a", "train", 4),
+                ("new-b", "train", 5),
+                ("new-c", "train", 6),
+            ],
+        )
+        candidate_value["split_policy"]["target_sample_ratios"] = {
+            "train": 1 / 3,
+            "val": 1 / 3,
+            "test": 1 / 3,
+        }
+        candidate = self.write("candidate.json", candidate_value)
+        output = self.root / "plan.json"
+        exit_code = main(
+            [
+                "plan",
+                "--baseline",
+                str(self.baseline),
+                "--candidate",
+                str(candidate),
+                "--output",
+                str(output),
+                "--max-ratio-deviation",
+                "1",
+            ]
+        )
+        self.assertEqual(exit_code, 0)
+        planned = load_manifest(output)
+        self.assertEqual(
+            {group: planned.assignment[group] for group in self.baseline_value["split_policy"]["source_groups"]["train"]},
+            {"train-a": "train"},
+        )
+        self.assertEqual(planned.assignment["val-a"], "val")
+        self.assertEqual(planned.assignment["test-a"], "test")
+        new_splits = [planned.assignment[group] for group in ("new-a", "new-b", "new-c")]
+        self.assertCountEqual(new_splits, ["train", "val", "test"])
 
 
 if __name__ == "__main__":

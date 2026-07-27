@@ -1,6 +1,6 @@
 ---
 name: rebuild-leakage-safe-dataset
-description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage. Use when adding annotations to an existing train/val/test dataset, preserving old assignments while allowing isolated new groups to be distributed reasonably, strictly freezing evaluation content when required, auditing a rebuilt JSON manifest, or creating split-lineage evidence before training.
+description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage. Use when adding annotations to an existing train/val/test dataset, keeping existing split membership stable while distributing isolated incremental groups across splits, optionally freezing evaluation content for strict metric comparability, auditing a rebuilt JSON manifest, or creating split-lineage evidence before training.
 ---
 
 # Rebuild Leakage-Safe Dataset
@@ -11,12 +11,13 @@ command. Never import or patch the host training modules from this skill.
 
 ## Choose The Policy
 
-- Use `append-isolated` by default. Existing source groups and image hashes
-  must remain in their original split. New complete source groups may enter
-  `train`, `val`, or `test`; the report records any evaluation expansion.
-- Use `strict-eval` when metrics must remain directly comparable. It adds the
-  requirement that no new image may enter `val` or `test`; new groups must be
-  train-only.
+- Use `append-isolated` by default. This does not freeze evaluation-set
+  contents. Keep every existing source group and image hash in its original
+  split, then allocate each new complete source group to `train`, `val`, or
+  `test` according to the target ratios. Record evaluation expansion.
+- Use `strict-eval` only when metrics must remain directly comparable to the
+  old evaluation protocol. It additionally requires all new groups to be
+  train-only, so no new image enters `val` or `test`.
 
 Both policies reject missing or moved old samples, source-group overlap,
 duplicate image hashes, split disagreement between records and assignments,
@@ -36,9 +37,41 @@ dataset output directory so a clearing rebuild cannot delete it.
 
 ## Preflight
 
-Use the project virtual environment. Pass the builder after `--`; the wrapper
-uses `subprocess` without a shell. Include the literal `{baseline_manifest}`
-token wherever the builder accepts its split-lineage input.
+Use the project virtual environment. Keep discovery output and lineage files
+outside the active dataset directory.
+
+First ask the external builder to create a temporary candidate manifest from
+all currently approved annotations. This discovery build may use a fresh split
+because it never replaces the active dataset:
+
+```powershell
+& '.\.venv\Scripts\python.exe' 'prepare_training_v2.py' `
+  --output-dir 'tmp\incremental-discovery' --clear --resplit
+```
+
+Create a stable incremental plan. The plan ignores candidate assignments for
+old groups, restores their baseline membership, and optimizes only new atomic
+groups for the final sample-count ratios:
+
+```powershell
+& '.\.venv\Scripts\python.exe' `
+  'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py' plan `
+  --baseline 'datasets\yoyo_dataset\manifest.json' `
+  --candidate 'tmp\incremental-discovery\manifest.json' `
+  --output 'annotations\lineage\incremental-plan.json' `
+  --report 'annotations\lineage\plan-report.json'
+```
+
+Treat a failed ratio or lineage check as a hard gate. Inspect
+`new_groups_by_split` before rebuilding.
+
+## Rebuild
+
+Pass the builder after `--`; the wrapper uses `subprocess` without a shell.
+Give the completed plan to any builder that accepts a source-group assignment
+manifest. This project's adapter calls that input `--freeze-splits-from`; all
+new groups are already assigned in the plan, so the builder does not force
+them into `train`.
 
 ```powershell
 & '.\.venv\Scripts\python.exe' `
@@ -46,13 +79,16 @@ token wherever the builder accepts its split-lineage input.
   --manifest 'datasets\yoyo_dataset\manifest.json' `
   --snapshot-out 'annotations\lineage\dataset-before.json' `
   --report 'annotations\lineage\rebuild-report.json' `
-  --mode append-isolated --dry-run -- `
+  --mode append-isolated --allow-command-without-baseline --dry-run -- `
   '.\.venv\Scripts\python.exe' 'prepare_training_v2.py' --clear `
-  --freeze-splits-from '{baseline_manifest}'
+  --freeze-splits-from 'annotations\lineage\incremental-plan.json'
 ```
 
 Inspect the resolved paths and command printed by dry-run. Then repeat without
-`--dry-run`. Do not use a builder's fresh-resplit option in the same command.
+`--dry-run`. Do not use a builder's fresh-resplit option in this active rebuild.
+
+For `strict-eval`, skip `plan`, use the literal `{baseline_manifest}` token as
+the builder's assignment input, and omit `--allow-command-without-baseline`.
 
 ## Verify An Existing Rebuild
 
