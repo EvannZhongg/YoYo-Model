@@ -10,6 +10,7 @@ from workbench.score_annotation import (
     ANCHOR_SOURCES,
     EXCLUSION_REASONS,
     MAJOR_PENALTIES,
+    SCENE_TYPES,
     SCHEMA_VERSION,
     delete_score_annotation,
     list_score_annotations,
@@ -48,11 +49,15 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("Evidence interval", html)
         self.assertIn("动作名称", html)
         self.assertIn("记录起点", html)
-        self.assertEqual(html.count('class="ysa__track-row'), 4)
+        self.assertEqual(html.count('class="ysa__track-row'), 5)
         self.assertIn('data-track="positive"', html)
         self.assertIn('data-track="negative"', html)
         self.assertIn('data-track="major_penalty"', html)
+        self.assertIn('data-track="scene"', html)
         self.assertIn('data-track="excluded"', html)
+        self.assertIn("无关场景", html)
+        self.assertIn("选手入/离场", html)
+        self.assertIn("标记场景起点", html)
         self.assertIn("不可标记原因", html)
         self.assertIn("标记不可用起点", html)
         self.assertIn("annotations/score_annotations", html)
@@ -67,6 +72,8 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("beginPlayheadDrag", javascript)
         self.assertIn("beginTrackDraft", javascript)
         self.assertIn("beginExclusionDrag", javascript)
+        self.assertIn("beginSceneDrag", javascript)
+        self.assertIn("scene_intervals", javascript)
         self.assertIn("training_eligible:false", javascript)
         self.assertIn("frames_overlapping_excluded_intervals_are_ineligible", javascript)
         self.assertIn("与不可标记片段重叠", javascript)
@@ -101,6 +108,12 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             },
             "competition": {"division": "2A"},
             "annotator": {"judge": "judge2"},
+            "scene_intervals": [{
+                "scene_interval_id": "scene-1",
+                "start_s": 0.0,
+                "end_s": 2.5,
+                "scene_type": "irrelevant_scene",
+            }],
             "events": [],
             "excluded_intervals": [{
                 "exclusion_id": "excluded-1",
@@ -124,6 +137,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
 
             self.assertEqual(saved["storage_key"], updated["storage_key"])
             self.assertEqual(loaded["document"]["revision"], 2)
+            self.assertEqual(loaded["document"]["scene_intervals"][0]["scene_type"], "irrelevant_scene")
             self.assertFalse(loaded["document"]["excluded_intervals"][0]["training_eligible"])
             self.assertEqual(len(listed), 1)
             self.assertTrue(Path(updated["path"]).is_file())
@@ -153,6 +167,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
                 },
                 "competition": {"division": "1A"},
                 "annotator": {"judge": "judge1"},
+                "scene_intervals": [],
                 "events": [],
                 "excluded_intervals": [],
             }
@@ -178,6 +193,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "video": {},
             "competition": {"division": "1A"},
             "annotator": {"judge": "judge1"},
+            "scene_intervals": [],
             "events": [],
         }
         with self.assertRaisesRegex(ValueError, "video.source_path is required"):
@@ -192,6 +208,12 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "1A"},
             "annotator": {"judge": "judge1"},
+            "scene_intervals": [{
+                "scene_interval_id": "scene-1",
+                "start_s": 0.0,
+                "end_s": 1.0,
+                "scene_type": "player_entry_exit",
+            }],
             "events": [
                 {
                     "label": {"family": "positive", "score_delta": 7},
@@ -208,6 +230,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(MAJOR_PENALTIES["restart"]["score_delta"], -1)
         self.assertEqual(MAJOR_PENALTIES["discard"]["score_delta"], -3)
         self.assertEqual(ANCHOR_SOURCES, ("evidence_end_default", "manual"))
+        self.assertEqual(SCENE_TYPES, ("irrelevant_scene", "player_entry_exit"))
         self.assertEqual(EXCLUSION_REASONS, ("defocus", "occlusion", "corrupted_frames", "other"))
 
     def test_score_annotation_schema_validates_training_exclusions(self):
@@ -216,6 +239,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "1A"},
             "annotator": {"judge": "judge1"},
+            "scene_intervals": [],
             "events": [],
             "excluded_intervals": [{
                 "exclusion_id": "excluded-1",
@@ -235,12 +259,38 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "start_s < end_s"):
             validate_score_annotation(document)
 
+    def test_score_annotation_schema_validates_scene_intervals(self):
+        document = {
+            "schema_version": SCHEMA_VERSION,
+            "video": {"source_path": "videos/contest.mp4"},
+            "competition": {"division": "1A"},
+            "annotator": {"judge": "judge1"},
+            "events": [],
+            "scene_intervals": [{
+                "scene_interval_id": "scene-1",
+                "start_s": 1.0,
+                "end_s": 2.0,
+                "scene_type": "player_entry_exit",
+            }],
+            "excluded_intervals": [],
+        }
+
+        validate_score_annotation(document)
+        document["scene_intervals"][0]["scene_type"] = "sponsor_page"
+        with self.assertRaisesRegex(ValueError, "scene_type"):
+            validate_score_annotation(document)
+        document["scene_intervals"][0]["scene_type"] = "irrelevant_scene"
+        document["scene_intervals"][0]["end_s"] = 1.0
+        with self.assertRaisesRegex(ValueError, "start_s < end_s"):
+            validate_score_annotation(document)
+
     def test_score_annotation_schema_rejects_anchor_outside_evidence(self):
         document = {
             "schema_version": SCHEMA_VERSION,
             "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "5A"},
             "annotator": {"judge": "judge1"},
+            "scene_intervals": [],
             "events": [{
                 "label": {"family": "negative", "score_delta": -2},
                 "timing": {"evidence_start_s": 3.0, "anchor_s": 2.0, "evidence_end_s": 4.0},
@@ -256,6 +306,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "video": {"source_path": "videos/contest.mp4"},
             "competition": {"division": "1A"},
             "annotator": {"judge": "judge1"},
+            "scene_intervals": [],
             "events": [{
                 "label": {"family": "positive", "score_delta": 2},
                 "timing": {

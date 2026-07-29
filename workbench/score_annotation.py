@@ -16,7 +16,7 @@ import gradio as gr
 from config import BASE_DIR
 
 
-SCHEMA_VERSION = "yoyo_score_annotation_v1"
+SCHEMA_VERSION = "yoyo_score_annotation_v2"
 DIVISIONS = ("1A", "2A", "3A", "4A", "5A")
 MAJOR_PENALTIES = {
     "restart": {"display_name": "重启", "score_delta": -1},
@@ -25,6 +25,7 @@ MAJOR_PENALTIES = {
 }
 ANCHOR_SOURCES = ("evidence_end_default", "manual")
 EXCLUSION_REASONS = ("defocus", "occlusion", "corrupted_frames", "other")
+SCENE_TYPES = ("irrelevant_scene", "player_entry_exit")
 SCORE_ANNOTATION_DIR = BASE_DIR / "annotations" / "score_annotations"
 SCORE_VIDEO_DIRS = (BASE_DIR / "videos",)
 _STORAGE_LOCK = threading.Lock()
@@ -89,6 +90,21 @@ def validate_score_annotation(document: dict[str, Any]) -> None:
             raise ValueError(f"excluded_intervals[{index}].reason is invalid")
         if interval.get("training_eligible") is not False:
             raise ValueError(f"excluded_intervals[{index}].training_eligible must be false")
+
+    scene_intervals = document.get("scene_intervals")
+    if not isinstance(scene_intervals, list):
+        raise ValueError("scene_intervals must be a list")
+    for index, interval in enumerate(scene_intervals):
+        if not isinstance(interval, dict):
+            raise ValueError(f"scene_intervals[{index}] must be an object")
+        start = interval.get("start_s")
+        end = interval.get("end_s")
+        if not all(isinstance(value, (int, float)) for value in (start, end)):
+            raise ValueError(f"scene_intervals[{index}] timing values must be numeric")
+        if start < 0 or start >= end:
+            raise ValueError(f"scene_intervals[{index}] must satisfy 0 <= start_s < end_s")
+        if interval.get("scene_type") not in SCENE_TYPES:
+            raise ValueError(f"scene_intervals[{index}].scene_type is invalid")
 
 
 def _storage_identity(browser_identity: str) -> str:
@@ -344,10 +360,17 @@ SCORE_ANNOTATION_HTML = r"""
     </aside>
   </main>
 
-  <section class="ysa__timeline-panel" aria-label="计分与不可标记区间时间轴">
+  <section class="ysa__timeline-panel" aria-label="计分、场景与不可标记区间时间轴">
     <div class="ysa__timeline-heading">
       <h3>分轨时间轴</h3>
       <div class="ysa__timeline-tools">
+        <label>场景标签
+          <select id="ysa-scene-type" title="无关场景包含广告、赞助商页等无需细分的内容" disabled>
+            <option value="irrelevant_scene">无关场景</option>
+            <option value="player_entry_exit">选手入/离场</option>
+          </select>
+        </label>
+        <button type="button" class="ysa__button ysa__button--scene" id="ysa-scene-toggle" disabled>标记场景起点</button>
         <label>不可标记原因
           <select id="ysa-exclusion-reason" disabled>
             <option value="defocus">画面虚焦</option>
@@ -369,6 +392,7 @@ SCORE_ANNOTATION_HTML = r"""
         <div class="ysa__track-row" data-family="positive"><span class="ysa__track-label">正向计分</span><div class="ysa__track-lane" data-track="positive" role="group" aria-label="正向计分轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row" data-family="negative"><span class="ysa__track-label">负向计分</span><div class="ysa__track-lane" data-track="negative" role="group" aria-label="负向计分轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row" data-family="major_penalty"><span class="ysa__track-label">重点扣分</span><div class="ysa__track-lane" data-track="major_penalty" role="group" aria-label="重点扣分轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
+        <div class="ysa__track-row ysa__track-row--scene" data-family="scene"><span class="ysa__track-label">场景标注</span><div class="ysa__track-lane" data-track="scene" role="group" aria-label="无关场景与选手入离场标注轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row ysa__track-row--excluded" data-family="excluded"><span class="ysa__track-label">不可标记</span><div class="ysa__track-lane" data-track="excluded" role="group" aria-label="不可标记区间轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
       </div>
     </div>
@@ -469,6 +493,9 @@ SCORE_ANNOTATION_CSS = r"""
 .ysa__button--exclude { border-color:#b9a9d5; color:#60458b; }
 .ysa__button--exclude.is-recording { background:#60458b; border-color:#60458b; color:#fff; }
 .ysa__button--exclude.is-selected { border-color:var(--danger); color:var(--danger); }
+.ysa__button--scene { border-color:#83b9c2; color:#276b76; }
+.ysa__button--scene.is-recording { background:#276b76; border-color:#276b76; color:#fff; }
+.ysa__button--scene.is-selected { border-color:var(--danger); color:var(--danger); }
 .ysa__timeline-scroll { background:#292d2a; border:1px solid #3c423d; overflow-x:auto; overscroll-behavior-x:contain; }
 .ysa__timeline-content { min-width:100%; width:100%; }
 .ysa__ruler,.ysa__track-row { display:grid; grid-template-columns:96px minmax(0,1fr); min-width:0; }
@@ -486,11 +513,15 @@ SCORE_ANNOTATION_CSS = r"""
 .ysa__clip { align-items:center; background:#287c65; border:1px solid #60aa93; border-radius:3px; bottom:7px; color:#fff; cursor:grab; display:flex; font-size:10px; font-weight:700; min-width:8px; overflow:visible; padding:0 7px; position:absolute; text-overflow:ellipsis; top:7px; touch-action:none; white-space:nowrap; z-index:3; }
 .ysa__clip[data-family="negative"] { background:#a84a4a; border-color:#d28585; }
 .ysa__clip[data-family="major_penalty"] { background:#8b5d29; border-color:#c49459; }
+.ysa__clip[data-family="scene"] { background:#276b76; border-color:#78b5bf; }
 .ysa__clip[data-family="excluded"] { background:#60458b; border-color:#a991cf; }
 .ysa__clip[data-family="excluded"]::before { background:repeating-linear-gradient(135deg,rgba(255,255,255,.16) 0,rgba(255,255,255,.16) 4px,transparent 4px,transparent 8px); content:""; inset:0; pointer-events:none; position:absolute; }
 .ysa__track-row--excluded .ysa__track-label { color:#e7def5; }
 .ysa__track-row--excluded .ysa__track-lane { background-color:#302c35; }
 .ysa__track-row--excluded .ysa__track-lane:hover { background-color:#37313e; }
+.ysa__track-row--scene .ysa__track-label { color:#d9f0f3; }
+.ysa__track-row--scene .ysa__track-lane { background-color:#293437; }
+.ysa__track-row--scene .ysa__track-lane:hover { background-color:#2d3b3e; }
 .ysa__clip.is-selected { box-shadow:0 0 0 2px #f2c56e; z-index:5; }
 .ysa__clip-anchor { background:transparent; bottom:-3px; cursor:col-resize; position:absolute; top:-3px; transform:translateX(-50%); width:15px; z-index:6; }
 .ysa__clip-anchor::before { background:#ffe4a6; bottom:0; box-shadow:0 0 0 1px rgba(50,40,20,.32); content:""; left:6px; position:absolute; top:0; transition:background .12s ease,box-shadow .12s ease; width:3px; }
@@ -595,6 +626,7 @@ const fields = $("#ysa-event-fields");
 const familyButtons = [...element.querySelectorAll("#ysa-family button")];
 const penalties = {restart:{name:"重启",delta:-1},discard:{name:"弃用",delta:-3},disassembly:{name:"解体",delta:-5}};
 const exclusionReasons = {defocus:"画面虚焦",occlusion:"主体遮挡",corrupted_frames:"画面损坏",other:"其他"};
+const sceneTypes = {irrelevant_scene:"无关场景",player_entry_exit:"选手入/离场"};
 let objectUrl = null;
 let currentDocument = null;
 let currentStorageKey = null;
@@ -606,6 +638,8 @@ let pendingEventStart = null;
 let pendingEventAnchor = null;
 let pendingExclusionStart = null;
 let selectedExclusionId = null;
+let pendingSceneStart = null;
+let selectedSceneId = null;
 let editorDirty = false;
 let toastTimer = null;
 let saveQueue = Promise.resolve();
@@ -647,7 +681,6 @@ const intervalsOverlap = (startA, endA, startB, endB) => startA === endA ? start
 const overlappingExclusion = (start, end, ignoredId = null) => (currentDocument?.excluded_intervals || []).find(interval => interval.exclusion_id !== ignoredId && intervalsOverlap(start, end, interval.start_s, interval.end_s));
 
 function normalizeDocument(document) {
-  if (!Array.isArray(document.excluded_intervals)) document.excluded_intervals = [];
   document.training_data_policy = {
     ...(document.training_data_policy || {}),
     excluded_intervals_field:"excluded_intervals",
@@ -659,7 +692,7 @@ function normalizeDocument(document) {
 function blankDocument(file, sourcePath) {
   const timestamp = nowIso();
   return {
-    schema_version:"yoyo_score_annotation_v1",
+    schema_version:"yoyo_score_annotation_v2",
     annotation_id:uid(),
     revision:0,
     video:{
@@ -673,7 +706,7 @@ function blankDocument(file, sourcePath) {
     annotator:{judge:(judge.value || "judge1").trim() || "judge1"},
     timing_basis:{unit:"seconds", fps_assumption:fps(), frame_index_rounding:"nearest"},
     training_data_policy:{excluded_intervals_field:"excluded_intervals", rule:"frames_overlapping_excluded_intervals_are_ineligible"},
-    events:[], excluded_intervals:[], created_at:timestamp, updated_at:timestamp
+    events:[], scene_intervals:[], excluded_intervals:[], created_at:timestamp, updated_at:timestamp
   };
 }
 
@@ -721,7 +754,7 @@ function persist(message) {
 
 async function flushCurrentSessionBeforeSwitch() {
   if (!currentDocument) return true;
-  if (pendingEventStart !== null || pendingExclusionStart !== null) {
+  if (pendingEventStart !== null || pendingExclusionStart !== null || pendingSceneStart !== null) {
     $("#ysa-validation").textContent = "请先结束当前区间标记，再切换视频。";
     toast("当前区间尚未完成，未切换视频");
     return false;
@@ -762,10 +795,10 @@ function closeActiveSession() {
   video.pause(); video.removeAttribute("src"); video.load(); video.classList.remove("is-ready");
   $("#ysa-empty").hidden = false;
   currentDocument = null; currentStorageKey = null; currentStoragePath = null;
-  selectedEventId = null; pendingEventStart = null; pendingEventAnchor = null; pendingExclusionStart = null; selectedExclusionId = null; editorDirty = false;
+  selectedEventId = null; pendingEventStart = null; pendingEventAnchor = null; pendingExclusionStart = null; selectedExclusionId = null; pendingSceneStart = null; selectedSceneId = null; editorDirty = false;
   videoFile.value = "";
   fields.disabled = true;
-  ["#ysa-prev","#ysa-next","#ysa-zoom","#ysa-timeline-zoom","#ysa-new","#ysa-export","#ysa-exclusion-toggle","#ysa-exclusion-reason"].forEach(selector => $(selector).disabled = true);
+  ["#ysa-prev","#ysa-next","#ysa-zoom","#ysa-timeline-zoom","#ysa-new","#ysa-export","#ysa-exclusion-toggle","#ysa-exclusion-reason","#ysa-scene-toggle","#ysa-scene-type"].forEach(selector => $(selector).disabled = true);
   $("#ysa-video-identity").textContent = "尚未选择视频";
   $("#ysa-session-state").textContent = "选择本地视频开始新的标注会话";
   clearEditor(false); renderEvents(); updateTimecode();
@@ -855,6 +888,7 @@ function setFamily(family) {
 function clearEditor(render = true) {
   selectedEventId = null;
   selectedExclusionId = null;
+  selectedSceneId = null;
   pendingEventStart = null;
   pendingEventAnchor = null;
   editorDirty = false;
@@ -867,11 +901,13 @@ function clearEditor(render = true) {
   $("#ysa-anchor").value = t; $("#ysa-start").value = t; $("#ysa-end").value = t;
   $("#ysa-validation").textContent = "";
   updateExclusionControls();
+  updateSceneControls();
   if (render) renderEvents();
 }
 
 function populateEditor(event) {
   selectedExclusionId = null;
+  selectedSceneId = null;
   pendingEventStart = null;
   pendingEventAnchor = null;
   editorDirty = false;
@@ -886,6 +922,7 @@ function populateEditor(event) {
   $("#ysa-save").hidden = true;
   $("#ysa-delete").hidden = false;
   updateExclusionControls();
+  updateSceneControls();
 }
 
 function loadEvent(id, seekToAnchor = true) {
@@ -935,10 +972,11 @@ function buildExclusion(start, end, existing = null) {
 
 function updateExclusionControls() {
   const button = $("#ysa-exclusion-toggle");
+  button.disabled = !currentDocument || pendingSceneStart !== null;
   button.classList.toggle("is-recording", pendingExclusionStart !== null);
   button.classList.toggle("is-selected", selectedExclusionId !== null && pendingExclusionStart === null);
   button.textContent = pendingExclusionStart !== null ? "结束并标记不可用" : selectedExclusionId !== null ? "删除所选不可用区间" : "标记不可用起点";
-  $("#ysa-exclusion-reason").disabled = !currentDocument || pendingExclusionStart !== null || selectedExclusionId !== null;
+  $("#ysa-exclusion-reason").disabled = !currentDocument || pendingExclusionStart !== null || selectedExclusionId !== null || pendingSceneStart !== null;
 }
 
 function selectExclusion(id, seek = true) {
@@ -958,7 +996,55 @@ function addExclusion(start, end, message = "不可标记区间已添加") {
   currentDocument.excluded_intervals.push(interval);
   pendingExclusionStart = null;
   selectedExclusionId = interval.exclusion_id;
-  updateExclusionControls();
+  updateExclusionControls(); updateSceneControls();
+  persist(message); renderEvents();
+  return interval;
+}
+
+function buildSceneInterval(start, end, existing = null) {
+  start = snapToFrame(start); end = snapToFrame(end);
+  if (start > end) [start, end] = [end, start];
+  if (end - start < 1 / fps() - .0005) {
+    toast("场景区间至少需要一帧");
+    return null;
+  }
+  const timestamp = nowIso();
+  return {
+    scene_interval_id:existing?.scene_interval_id || uid(),
+    start_s:roundTime(start), end_s:roundTime(end),
+    start_frame_index:frameAt(start), end_frame_index:frameAt(end),
+    fps_assumption:fps(), scene_type:existing?.scene_type || $("#ysa-scene-type").value,
+    created_at:existing?.created_at || timestamp, updated_at:timestamp
+  };
+}
+
+function updateSceneControls() {
+  const button = $("#ysa-scene-toggle");
+  button.disabled = !currentDocument || pendingExclusionStart !== null;
+  button.classList.toggle("is-recording", pendingSceneStart !== null);
+  button.classList.toggle("is-selected", selectedSceneId !== null && pendingSceneStart === null);
+  button.textContent = pendingSceneStart !== null ? "结束并标记场景" : selectedSceneId !== null ? "删除所选场景区间" : "标记场景起点";
+  $("#ysa-scene-type").disabled = !currentDocument || pendingSceneStart !== null || selectedSceneId !== null || pendingExclusionStart !== null;
+}
+
+function selectSceneInterval(id, seek = true) {
+  if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
+  clearEditor(false);
+  selectedSceneId = id;
+  const interval = currentDocument?.scene_intervals.find(item => item.scene_interval_id === id);
+  if (!interval) { selectedSceneId = null; updateSceneControls(); return; }
+  $("#ysa-scene-type").value = interval.scene_type;
+  if (seek) video.currentTime = interval.start_s;
+  updateSceneControls(); renderEvents();
+}
+
+function addSceneInterval(start, end, message = "场景区间已添加") {
+  const interval = buildSceneInterval(start, end);
+  if (!interval) return null;
+  currentDocument.scene_intervals.push(interval);
+  pendingSceneStart = null;
+  selectedSceneId = interval.scene_interval_id;
+  updateSceneControls(); updateExclusionControls();
   persist(message); renderEvents();
   return interval;
 }
@@ -1098,6 +1184,19 @@ function renderTimeline() {
     clip.addEventListener("pointerdown", pointerEvent => beginExclusionDrag(pointerEvent, interval, clip));
     lane.append(clip);
   });
+  (currentDocument?.scene_intervals || []).forEach(interval => {
+    const lane = element.querySelector('[data-track="scene"]');
+    if (!lane) return;
+    const clip = document.createElement("div");
+    clip.className = `ysa__clip${interval.scene_interval_id === selectedSceneId ? " is-selected" : ""}`;
+    clip.dataset.sceneIntervalId = interval.scene_interval_id;
+    clip.dataset.family = "scene";
+    clip.title = `${sceneTypes[interval.scene_type] || "场景"} · ${formatTime(interval.start_s)}–${formatTime(interval.end_s)}`;
+    clip.innerHTML = `<span>${escapeHtml(sceneTypes[interval.scene_type] || "场景")}</span><i class="ysa__clip-handle" data-handle="start"></i><i class="ysa__clip-handle" data-handle="end"></i>`;
+    updateExclusionGeometry(clip, interval, duration);
+    clip.addEventListener("pointerdown", pointerEvent => beginSceneDrag(pointerEvent, interval, clip));
+    lane.append(clip);
+  });
   updateTimecode();
 }
 
@@ -1125,9 +1224,9 @@ function beginExclusionDrag(pointerEvent, exclusion, clip) {
   const origin = {...exclusion};
   const startX = pointerEvent.clientX;
   let moved = false;
-  selectedExclusionId = exclusion.exclusion_id; selectedEventId = null;
+  selectedExclusionId = exclusion.exclusion_id; selectedEventId = null; selectedSceneId = null;
   $("#ysa-exclusion-reason").value = exclusion.reason;
-  updateExclusionControls();
+  updateExclusionControls(); updateSceneControls();
   element.querySelectorAll(".ysa__clip,#ysa-event-list tr").forEach(node => node.classList.toggle("is-selected", node.dataset.exclusionId === selectedExclusionId));
   clip.setPointerCapture(pointerEvent.pointerId);
   const onMove = moveEvent => {
@@ -1150,6 +1249,45 @@ function beginExclusionDrag(pointerEvent, exclusion, clip) {
     clip.removeEventListener("pointermove", onMove); clip.removeEventListener("pointerup", onUp); clip.removeEventListener("pointercancel", onUp);
     if (moved) { persist("不可标记区间已更新"); renderEvents(); }
     else selectExclusion(exclusion.exclusion_id, true);
+  };
+  clip.addEventListener("pointermove", onMove); clip.addEventListener("pointerup", onUp); clip.addEventListener("pointercancel", onUp);
+}
+
+function beginSceneDrag(pointerEvent, sceneInterval, clip) {
+  pointerEvent.preventDefault(); pointerEvent.stopPropagation();
+  if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
+  sceneInterval = currentDocument.scene_intervals.find(interval => interval.scene_interval_id === sceneInterval.scene_interval_id) || sceneInterval;
+  const mode = pointerEvent.target.dataset.handle || "move";
+  const lane = clip.parentElement;
+  const duration = mediaDuration();
+  const origin = {...sceneInterval};
+  const startX = pointerEvent.clientX;
+  let moved = false;
+  selectedSceneId = sceneInterval.scene_interval_id; selectedEventId = null; selectedExclusionId = null;
+  $("#ysa-scene-type").value = sceneInterval.scene_type;
+  updateSceneControls(); updateExclusionControls();
+  element.querySelectorAll(".ysa__clip,#ysa-event-list tr").forEach(node => node.classList.toggle("is-selected", node.dataset.sceneIntervalId === selectedSceneId));
+  clip.setPointerCapture(pointerEvent.pointerId);
+  const onMove = moveEvent => {
+    const delta = (moveEvent.clientX - startX) / lane.getBoundingClientRect().width * duration;
+    moved = moved || Math.abs(moveEvent.clientX - startX) >= 2;
+    let start = origin.start_s;
+    let end = origin.end_s;
+    if (mode === "move") {
+      const length = end - start;
+      const shift = clamp(delta, -start, duration - end);
+      start += shift; end = start + length;
+    } else if (mode === "start") start = clamp(start + delta, 0, end - 1 / fps());
+    else if (mode === "end") end = clamp(end + delta, start + 1 / fps(), duration);
+    const updated = buildSceneInterval(start, end, sceneInterval);
+    if (!updated) return;
+    Object.assign(sceneInterval, updated);
+    updateExclusionGeometry(clip, sceneInterval, duration);
+  };
+  const onUp = () => {
+    clip.removeEventListener("pointermove", onMove); clip.removeEventListener("pointerup", onUp); clip.removeEventListener("pointercancel", onUp);
+    if (moved) { persist("场景区间已更新"); renderEvents(); }
+    else selectSceneInterval(sceneInterval.scene_interval_id, true);
   };
   clip.addEventListener("pointermove", onMove); clip.addEventListener("pointerup", onUp); clip.addEventListener("pointercancel", onUp);
 }
@@ -1257,6 +1395,10 @@ function beginTrackDraft(pointerEvent) {
       addExclusion(start, end, "已从轨道添加不可标记区间");
       return;
     }
+    if (lane.dataset.track === "scene") {
+      addSceneInterval(start, end, "已从轨道添加场景区间");
+      return;
+    }
     setFamily(lane.dataset.track);
     if (lane.dataset.track === "positive") $("#ysa-score").value = "1";
     if (lane.dataset.track === "negative") $("#ysa-score").value = "-1";
@@ -1289,10 +1431,10 @@ function activateScoreSession(stored, videoSource, identityLabel) {
   fpsInput.value = currentDocument.timing_basis?.fps_assumption || 30;
   video.src = videoSource;
   video.classList.add("is-ready"); $("#ysa-empty").hidden = true;
-  fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false;
+  fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false;
   $("#ysa-video-identity").textContent = identityLabel;
   clearEditor();
-  $("#ysa-session-state").textContent = `已从 ${stored.path} 恢复 ${currentDocument.events.length} 个事件、${currentDocument.excluded_intervals.length} 个不可标记区间 · 修订 ${currentDocument.revision}`;
+  $("#ysa-session-state").textContent = `已从 ${stored.path} 恢复 ${currentDocument.events.length} 个事件、${currentDocument.scene_intervals.length} 个场景区间、${currentDocument.excluded_intervals.length} 个不可标记区间 · 修订 ${currentDocument.revision}`;
 }
 
 async function resumeManagedSession(session) {
@@ -1350,7 +1492,7 @@ async function openVideo(file) {
     division.value = currentDocument.competition.division; judge.value = currentDocument.annotator.judge;
     video.src = objectUrl;
     video.classList.add("is-ready"); $("#ysa-empty").hidden = true;
-    fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false;
+    fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false;
     $("#ysa-video-identity").textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
     clearEditor();
     $("#ysa-session-state").textContent = "新会话 · 将保存到 annotations/score_annotations";
@@ -1414,6 +1556,7 @@ $("#ysa-use-anchor").addEventListener("click", setAnchorFromCurrent);
 $("#ysa-new").addEventListener("click", () => {
   if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
   pendingExclusionStart = null;
+  pendingSceneStart = null;
   clearEditor();
 });
 $("#ysa-save").addEventListener("click", () => {
@@ -1452,11 +1595,30 @@ $("#ysa-exclusion-toggle").addEventListener("click", () => {
   const current = snapToFrame(video.currentTime || 0);
   if (pendingExclusionStart === null) {
     pendingExclusionStart = current;
-    updateExclusionControls();
+    updateExclusionControls(); updateSceneControls();
     toast("已记录不可标记区间起点");
     return;
   }
   addExclusion(pendingExclusionStart, current);
+});
+$("#ysa-scene-toggle").addEventListener("click", () => {
+  if (!currentDocument) return;
+  if (selectedSceneId !== null && pendingSceneStart === null) {
+    currentDocument.scene_intervals = currentDocument.scene_intervals.filter(interval => interval.scene_interval_id !== selectedSceneId);
+    selectedSceneId = null;
+    updateSceneControls(); persist("场景区间已删除"); renderEvents();
+    return;
+  }
+  if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
+  clearEditor(false);
+  const current = snapToFrame(video.currentTime || 0);
+  if (pendingSceneStart === null) {
+    pendingSceneStart = current;
+    updateSceneControls(); updateExclusionControls();
+    toast("已记录场景区间起点");
+    return;
+  }
+  addSceneInterval(pendingSceneStart, current);
 });
 $("#ysa-delete").addEventListener("click", () => {
   if (!selectedEventId) return;
@@ -1483,6 +1645,11 @@ element.addEventListener("click", clickEvent => {
       interval.start_frame_index = frameAt(interval.start_s);
       interval.end_frame_index = frameAt(interval.end_s);
     });
+    currentDocument.scene_intervals.forEach(interval => {
+      interval.fps_assumption = fps();
+      interval.start_frame_index = frameAt(interval.start_s);
+      interval.end_frame_index = frameAt(interval.end_s);
+    });
     persist("会话信息已更新"); renderEvents(); updateTimecode();
   }
 }));
@@ -1491,7 +1658,7 @@ metadataFile.addEventListener("change", async () => {
   const file = metadataFile.files[0]; if (!file) return;
   try {
     const incoming = JSON.parse(await file.text());
-    if (incoming.schema_version !== "yoyo_score_annotation_v1" || !Array.isArray(incoming.events)) throw new Error("schema");
+    if (incoming.schema_version !== "yoyo_score_annotation_v2" || !Array.isArray(incoming.events) || !Array.isArray(incoming.scene_intervals)) throw new Error("schema");
     if (!currentDocument) { toast("请先导入对应视频"); metadataFile.value = ""; return; }
     const sameVideo = incoming.video?.browser_identity === currentDocument.video.browser_identity || (incoming.video?.fingerprint?.value && incoming.video.fingerprint.value === currentDocument.video.fingerprint?.value);
     if (!sameVideo && !window.confirm("元数据的视频身份与当前视频不同，仍要载入吗？")) return;
@@ -1553,6 +1720,10 @@ def score_annotation_schema() -> str:
             "major_penalties": MAJOR_PENALTIES,
             "anchor_sources": list(ANCHOR_SOURCES),
             "timing": ["anchor_s", "anchor_source", "evidence_start_s", "evidence_end_s"],
+            "scene_intervals": {
+                "fields": ["start_s", "end_s", "scene_type"],
+                "scene_types": list(SCENE_TYPES),
+            },
             "excluded_intervals": {
                 "fields": ["start_s", "end_s", "reason", "training_eligible"],
                 "reasons": list(EXCLUSION_REASONS),

@@ -10,6 +10,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from typing import Any, Sequence
 SPLITS = ("train", "val", "test")
 MODES = ("append-isolated", "strict-eval")
 BASELINE_TOKEN = "{baseline_manifest}"
+PROTECTED_CANONICAL_TOKEN = "{protected_canonical}"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -413,6 +415,152 @@ def _snapshot_manifest(source: Path, destination: Path, overwrite: bool) -> None
     os.replace(temporary, destination)
 
 
+def _snapshot_file(source: Path, destination: Path) -> None:
+    if not source.is_file():
+        raise ContractError(f"snapshot source does not exist: {source}")
+    if destination.exists():
+        raise ContractError(f"snapshot already exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_bytes(source.read_bytes())
+    os.replace(temporary, destination)
+
+
+def _is_nested(path: Path, parent: Path) -> bool:
+    return path == parent or path.is_relative_to(parent)
+
+
+def _record_label_paths(
+    manifest: ManifestView,
+    dataset_root: Path,
+    recorded_dataset_root: Path,
+) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for index, raw_record in enumerate(manifest.raw["records"]):
+        image_hash = str(raw_record.get("image_sha256", "")).strip()
+        raw_label = str(raw_record.get("canonical_label", "")).strip()
+        if not raw_label:
+            raise ContractError(f"records[{index}] lacks canonical_label required for protected rebuild")
+        label_path = Path(raw_label)
+        if label_path.is_absolute():
+            try:
+                relative = label_path.resolve().relative_to(recorded_dataset_root)
+            except ValueError as exc:
+                raise ContractError(
+                    f"records[{index}].canonical_label is outside the active dataset: {label_path}"
+                ) from exc
+        else:
+            relative = label_path
+        resolved = (dataset_root / relative).resolve()
+        if not _is_nested(resolved, dataset_root):
+            raise ContractError(f"records[{index}].canonical_label escapes the dataset")
+        if not resolved.is_file():
+            raise ContractError(f"canonical label does not exist: {resolved}")
+        result[image_hash] = resolved
+    return result
+
+
+def _stable_label_value(path: Path) -> dict[str, Any]:
+    value = _read_json(path)
+    return {key: item for key, item in value.items() if key != "dataset_management"}
+
+
+def _label_key(path: Path, dataset_root: Path) -> str:
+    labels_root = (dataset_root / "canonical" / "labels").resolve()
+    try:
+        return path.resolve().relative_to(labels_root).as_posix()
+    except ValueError as exc:
+        raise ContractError(f"canonical label is outside canonical/labels: {path}") from exc
+
+
+def _load_protected_reviews(
+    review_map_path: Path,
+    dataset_key: str,
+    labels_by_hash: dict[str, Path],
+    dataset_root: Path,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    document = _read_json(review_map_path)
+    datasets = document.get("datasets")
+    if not isinstance(datasets, dict):
+        raise ContractError("review map datasets must be an object")
+    dataset = datasets.get(dataset_key)
+    if dataset is None:
+        return document, {}
+    if not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
+        raise ContractError(f"review map dataset entry is invalid: {dataset_key}")
+    hashes_by_key = {
+        _label_key(label_path, dataset_root): image_hash
+        for image_hash, label_path in labels_by_hash.items()
+    }
+    reviews_by_hash: dict[str, dict[str, Any]] = {}
+    for key, raw_review in dataset["samples"].items():
+        if not isinstance(raw_review, dict):
+            raise ContractError(f"review entry must be an object: {key}")
+        image_hash = hashes_by_key.get(str(key))
+        if image_hash is None:
+            raise ContractError(f"review entry has no manifest record: {key}")
+        label_path = labels_by_hash[image_hash]
+        expected = str(raw_review.get("label_sha256", "")).lower()
+        actual = sha256_file(label_path)
+        if expected != actual:
+            raise ContractError(f"review entry is stale before rebuild: {key}")
+        reviews_by_hash[image_hash] = dict(raw_review)
+    return document, reviews_by_hash
+
+
+def _verify_protected_labels(
+    old_labels: dict[str, Path],
+    new_labels: dict[str, Path],
+) -> None:
+    changed = [
+        image_hash
+        for image_hash, old_path in old_labels.items()
+        if image_hash not in new_labels
+        or _stable_label_value(old_path) != _stable_label_value(new_labels[image_hash])
+    ]
+    if changed:
+        preview = ", ".join(changed[:5])
+        raise ContractError(
+            f"protected canonical label content changed for {len(changed)} existing images: {preview}"
+        )
+
+
+def _rebind_reviews(
+    document: dict[str, Any],
+    dataset_key: str,
+    reviews_by_hash: dict[str, dict[str, Any]],
+    new_labels: dict[str, Path],
+    dataset_root: Path,
+) -> dict[str, Any]:
+    rebound: dict[str, dict[str, Any]] = {}
+    for image_hash, review in reviews_by_hash.items():
+        label_path = new_labels.get(image_hash)
+        if label_path is None:
+            raise ContractError(f"reviewed image is missing after rebuild: {image_hash}")
+        updated = dict(review)
+        updated["label_sha256"] = sha256_file(label_path)
+        rebound[_label_key(label_path, dataset_root)] = updated
+    datasets = document.setdefault("datasets", {})
+    if reviews_by_hash:
+        current = datasets.get(dataset_key)
+        if not isinstance(current, dict):
+            current = {}
+        current["samples"] = rebound
+        datasets[dataset_key] = current
+    else:
+        datasets.pop(dataset_key, None)
+    return document
+
+
+def _restore_dataset(active_root: Path, backup_root: Path) -> None:
+    if active_root.exists():
+        if active_root.is_dir():
+            shutil.rmtree(active_root)
+        else:
+            active_root.unlink()
+    os.replace(backup_root, active_root)
+
+
 def _command_args(values: Sequence[str], baseline_path: Path, allow_no_token: bool) -> list[str]:
     command = list(values)
     if command and command[0] == "--":
@@ -426,6 +574,23 @@ def _command_args(values: Sequence[str], baseline_path: Path, allow_no_token: bo
             "only when the builder reads the active manifest before clearing output"
         )
     return [value.replace(BASELINE_TOKEN, str(baseline_path)) for value in command]
+
+
+def _protected_command_args(
+    values: Sequence[str],
+    baseline_path: Path,
+    protected_canonical: Path,
+    allow_no_baseline_token: bool,
+) -> list[str]:
+    command = _command_args(values, baseline_path, allow_no_baseline_token)
+    if not any(PROTECTED_CANONICAL_TOKEN in value for value in command):
+        raise ContractError(
+            f"protected builder command must contain {PROTECTED_CANONICAL_TOKEN} as a --source value"
+        )
+    return [
+        value.replace(PROTECTED_CANONICAL_TOKEN, str(protected_canonical))
+        for value in command
+    ]
 
 
 def _print(value: dict[str, Any]) -> None:
@@ -492,6 +657,10 @@ def run_build(args: argparse.Namespace) -> int:
     try:
         manifest_path = Path(args.manifest).resolve()
         baseline = load_manifest(manifest_path)
+        if any(str(record.get("canonical_label", "")).strip() for record in baseline.raw["records"]):
+            raise ContractError(
+                "active manifest contains canonical labels; use protected-run to preserve workbench state"
+            )
         snapshot_path = Path(args.snapshot_out).resolve()
         if snapshot_path.is_relative_to(manifest_path.parent):
             raise ContractError("snapshot must be outside the dataset output directory")
@@ -563,6 +732,133 @@ def run_build(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 4
 
 
+def run_protected_build(args: argparse.Namespace) -> int:
+    moved = False
+    active_root: Path | None = None
+    backup_root: Path | None = None
+    preflight: dict[str, Any] = {"ok": False, "mode": args.mode}
+    try:
+        manifest_path = Path(args.manifest).resolve()
+        baseline = load_manifest(manifest_path)
+        active_root = manifest_path.parent
+        backup_root = Path(args.backup_dir).resolve()
+        review_map_path = Path(args.review_map).resolve()
+        review_snapshot_path = Path(args.review_snapshot_out).resolve()
+        if backup_root.exists():
+            raise ContractError(f"dataset backup already exists: {backup_root}")
+        if review_snapshot_path.exists():
+            raise ContractError(f"review snapshot already exists: {review_snapshot_path}")
+        if active_root.anchor.lower() != backup_root.anchor.lower():
+            raise ContractError("dataset backup must be on the same filesystem as the active dataset")
+        if _is_nested(backup_root, active_root) or _is_nested(active_root, backup_root):
+            raise ContractError("dataset backup and active dataset must not contain each other")
+        if _is_nested(review_snapshot_path, active_root) or _is_nested(review_snapshot_path, backup_root):
+            raise ContractError("review snapshot must be outside the active dataset and dataset backup")
+        if _is_nested(review_map_path, active_root):
+            raise ContractError("review map must be outside the active dataset")
+        old_labels = _record_label_paths(baseline, active_root, active_root)
+        review_document, reviews_by_hash = _load_protected_reviews(
+            review_map_path,
+            args.review_dataset_key,
+            old_labels,
+            active_root,
+        )
+        protected_manifest = backup_root / manifest_path.name
+        protected_canonical = backup_root / "canonical"
+        command = _protected_command_args(
+            args.command,
+            protected_manifest,
+            protected_canonical,
+            args.allow_command_without_baseline,
+        )
+        cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd().resolve()
+        if not cwd.is_dir():
+            raise ContractError(f"working directory does not exist: {cwd}")
+        preflight = {
+            "ok": True,
+            "dry_run": bool(args.dry_run),
+            "protected": True,
+            "mode": args.mode,
+            "manifest": str(manifest_path),
+            "manifest_sha256": sha256_file(manifest_path),
+            "active_dataset": str(active_root),
+            "dataset_backup": str(backup_root),
+            "review_map": str(review_map_path),
+            "review_snapshot": str(review_snapshot_path),
+            "review_dataset_key": args.review_dataset_key,
+            "review_entry_count": len(reviews_by_hash),
+            "protected_label_count": len(old_labels),
+            "cwd": str(cwd),
+            "command": command,
+        }
+        if args.dry_run:
+            _print(preflight)
+            return 0
+
+        _snapshot_file(review_map_path, review_snapshot_path)
+        backup_root.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(active_root, backup_root)
+        moved = True
+        completed = subprocess.run(command, cwd=cwd, shell=False, check=False)
+        if completed.returncode != 0:
+            raise ContractError(f"external builder command failed with exit code {completed.returncode}")
+        rebuilt = load_manifest(manifest_path)
+        verification = verify_manifests(
+            baseline,
+            rebuilt,
+            mode=args.mode,
+            max_ratio_deviation=args.max_ratio_deviation,
+        )
+        if not verification["ok"]:
+            raise ContractError("; ".join(verification["errors"]))
+        old_labels = _record_label_paths(baseline, backup_root, active_root)
+        new_labels = _record_label_paths(rebuilt, active_root, active_root)
+        _verify_protected_labels(old_labels, new_labels)
+        rebound_document = _rebind_reviews(
+            review_document,
+            args.review_dataset_key,
+            reviews_by_hash,
+            new_labels,
+            active_root,
+        )
+        _write_json(review_map_path, rebound_document)
+        result = {
+            **preflight,
+            **verification,
+            "ok": True,
+            "dry_run": False,
+            "protected": True,
+            "dataset_backup_retained": True,
+            "protected_label_count": len(old_labels),
+            "review_entry_count_rebound": len(reviews_by_hash),
+            "rebuilt_manifest_sha256": sha256_file(manifest_path),
+        }
+    except (ContractError, OSError, subprocess.SubprocessError) as exc:
+        rollback_error = ""
+        if moved and active_root is not None and backup_root is not None and backup_root.exists():
+            try:
+                _restore_dataset(active_root, backup_root)
+            except OSError as rollback_exc:
+                rollback_error = str(rollback_exc)
+        errors = [str(exc)]
+        if rollback_error:
+            errors.append(f"automatic rollback failed: {rollback_error}")
+        result = {
+            **preflight,
+            "ok": False,
+            "dry_run": False,
+            "protected": True,
+            "rolled_back": bool(moved and not rollback_error),
+            "errors": errors,
+        }
+    if args.report:
+        report_path = Path(args.report).resolve()
+        result["report"] = str(report_path)
+        _write_json(report_path, result)
+    _print(result)
+    return 0 if result["ok"] else 4
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run or verify a leakage-safe incremental dataset rebuild."
@@ -602,6 +898,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument("--allow-command-without-baseline", action="store_true")
     run.add_argument("command", nargs=argparse.REMAINDER)
     run.set_defaults(handler=run_build)
+
+    protected = subparsers.add_parser(
+        "protected-run",
+        help="Rebuild transactionally while preserving canonical edits and review mappings.",
+    )
+    protected.add_argument("--manifest", required=True)
+    protected.add_argument("--backup-dir", required=True)
+    protected.add_argument("--review-map", required=True)
+    protected.add_argument("--review-snapshot-out", required=True)
+    protected.add_argument("--review-dataset-key", required=True)
+    protected.add_argument("--report", default="")
+    protected.add_argument("--mode", choices=MODES, default="append-isolated")
+    protected.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    protected.add_argument("--cwd", default="")
+    protected.add_argument("--dry-run", action="store_true")
+    protected.add_argument("--allow-command-without-baseline", action="store_true")
+    protected.add_argument("command", nargs=argparse.REMAINDER)
+    protected.set_defaults(handler=run_protected_build)
     return parser.parse_args(argv)
 
 

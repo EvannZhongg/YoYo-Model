@@ -18,10 +18,15 @@ from config import BASE_DIR
 
 DATASETS_DIR = BASE_DIR / "datasets"
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-VALID_YOYO_VISIBILITY = {"visible", "not_visible", "uncertain"}
+VALID_YOYO_VISIBILITY = {
+    "visible", "partially_visible", "out_of_frame", "absent", "not_visible", "uncertain",
+}
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
 VALID_REVIEW_STATUS = {"approved", "reviewed", "unresolved", "needs_review"}
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
+REVIEW_MAP_FILENAME = "dataset_review_status.json"
+REVIEW_MAP_PATH = BASE_DIR / "workbench_state" / REVIEW_MAP_FILENAME
 _STORAGE_LOCK = threading.Lock()
 
 
@@ -53,14 +58,8 @@ def _annotation_roots(dataset_path: Path) -> tuple[Path, Path, Path]:
 
 
 def _resolve_source_image(label_path: Path, labels_root: Path, images_root: Path, document: dict[str, Any]) -> Path:
-    source = str(document.get("source_image") or "").strip()
-    if source:
-        candidate = Path(source)
-        options = [candidate] if candidate.is_absolute() else [label_path.parent / candidate, labels_root.parent / candidate]
-        for option in options:
-            resolved = option.resolve()
-            if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
-                return resolved
+    # Prefer the dataset-owned image. Gradio exposes this managed directory,
+    # while source_image may point back to an external annotation archive.
     relative = label_path.relative_to(labels_root).with_suffix("")
     stems = [relative]
     if "-" in relative.name:
@@ -70,6 +69,15 @@ def _resolve_source_image(label_path: Path, labels_root: Path, images_root: Path
             candidate = (images_root / stem).with_suffix(suffix)
             if candidate.is_file():
                 return candidate.resolve()
+
+    source = str(document.get("source_image") or "").strip()
+    if source:
+        candidate = Path(source)
+        options = [candidate] if candidate.is_absolute() else [label_path.parent / candidate, labels_root.parent / candidate]
+        for option in options:
+            resolved = option.resolve()
+            if resolved.is_file() and resolved.suffix.lower() in IMAGE_SUFFIXES:
+                return resolved
     raise FileNotFoundError(f"image not found for label: {label_path}")
 
 
@@ -85,11 +93,61 @@ def _read_document(path: Path) -> dict[str, Any]:
     return document
 
 
+def _review_dataset_key(dataset_path: Path) -> str:
+    return dataset_path.resolve().relative_to(DATASETS_DIR.resolve()).as_posix()
+
+
+def _read_review_map() -> dict[str, Any]:
+    path = REVIEW_MAP_PATH
+    if not path.is_file():
+        return {"schema_version": REVIEW_SCHEMA_VERSION, "datasets": {}}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid review status JSON: {path}") from exc
+    if not isinstance(document, dict) or document.get("schema_version") != REVIEW_SCHEMA_VERSION:
+        raise ValueError(f"unsupported review status schema: {path}")
+    if not isinstance(document.get("datasets"), dict):
+        raise ValueError(f"review status datasets must be an object: {path}")
+    return document
+
+
+def _dataset_reviews(document: dict[str, Any], dataset_path: Path) -> dict[str, Any]:
+    dataset = document["datasets"].get(_review_dataset_key(dataset_path))
+    if dataset is None:
+        return {}
+    if not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
+        raise ValueError(f"review status dataset entry is invalid: {REVIEW_MAP_PATH}")
+    return dataset["samples"]
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _review_summary(label_path: Path, review: object) -> dict[str, Any]:
+    valid = (
+        isinstance(review, dict)
+        and review.get("label_sha256") == _file_sha256(label_path)
+        and bool(review.get("confirmed"))
+    )
+    return {
+        "reviewed": valid,
+        "reviewed_at_utc": str(review.get("confirmed_at_utc") or "") if valid else "",
+        "reviewer": str(review.get("reviewer") or "") if valid else "",
+    }
+
+
 def _sample_summary(
     index: int,
     label_path: Path,
     labels_root: Path,
     images_root: Path,
+    review: object = None,
 ) -> dict[str, Any]:
     document = _read_document(label_path)
     image_path = _resolve_source_image(label_path, labels_root, images_root, document)
@@ -107,6 +165,7 @@ def _sample_summary(
         "string_visibility": str(document.get("string_visibility") or "uncertain"),
         "string_count": len(polylines) if isinstance(polylines, list) else 0,
         "review_status": str(document.get("string_review_status") or "unresolved"),
+        **_review_summary(label_path, review),
     }
 
 
@@ -145,9 +204,12 @@ def open_annotation_dataset(dataset_path: str) -> dict[str, Any]:
         raise ValueError(f"no JSON labels found in {labels_root}")
     samples: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    review_map = _read_review_map()
+    reviews = _dataset_reviews(review_map, path)
     for index, label_path in enumerate(label_paths):
         try:
-            samples.append(_sample_summary(index, label_path, labels_root, images_root))
+            key = label_path.relative_to(labels_root).as_posix()
+            samples.append(_sample_summary(index, label_path, labels_root, images_root, reviews.get(key)))
         except (OSError, ValueError) as exc:
             errors.append({"label": str(label_path), "error": str(exc)})
     if not samples:
@@ -156,6 +218,7 @@ def open_annotation_dataset(dataset_path: str) -> dict[str, Any]:
         "dataset_path": str(path),
         "annotation_root": str(annotation_root),
         "sample_count": len(samples),
+        "reviewed_count": sum(1 for sample in samples if sample["reviewed"]),
         "error_count": len(errors),
         "samples": samples,
         "errors": errors[:20],
@@ -177,6 +240,7 @@ def _managed_label(dataset_path: str, sample_key: str) -> tuple[Path, Path, Path
 def load_annotation_sample(dataset_path: str, sample_key: str) -> dict[str, Any]:
     """Load one full label document and its managed image URL source."""
     _, labels_root, images_root, label_path = _managed_label(dataset_path, sample_key)
+    path = _managed_dataset_path(dataset_path)
     document = _read_document(label_path)
     image_path = _resolve_source_image(label_path, labels_root, images_root, document)
     gr.set_static_paths(paths=[images_root])
@@ -185,7 +249,65 @@ def load_annotation_sample(dataset_path: str, sample_key: str) -> dict[str, Any]
         "label_path": str(label_path),
         "image_path": str(image_path),
         "annotation": document,
+        **_review_summary(
+            label_path,
+            _dataset_reviews(_read_review_map(), path).get(label_path.relative_to(labels_root).as_posix()),
+        ),
     }
+
+
+def set_annotation_sample_reviewed(
+    dataset_path: str,
+    sample_key: str,
+    reviewer: str,
+    confirmed: bool = True,
+) -> dict[str, Any]:
+    """Persist manual verification separately from canonical annotation JSON."""
+    path = _managed_dataset_path(dataset_path)
+    _, labels_root, _, label_path = _managed_label(dataset_path, sample_key)
+    key = label_path.relative_to(labels_root).as_posix()
+    reviewer_name = str(reviewer or "workbench-reviewer").strip() or "workbench-reviewer"
+    with _STORAGE_LOCK:
+        document = _read_review_map()
+        dataset_key = _review_dataset_key(path)
+        dataset = document["datasets"].get(dataset_key)
+        if confirmed:
+            if dataset is None:
+                dataset = {"samples": {}}
+                document["datasets"][dataset_key] = dataset
+            elif not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
+                raise ValueError(f"review status dataset entry is invalid: {REVIEW_MAP_PATH}")
+            dataset["samples"][key] = {
+                "confirmed": True,
+                "confirmed_at_utc": _utc_now(),
+                "reviewer": reviewer_name,
+                "label_sha256": _file_sha256(label_path),
+            }
+        elif dataset is not None:
+            if not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
+                raise ValueError(f"review status dataset entry is invalid: {REVIEW_MAP_PATH}")
+            dataset["samples"].pop(key, None)
+            if not dataset["samples"]:
+                document["datasets"].pop(dataset_key)
+        document["updated_at_utc"] = _utc_now()
+        payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+        review_path = REVIEW_MAP_PATH
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=review_path.parent,
+                prefix=f".{review_path.stem}.", suffix=".tmp", delete=False,
+            ) as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary_path = Path(handle.name)
+            os.replace(temporary_path, review_path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+    return {"key": key, **_review_summary(label_path, _dataset_reviews(document, path).get(key))}
 
 
 def _point(value: Any, width: int, height: int) -> list[float]:
@@ -225,6 +347,7 @@ def save_annotation_sample(
     edit_json: str | dict[str, Any],
 ) -> dict[str, Any]:
     """Validate and atomically write geometry and label corrections for one sample."""
+    dataset_root = _managed_dataset_path(dataset_path)
     _, labels_root, images_root, label_path = _managed_label(dataset_path, sample_key)
     edit = json.loads(edit_json) if isinstance(edit_json, str) else edit_json
     if not isinstance(edit, dict):
@@ -258,7 +381,7 @@ def save_annotation_sample(
         raise ValueError("string polylines must be a list")
     polylines = [[_point(point, width, height) for point in line] for line in raw_polylines]
     polylines = [line for line in polylines if len(line) >= 2]
-    if yoyo_visibility == "not_visible":
+    if yoyo_visibility in {"not_visible", "absent", "out_of_frame"}:
         bbox = None
     elif yoyo_visibility == "visible" and bbox is None:
         raise ValueError("visible yoyo requires a bounding box")
@@ -338,6 +461,8 @@ def save_annotation_sample(
         finally:
             if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink()
+    if REVIEW_MAP_PATH.is_file():
+        set_annotation_sample_reviewed(str(dataset_root), sample_key, "", confirmed=False)
     return {
         "saved": True,
         "path": str(label_path),
@@ -377,6 +502,17 @@ def ui_save_annotation_sample(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def ui_set_annotation_sample_reviewed(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("review request must be an object")
+    return set_annotation_sample_reviewed(
+        str(payload.get("dataset_path") or ""),
+        str(payload.get("sample_key") or ""),
+        str(payload.get("reviewer") or ""),
+        bool(payload.get("confirmed", True)),
+    )
+
+
 DATASET_ANNOTATION_HTML = r"""
 <div class="yda" data-yoyo-dataset-annotation>
   <header class="yda__header">
@@ -394,6 +530,7 @@ DATASET_ANNOTATION_HTML = r"""
         <select id="yda-filter" aria-label="筛选标注状态">
           <option value="all">全部数据</option><option value="needs_yoyo">缺少悠悠球框</option>
           <option value="needs_string">缺少绳线</option><option value="unresolved">待审阅</option>
+          <option value="unreviewed">未核验</option><option value="reviewed">已核验</option>
         </select>
       </div>
       <div class="yda__list-summary" id="yda-list-summary">0 条数据</div>
@@ -408,12 +545,16 @@ DATASET_ANNOTATION_HTML = r"""
         </div>
         <button type="button" id="yda-finish-line" disabled>结束当前绳线</button>
         <button type="button" id="yda-undo" title="撤销最近一次几何修改">撤销</button>
+        <button type="button" id="yda-reset" title="恢复到本次加载或上次保存的标注" disabled>重置</button>
         <button type="button" id="yda-delete" title="删除选中的绳线">删除绳线</button>
+        <button type="button" id="yda-toggle-annotations" title="显示或隐藏标注（H）" aria-pressed="false">隐藏标注</button>
         <label class="yda__zoom">缩放<input id="yda-zoom" type="range" min="25" max="200" value="100" step="25"><output id="yda-zoom-value">100%</output></label>
       </div>
       <div class="yda__viewport" id="yda-viewport">
         <div class="yda__empty" id="yda-empty">尚未打开数据集</div>
-        <canvas id="yda-canvas" tabindex="0"></canvas>
+        <div class="yda__canvas-layer">
+          <canvas id="yda-canvas" tabindex="0"></canvas>
+        </div>
       </div>
       <div class="yda__navigation">
         <button type="button" id="yda-prev" title="上一条">上一条</button>
@@ -424,20 +565,27 @@ DATASET_ANNOTATION_HTML = r"""
     <aside class="yda__editor">
       <div class="yda__editor-heading"><div><h3 id="yda-item-name">未选择数据</h3><span id="yda-item-group"></span></div><span id="yda-dirty"></span></div>
       <fieldset id="yda-fields" disabled>
-        <legend>悠悠球识别</legend>
-        <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
-        <div class="yda__coords"><label>X1<input id="yda-x1" type="number" min="0" step="1"></label><label>Y1<input id="yda-y1" type="number" min="0" step="1"></label><label>X2<input id="yda-x2" type="number" min="0" step="1"></label><label>Y2<input id="yda-y2" type="number" min="0" step="1"></label></div>
-        <button type="button" id="yda-clear-box">清除悠悠球框</button>
-        <legend>绳线识别</legend>
-        <label>可见状态<select id="yda-string-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
-        <label>审阅状态<select id="yda-review-status"><option value="approved">已批准</option><option value="reviewed">已审阅</option><option value="needs_review">需要审阅</option><option value="unresolved">未解决</option></select></label>
-        <div class="yda__line-list" id="yda-line-list"></div>
-        <div class="yda__line-actions"><button type="button" id="yda-redraw-lines">重绘绳线</button><button type="button" id="yda-clear-lines">标记为不可见</button></div>
-        <legend>记录</legend>
-        <label>审阅者<input id="yda-reviewer" type="text" value="workbench-reviewer" maxlength="80"></label>
-        <label>备注<textarea id="yda-notes" rows="4" maxlength="2000"></textarea></label>
-        <div class="yda__validation" id="yda-validation" role="status"></div>
-        <button class="yda__button yda__button--primary yda__save" id="yda-save" type="button">保存当前标注</button>
+        <div class="yda__editor-scroll">
+          <legend>悠悠球识别</legend>
+          <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">可见</option><option value="partially_visible">部分可见</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
+          <div class="yda__coords"><label>X1<input id="yda-x1" type="number" min="0" step="1"></label><label>Y1<input id="yda-y1" type="number" min="0" step="1"></label><label>X2<input id="yda-x2" type="number" min="0" step="1"></label><label>Y2<input id="yda-y2" type="number" min="0" step="1"></label></div>
+          <button type="button" id="yda-clear-box">清除悠悠球框</button>
+          <legend>绳线识别</legend>
+          <label>可见状态<select id="yda-string-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
+          <label>审阅状态<select id="yda-review-status"><option value="approved">已批准</option><option value="reviewed">已审阅</option><option value="needs_review">需要审阅</option><option value="unresolved">未解决</option></select></label>
+          <div class="yda__line-list" id="yda-line-list"></div>
+          <div class="yda__line-actions"><button type="button" id="yda-add-line">新增绳线</button><button type="button" id="yda-redraw-lines">重绘绳线</button><button type="button" id="yda-clear-lines">标记为不可见</button></div>
+        </div>
+        <div class="yda__record">
+          <legend>记录</legend>
+          <label>审阅者<input id="yda-reviewer" type="text" value="workbench-reviewer" maxlength="80"></label>
+          <label>备注<textarea id="yda-notes" rows="3" maxlength="2000"></textarea></label>
+          <div class="yda__validation" id="yda-validation" role="status"></div>
+          <div class="yda__record-actions">
+            <button class="yda__button yda__review" id="yda-review" type="button">核验完成</button>
+            <button class="yda__button yda__button--primary yda__save" id="yda-save" type="button">保存标注</button>
+          </div>
+        </div>
       </fieldset>
     </aside>
   </main>
@@ -464,11 +612,11 @@ DATASET_ANNOTATION_CSS = r"""
 .yda button:hover { background:var(--soft); }
 .yda button:disabled { cursor:not-allowed; opacity:.42; }
 .yda__button--primary { background:var(--accent)!important; border-color:var(--accent)!important; color:#fff!important; }
-.yda__workspace { display:grid; grid-template-columns:260px minmax(460px,1fr) 310px; height:min(780px,calc(100vh - 190px)); min-height:620px; }
-.yda__sidebar { border-right:1px solid var(--line); display:grid; grid-template-rows:auto auto minmax(0,1fr); min-width:0; }
+.yda__workspace { display:grid; grid-template-columns:240px minmax(0,1fr) 300px; height:clamp(520px,calc(100dvh - 245px),780px); min-height:0; overflow:hidden; }
+.yda__sidebar { border-right:1px solid var(--line); display:grid; grid-template-rows:auto auto minmax(0,1fr); min-height:0; min-width:0; overflow:hidden; }
 .yda__list-tools { display:grid; gap:7px; padding:12px; }
 .yda__list-summary { border-bottom:1px solid var(--line); color:var(--muted); font-size:11px; padding:0 12px 9px; }
-.yda__sample-list { list-style:none; margin:0; overflow:auto; padding:0; }
+.yda__sample-list { list-style:none; margin:0; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0; scrollbar-gutter:stable; }
 .yda__sample-list button { align-items:flex-start; border:0; border-bottom:1px solid #e6e9e5; border-radius:0; display:grid; gap:3px; min-height:62px; padding:9px 12px; text-align:left; width:100%; }
 .yda__sample-list button.is-active { background:#e5f3ed; box-shadow:inset 3px 0 var(--accent); }
 .yda__sample-title { display:block; font-size:11px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%; }
@@ -476,7 +624,8 @@ DATASET_ANNOTATION_CSS = r"""
 .yda__badges { display:flex; gap:4px; }
 .yda__badge { background:#edf0ed; border-radius:3px; color:#4f5750; font-size:9px; padding:2px 4px; }
 .yda__badge--warn { background:#f8eadc; color:#8b531a; }
-.yda__stage-panel { background:#202320; display:grid; grid-template-rows:auto minmax(0,1fr) auto; min-width:0; }
+.yda__badge--ok { background:#dceee7; color:#0c5a44; }
+.yda__stage-panel { background:#202320; display:grid; grid-template-rows:auto minmax(0,1fr) auto; min-width:0; overflow:hidden; }
 .yda__toolbar,.yda__navigation { align-items:center; background:#f5f7f4; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:7px; min-height:50px; padding:8px 10px; }
 .yda__segmented { display:flex; }
 .yda__segmented button { border-radius:0; }
@@ -487,33 +636,42 @@ DATASET_ANNOTATION_CSS = r"""
 .yda__zoom { align-items:center; display:flex; gap:6px; grid-auto-flow:column; margin-left:auto; }
 .yda__zoom input { accent-color:var(--accent); height:auto; padding:0; width:100px; }
 .yda__zoom output { min-width:38px; }
-.yda__viewport { align-items:center; display:flex; justify-content:center; overflow:auto; position:relative; }
-.yda__viewport canvas { background:#101210; cursor:default; display:none; flex:none; touch-action:none; }
+.yda__viewport { contain:size layout paint; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; position:relative; }
+.yda__canvas-layer { display:grid; min-height:100%; min-width:100%; place-items:center; width:max-content; }
+.yda__viewport canvas { background:#101210; cursor:default; display:none; touch-action:none; }
 .yda__viewport canvas.is-ready { display:block; }
 .yda__viewport canvas[data-tool="box"] { cursor:crosshair; }
 .yda__viewport canvas[data-tool="string"] { cursor:copy; }
 .yda__empty { color:#b9c0ba; font-size:13px; position:absolute; }
 .yda__navigation { border-bottom:0; border-top:1px solid var(--line); justify-content:center; }
 .yda__navigation output { color:#4e554f; font-size:12px; min-width:90px; text-align:center; }
-.yda__editor { border-left:1px solid var(--line); overflow:auto; padding:14px; }
+.yda__editor { border-left:1px solid var(--line); display:grid; grid-template-rows:auto minmax(0,1fr); min-height:0; overflow:hidden; padding:14px; }
 .yda__editor-heading { align-items:flex-start; border-bottom:1px solid var(--line); display:flex; gap:8px; justify-content:space-between; padding-bottom:12px; }
 .yda__editor-heading span { color:var(--muted); display:block; font-size:10px; margin-top:3px; overflow-wrap:anywhere; }
 #yda-dirty { color:#9a5e20; flex:none; }
-.yda fieldset { border:0; margin:0; padding:0; }
+.yda fieldset { border:0; display:grid; grid-template-rows:minmax(0,1fr) auto; margin:0; min-height:0; padding:0; }
 .yda fieldset:disabled { opacity:.48; }
 .yda legend { border-top:1px solid var(--line); font-size:12px; font-weight:750; margin-top:15px; padding-top:14px; width:100%; }
-.yda fieldset > label { margin-top:10px; }
+.yda fieldset label { margin-top:10px; }
+.yda__editor-scroll { min-height:0; overflow:auto; padding-right:5px; scrollbar-gutter:stable; }
+.yda__editor-scroll > legend:first-child { border-top:0; margin-top:0; }
+.yda__record { background:var(--surface); border-top:1px solid var(--line); padding-top:9px; }
+.yda__record legend { border-top:0; margin-top:0; padding-top:0; }
+.yda__record textarea { min-height:62px; resize:none; }
+.yda__record-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
+.yda__review.is-reviewed { background:#dceee7; border-color:#84b9a7; color:#0c5a44; }
 .yda__coords { display:grid; gap:6px; grid-template-columns:1fr 1fr; margin:9px 0; }
 .yda__line-list { display:grid; gap:5px; margin:9px 0; }
 .yda__line-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
+.yda__line-actions #yda-clear-lines { grid-column:1/-1; }
 .yda__line-row { align-items:center; background:var(--soft); display:flex; font-size:10px; justify-content:space-between; padding:6px 8px; }
 .yda__line-row.is-active { box-shadow:inset 3px 0 #d68b27; }
 .yda__validation { color:var(--danger); font-size:11px; min-height:30px; padding-top:9px; }
 .yda__save { width:100%; }
 .yda__toast { background:#202420; border-radius:5px; bottom:24px; color:#fff; font-size:12px; left:50%; opacity:0; padding:9px 13px; pointer-events:none; position:fixed; transform:translate(-50%,8px); transition:.16s; z-index:50; }
 .yda__toast.is-visible { opacity:1; transform:translate(-50%,0); }
-@media (max-width:1050px) { .yda__workspace { grid-template-columns:220px minmax(420px,1fr); height:auto; min-height:720px; } .yda__editor { border-left:0; border-top:1px solid var(--line); grid-column:1/-1; } }
-@media (max-width:720px) { .yda__header { align-items:stretch; flex-direction:column; } .yda__dataset-picker { grid-template-columns:1fr; width:100%; } .yda__workspace { display:flex; flex-direction:column; min-height:0; } .yda__sidebar { border-bottom:1px solid var(--line); border-right:0; height:270px; } .yda__stage-panel { min-height:520px; } }
+@media (max-width:1120px) { .yda__workspace { grid-template-columns:210px minmax(0,1fr) 280px; } }
+@media (max-width:820px) { .yda__header { align-items:stretch; flex-direction:column; } .yda__dataset-picker { grid-template-columns:1fr; width:100%; } .yda__workspace { display:flex; flex-direction:column; height:auto; } .yda__sidebar { border-bottom:1px solid var(--line); border-right:0; flex:none; height:270px; } .yda__stage-panel { min-height:520px; } .yda__editor { border-left:0; border-top:1px solid var(--line); max-height:620px; min-height:520px; } }
 """
 
 
@@ -523,46 +681,60 @@ element.dataset.initialized = "true";
 const $ = selector => element.querySelector(selector);
 const canvas = $("#yda-canvas");
 const ctx = canvas.getContext("2d");
-const state = {dataset:null,samples:[],filtered:[],current:-1,sample:null,image:null,tool:"select",zoom:1,bbox:null,lines:[],activeLine:null,selectedLine:null,drag:null,history:[],redrawPending:false,loadSerial:0,dirty:false};
+const state = {dataset:null,samples:[],filtered:[],current:-1,sample:null,image:null,tool:"select",zoom:1,annotationsVisible:true,bbox:null,lines:[],baseline:null,activeLine:null,selectedLine:null,drag:null,history:[],redrawPending:false,loadSerial:0,dirty:false};
 let toastTimer = null;
 const toast = message => { const node=$("#yda-toast"); node.textContent=message; node.classList.add("is-visible"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>node.classList.remove("is-visible"),1800); };
 const escapeHtml = value => String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fileUrl = path => { const config=window.gradio_config||{}; const root=String(config.root||window.location.origin).replace(/\/$/,""); const prefix=`/${String(config.api_prefix||"gradio_api").replace(/^\/+|\/+$/g,"")}`; return `${root}${prefix}/file=${encodeURIComponent(path)}`; };
 const cloneGeometry = () => ({bbox:state.bbox?state.bbox.slice():null,lines:state.lines.map(line=>line.map(point=>point.slice()))});
+const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-visibility").value,stringVisibility:$("#yda-string-visibility").value,reviewStatus:$("#yda-review-status").value,notes:$("#yda-notes").value});
 function pushHistory(){ state.history.push(cloneGeometry()); if(state.history.length>60)state.history.shift(); }
-function markDirty(){ state.dirty=true; $("#yda-dirty").textContent="未保存"; renderCanvas(); renderLineList(); syncCoordinateInputs(); }
+function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed);button.disabled=!state.sample||state.dirty;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":"核验完成"; }
+function syncResetButton(){ $("#yda-reset").disabled=!state.sample||!state.dirty; }
+function syncAnnotationVisibility(){ const button=$("#yda-toggle-annotations");button.textContent=state.annotationsVisible?"隐藏标注":"显示标注";button.setAttribute("aria-pressed",String(!state.annotationsVisible)); }
+function setAnnotationsVisible(visible){ state.annotationsVisible=Boolean(visible);syncAnnotationVisibility();renderCanvas(); }
+function toggleAnnotations(){ if(state.annotationsVisible&&state.activeLine!==null)finishLine();if(state.annotationsVisible&&state.tool!=="select")setTool("select");setAnnotationsVisible(!state.annotationsVisible); }
+function markDirty(){ state.dirty=true; $("#yda-dirty").textContent="未保存"; syncReviewButton();syncResetButton();renderCanvas(); renderLineList(); syncCoordinateInputs(); }
 function applyGeometry(value){ state.bbox=value.bbox?value.bbox.slice():null; state.lines=(value.lines||[]).map(line=>line.map(point=>point.slice())); state.activeLine=null; state.selectedLine=null; state.redrawPending=false; markDirty(); }
-function setTool(tool){ state.tool=tool; canvas.dataset.tool=tool; element.querySelectorAll("#yda-tools button").forEach(button=>button.classList.toggle("is-active",button.dataset.tool===tool)); $("#yda-finish-line").disabled=tool!=="string"||state.activeLine===null; }
+function setTool(tool){ if(tool!=="select"&&!state.annotationsVisible)setAnnotationsVisible(true);state.tool=tool; canvas.dataset.tool=tool; element.querySelectorAll("#yda-tools button").forEach(button=>button.classList.toggle("is-active",button.dataset.tool===tool)); $("#yda-finish-line").disabled=tool!=="string"||state.activeLine===null; }
+function setZoom(value){ const percent=Math.max(25,Math.min(200,Math.round(Number(value)/25)*25));state.zoom=percent/100;$("#yda-zoom").value=String(percent);$("#yda-zoom-value").textContent=`${percent}%`;renderCanvas(); }
 function canvasPoint(event){ const rect=canvas.getBoundingClientRect(); const sx=state.image.naturalWidth/rect.width, sy=state.image.naturalHeight/rect.height; return [Math.max(0,Math.min(state.image.naturalWidth,(event.clientX-rect.left)*sx)),Math.max(0,Math.min(state.image.naturalHeight,(event.clientY-rect.top)*sy))]; }
 function lineDistance(point,a,b){ const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy; if(!l)return Math.hypot(point[0]-a[0],point[1]-a[1]); const t=Math.max(0,Math.min(1,((point[0]-a[0])*dx+(point[1]-a[1])*dy)/l)); return Math.hypot(point[0]-a[0]-t*dx,point[1]-a[1]-t*dy); }
-function hitTest(point){ const radius=12/state.zoom; for(let li=0;li<state.lines.length;li++){ for(let pi=0;pi<state.lines[li].length;pi++){ if(Math.hypot(point[0]-state.lines[li][pi][0],point[1]-state.lines[li][pi][1])<=radius)return {type:"point",line:li,point:pi}; } } if(state.bbox){ const corners=[[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]]; for(let i=0;i<4;i++)if(Math.hypot(point[0]-corners[i][0],point[1]-corners[i][1])<=radius)return {type:"corner",corner:i}; } for(let li=0;li<state.lines.length;li++){ const line=state.lines[li]; for(let i=1;i<line.length;i++)if(lineDistance(point,line[i-1],line[i])<=radius)return {type:"line",line:li,segment:i}; } return null; }
-function renderCanvas(){ if(!state.image)return; const w=state.image.naturalWidth,h=state.image.naturalHeight; const maxWidth=Math.max(180,$("#yda-viewport").clientWidth-24), maxHeight=Math.max(180,$("#yda-viewport").clientHeight-24); const fit=Math.min(maxWidth/w,maxHeight/h,1); const cssW=Math.round(w*fit*state.zoom),cssH=Math.round(h*fit*state.zoom); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.round(cssW*dpr));canvas.height=Math.max(1,Math.round(cssH*dpr));canvas.style.width=`${cssW}px`;canvas.style.height=`${cssH}px`;ctx.setTransform(dpr*cssW/w,0,0,dpr*cssH/h,0,0);ctx.clearRect(0,0,w,h);ctx.drawImage(state.image,0,0,w,h); const scale=w/cssW; if(state.bbox){ctx.strokeStyle="#35d39a";ctx.lineWidth=3*scale;ctx.strokeRect(state.bbox[0],state.bbox[1],state.bbox[2]-state.bbox[0],state.bbox[3]-state.bbox[1]); [[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]].forEach(p=>{ctx.fillStyle="#fff";ctx.strokeStyle="#176b55";ctx.lineWidth=2*scale;ctx.beginPath();ctx.arc(p[0],p[1],5*scale,0,Math.PI*2);ctx.fill();ctx.stroke();});} state.lines.forEach((line,index)=>{if(line.length<1)return;ctx.strokeStyle=index===state.selectedLine?"#ffae42":"#43b8ff";ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=(index===state.selectedLine?4:3)*scale;ctx.beginPath();ctx.moveTo(line[0][0],line[0][1]);line.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.stroke();line.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4.5*scale,0,Math.PI*2);ctx.fill();});}); }
+function hitTest(point){ if(!state.annotationsVisible)return null;const radius=12/state.zoom; for(let li=0;li<state.lines.length;li++){ for(let pi=0;pi<state.lines[li].length;pi++){ if(Math.hypot(point[0]-state.lines[li][pi][0],point[1]-state.lines[li][pi][1])<=radius)return {type:"point",line:li,point:pi}; } } if(state.bbox){ const corners=[[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]]; for(let i=0;i<4;i++)if(Math.hypot(point[0]-corners[i][0],point[1]-corners[i][1])<=radius)return {type:"corner",corner:i}; } for(let li=0;li<state.lines.length;li++){ const line=state.lines[li]; for(let i=1;i<line.length;i++)if(lineDistance(point,line[i-1],line[i])<=radius)return {type:"line",line:li,segment:i}; } return null; }
+function renderCanvas(){ if(!state.image)return; const w=state.image.naturalWidth,h=state.image.naturalHeight; const maxWidth=Math.max(180,$("#yda-viewport").clientWidth-24), maxHeight=Math.max(180,$("#yda-viewport").clientHeight-24); const fit=Math.min(maxWidth/w,maxHeight/h,1); const cssW=Math.round(w*fit*state.zoom),cssH=Math.round(h*fit*state.zoom); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.round(cssW*dpr));canvas.height=Math.max(1,Math.round(cssH*dpr));canvas.style.width=`${cssW}px`;canvas.style.height=`${cssH}px`;ctx.setTransform(dpr*cssW/w,0,0,dpr*cssH/h,0,0);ctx.clearRect(0,0,w,h);ctx.drawImage(state.image,0,0,w,h);if(!state.annotationsVisible)return; const scale=w/cssW; if(state.bbox){ctx.strokeStyle="#35d39a";ctx.lineWidth=3*scale;ctx.strokeRect(state.bbox[0],state.bbox[1],state.bbox[2]-state.bbox[0],state.bbox[3]-state.bbox[1]); [[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]].forEach(p=>{ctx.fillStyle="#fff";ctx.strokeStyle="#176b55";ctx.lineWidth=2*scale;ctx.beginPath();ctx.arc(p[0],p[1],5*scale,0,Math.PI*2);ctx.fill();ctx.stroke();});} state.lines.forEach((line,index)=>{if(line.length<1)return;ctx.strokeStyle=index===state.selectedLine?"#ffae42":"#43b8ff";ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=(index===state.selectedLine?4:3)*scale;ctx.beginPath();ctx.moveTo(line[0][0],line[0][1]);line.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.stroke();line.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],4.5*scale,0,Math.PI*2);ctx.fill();});}); }
 function renderLineList(){ const node=$("#yda-line-list"); node.innerHTML=state.lines.length?state.lines.map((line,index)=>`<button type="button" class="yda__line-row ${index===state.selectedLine?'is-active':''}" data-line="${index}"><span>绳线 ${index+1}</span><span>${line.length} 个点</span></button>`).join(""):"<div class='yda__line-row'><span>没有绳线</span></div>"; node.querySelectorAll("button").forEach(button=>button.onclick=()=>{state.selectedLine=Number(button.dataset.line);renderCanvas();renderLineList();}); }
 function syncCoordinateInputs(){ const values=state.bbox||["","","",""]; ["x1","y1","x2","y2"].forEach((name,index)=>$("#yda-"+name).value=values[index]); }
-function filteredSamples(){ const query=$("#yda-search").value.trim().toLowerCase(),filter=$("#yda-filter").value; return state.samples.filter(sample=>{ const text=`${sample.name} ${sample.group}`.toLowerCase(); if(query&&!text.includes(query))return false; if(filter==="needs_yoyo"&&sample.has_yoyo)return false; if(filter==="needs_string"&&sample.string_count>0)return false; if(filter==="unresolved"&&!['unresolved','needs_review'].includes(sample.review_status))return false; return true; }); }
-function renderSamples(){ state.filtered=filteredSamples(); $("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条数据`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.has_yoyo?'':'yda__badge--warn'}">悠悠球${sample.has_yoyo?'有框':'无框'}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
-async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.bbox=Array.isArray(annotation.yoyo_bbox_pixel)?annotation.yoyo_bbox_pixel.map(Number):null; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent="已加载"; $("#yda-fields").disabled=false; $("#yda-item-name").textContent=state.samples.find(item=>item.key===key)?.name||key; $("#yda-item-group").textContent=annotation.source_group||""; $("#yda-yoyo-visibility").value=annotation.visibility|| (state.bbox?"visible":"uncertain"); $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-notes").value=annotation.notes||""; $("#yda-validation").textContent=""; const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial)toast("图像加载失败");}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
+function filteredSamples(){ const query=$("#yda-search").value.trim().toLowerCase(),filter=$("#yda-filter").value; return state.samples.filter(sample=>{ const text=`${sample.name} ${sample.group}`.toLowerCase(); if(query&&!text.includes(query))return false; if(filter==="needs_yoyo"&&sample.has_yoyo)return false; if(filter==="needs_string"&&sample.string_count>0)return false; if(filter==="unresolved"&&!['unresolved','needs_review'].includes(sample.review_status))return false; if(filter==="unreviewed"&&sample.reviewed)return false; if(filter==="reviewed"&&!sample.reviewed)return false; return true; }); }
+function renderSamples(){ state.filtered=filteredSamples(); const reviewed=state.samples.filter(sample=>sample.reviewed).length;$("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条 · 已核验 ${reviewed}`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.has_yoyo?'':'yda__badge--warn'}">悠悠球${sample.has_yoyo?'有框':'无框'}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span><span class="yda__badge ${sample.reviewed?'yda__badge--ok':'yda__badge--warn'}">${sample.reviewed?'已核验':'未核验'}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
+async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.bbox=Array.isArray(annotation.yoyo_bbox_pixel)?annotation.yoyo_bbox_pixel.map(Number):null; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent=result.reviewed?"已核验":"已加载"; $("#yda-fields").disabled=false; $("#yda-item-name").textContent=state.samples.find(item=>item.key===key)?.name||key; $("#yda-item-group").textContent=annotation.source_group||""; $("#yda-yoyo-visibility").value=annotation.visibility|| (state.bbox?"visible":"uncertain"); $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-notes").value=annotation.notes||""; $("#yda-validation").textContent="";state.baseline=editorSnapshot();syncReviewButton();syncResetButton(); const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial){$("#yda-empty").textContent="图像加载失败";toast("图像加载失败");}}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
 async function openDataset(){ const path=$("#yda-dataset-path").value.trim(); if(!path)return toast("请输入或选择数据集路径");if(state.dirty&&!window.confirm("当前修改尚未保存，确定打开其他数据集吗？"))return; $("#yda-status").textContent="正在扫描数据集..."; try{ const result=await server.ui_open_annotation_dataset({dataset_path:path}); state.dataset=result;state.samples=result.samples;state.sample=null;state.dirty=false;renderSamples(); $("#yda-status").textContent=`已加载 ${result.sample_count} 条数据${result.error_count?`，${result.error_count} 条无法读取`:''}`; await selectSample(result.samples[0].key); }catch(error){$("#yda-status").textContent="数据集打开失败";toast(error?.message||error);} }
 function finishLine(){ if(state.activeLine===null)return; if(state.lines[state.activeLine].length<2)state.lines.splice(state.activeLine,1); state.activeLine=null;$("#yda-finish-line").disabled=true;markDirty(); }
+function startNewLine(recordHistory=true){ if(!state.image)return toast("请先加载图像");if(state.activeLine!==null)finishLine();if(recordHistory)pushHistory();state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;state.redrawPending=false;setTool("string");$("#yda-finish-line").disabled=false;renderCanvas();renderLineList();toast("在图像上逐点绘制，双击或点击结束当前绳线"); }
+function resetUnsavedChanges(){ if(!state.sample||!state.dirty||!state.baseline)return;if(!window.confirm("放弃当前图片的全部未保存修改并恢复原始标注吗？"))return;const baseline=state.baseline;state.bbox=baseline.bbox?baseline.bbox.slice():null;state.lines=baseline.lines.map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.drag=null;state.history=[];state.redrawPending=false;$("#yda-yoyo-visibility").value=baseline.yoyoVisibility;$("#yda-string-visibility").value=baseline.stringVisibility;$("#yda-review-status").value=baseline.reviewStatus;$("#yda-notes").value=baseline.notes;state.dirty=false;$("#yda-dirty").textContent=state.sample.reviewed?"已核验":"已加载";$("#yda-validation").textContent="";setTool("select");syncReviewButton();syncResetButton();renderCanvas();renderLineList();syncCoordinateInputs();toast("已恢复到保存前的原始标注"); }
 canvas.addEventListener("pointerdown",event=>{if(!state.image)return;const point=canvasPoint(event);if(state.tool==="box"){pushHistory();state.drag={type:"drawbox",start:point};state.bbox=[point[0],point[1],point[0]+1,point[1]+1];canvas.setPointerCapture(event.pointerId);markDirty();return;}if(state.tool==="string"){if(state.activeLine===null){if(!state.redrawPending)pushHistory();state.redrawPending=false;state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;}state.lines[state.activeLine].push(point);$("#yda-finish-line").disabled=false;markDirty();return;}const hit=hitTest(point);if(!hit){state.selectedLine=null;renderCanvas();renderLineList();return;}pushHistory();state.drag={...hit,start:point,original:cloneGeometry()};if(hit.line!==undefined)state.selectedLine=hit.line;canvas.setPointerCapture(event.pointerId);});
 canvas.addEventListener("pointermove",event=>{if(!state.drag||!state.image)return;const p=canvasPoint(event),d=state.drag;if(d.type==="drawbox"){state.bbox=[Math.min(d.start[0],p[0]),Math.min(d.start[1],p[1]),Math.max(d.start[0],p[0]),Math.max(d.start[1],p[1])];}else if(d.type==="point"){state.lines[d.line][d.point]=p;}else if(d.type==="corner"){const b=state.bbox.slice();if(d.corner===0||d.corner===3)b[0]=p[0];else b[2]=p[0];if(d.corner===0||d.corner===1)b[1]=p[1];else b[3]=p[1];state.bbox=[Math.min(b[0],b[2]),Math.min(b[1],b[3]),Math.max(b[0],b[2]),Math.max(b[1],b[3])];}else if(d.type==="line"){const dx=p[0]-d.start[0],dy=p[1]-d.start[1],w=state.image.naturalWidth,h=state.image.naturalHeight;state.lines[d.line]=d.original.lines[d.line].map(q=>[Math.max(0,Math.min(w,q[0]+dx)),Math.max(0,Math.min(h,q[1]+dy))]);}markDirty();});
 canvas.addEventListener("pointerup",()=>{state.drag=null;}); canvas.addEventListener("dblclick",event=>{event.preventDefault();if(state.tool==="string"){const line=state.lines[state.activeLine];if(line?.length>1&&Math.hypot(line.at(-1)[0]-line.at(-2)[0],line.at(-1)[1]-line.at(-2)[1])<4)line.pop();finishLine();return;}if(state.tool==="select"){const point=canvasPoint(event),hit=hitTest(point);if(hit?.type==="line"){pushHistory();state.lines[hit.line].splice(hit.segment,0,point);state.selectedLine=hit.line;markDirty();}}});
 canvas.addEventListener("contextmenu",event=>{if(state.tool!=="select"||!state.image)return;const hit=hitTest(canvasPoint(event));if(hit?.type!=="point")return;event.preventDefault();const line=state.lines[hit.line];if(line.length<=2)return toast("一条绳线至少保留两个点");pushHistory();line.splice(hit.point,1);state.selectedLine=hit.line;markDirty();});
 element.querySelectorAll("#yda-tools button").forEach(button=>button.onclick=()=>{if(state.activeLine!==null)finishLine();setTool(button.dataset.tool);});
 $("#yda-finish-line").onclick=finishLine; $("#yda-undo").onclick=()=>{const value=state.history.pop();if(value)applyGeometry(value);};
+$("#yda-reset").onclick=resetUnsavedChanges;
 $("#yda-delete").onclick=()=>{if(state.selectedLine===null)return toast("请先选择一条绳线");pushHistory();state.lines.splice(state.selectedLine,1);state.selectedLine=null;markDirty();};
+$("#yda-toggle-annotations").onclick=toggleAnnotations;
 $("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="not_visible";markDirty();};
-$("#yda-redraw-lines").onclick=()=>{if(state.lines.length&&!window.confirm("清空现有绳线并重新绘制吗？可使用撤销恢复。"))return;pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;state.redrawPending=true;$("#yda-string-visibility").value="partial";setTool("string");markDirty();toast("在图像上逐点绘制，双击结束当前绳线");};
+$("#yda-add-line").onclick=()=>startNewLine();
+$("#yda-redraw-lines").onclick=()=>{if(state.lines.length&&!window.confirm("清空现有绳线并重新绘制吗？可使用撤销恢复。"))return;pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="partial";startNewLine(false);markDirty();};
 $("#yda-clear-lines").onclick=()=>{pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="not_visible";markDirty();};
 ['x1','y1','x2','y2'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{const values=['x1','y1','x2','y2'].map(key=>Number($("#yda-"+key).value));if(values.every(Number.isFinite)){pushHistory();state.bbox=values;markDirty();}}));
-['yoyo-visibility','string-visibility','review-status','notes','reviewer'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{state.dirty=true;$("#yda-dirty").textContent="未保存";}));
-$("#yda-save").onclick=async()=>{if(!state.sample)return; if(state.activeLine!==null)finishLine();const edit={yoyo_visibility:$("#yda-yoyo-visibility").value,yoyo_bbox_pixel:state.bbox,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,bbox_review_status:"reviewed",reviewer:$("#yda-reviewer").value,notes:$("#yda-notes").value}; $("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.dirty=false;$("#yda-dirty").textContent="已保存";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
+['yoyo-visibility','string-visibility','review-status','notes'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{state.dirty=true;$("#yda-dirty").textContent="未保存";syncReviewButton();syncResetButton();}));
+$("#yda-save").onclick=async()=>{if(!state.sample)return; if(state.activeLine!==null)finishLine();const edit={yoyo_visibility:$("#yda-yoyo-visibility").value,yoyo_bbox_pixel:state.bbox,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,bbox_review_status:"reviewed",reviewer:$("#yda-reviewer").value,notes:$("#yda-notes").value}; $("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.sample.reviewed=false;state.dirty=false;state.baseline=editorSnapshot();$("#yda-dirty").textContent="已保存，待核验";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();syncReviewButton();syncResetButton();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
+$("#yda-review").onclick=async()=>{if(!state.sample||state.dirty)return;const confirmed=!state.sample.reviewed;$("#yda-review").disabled=true;try{const result=await server.ui_set_annotation_sample_reviewed({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,reviewer:$("#yda-reviewer").value,confirmed});state.sample={...state.sample,...result};const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result};$("#yda-dirty").textContent=result.reviewed?"已核验":"已取消核验";renderSamples();syncReviewButton();toast(result.reviewed?"已记录为核验完成":"已取消核验");if(result.reviewed&&index<state.samples.length-1)await selectSample(state.samples[index+1].key);}catch(error){toast(`核验状态保存失败：${error?.message||error}`);syncReviewButton();}};
 $("#yda-prev").onclick=()=>{if(state.current>0)selectSample(state.samples[state.current-1].key);}; $("#yda-next").onclick=()=>{if(state.current<state.samples.length-1)selectSample(state.samples[state.current+1].key);};
 $("#yda-search").addEventListener("input",renderSamples);$("#yda-filter").addEventListener("change",renderSamples);$("#yda-open").onclick=openDataset;
 $("#yda-dataset-select").addEventListener("change",event=>{$("#yda-dataset-path").value=event.target.value;});
-$("#yda-zoom").addEventListener("input",event=>{state.zoom=Number(event.target.value)/100;$("#yda-zoom-value").textContent=`${event.target.value}%`;renderCanvas();});
+$("#yda-zoom").addEventListener("input",event=>setZoom(Number(event.target.value)));
+$("#yda-viewport").addEventListener("wheel",event=>{if(!state.image)return;event.preventDefault();event.stopPropagation();setZoom(state.zoom*100+(event.deltaY<0?25:-25));},{passive:false,capture:true});
 new ResizeObserver(()=>renderCanvas()).observe($("#yda-viewport"));
-element.addEventListener("keydown",event=>{if(event.target.matches("input,select,textarea"))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();$("#yda-save").click();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();$("#yda-undo").click();}});
+element.addEventListener("keydown",event=>{if(event.target.matches("input,select,textarea"))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();$("#yda-save").click();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();$("#yda-undo").click();return;}if(event.key.toLowerCase()==='h'){event.preventDefault();toggleAnnotations();}if(event.key==='ArrowLeft'){event.preventDefault();$("#yda-prev").click();}if(event.key==='ArrowRight'){event.preventDefault();$("#yda-next").click();}});
 (async()=>{try{const datasets=await server.ui_list_annotation_datasets();const select=$("#yda-dataset-select");select.innerHTML=datasets.length?datasets.map(item=>`<option value="${escapeHtml(item.path)}">${escapeHtml(item.name)}</option>`).join(""):"<option value=''>未发现数据集</option>";if(datasets.length){$("#yda-dataset-path").value=datasets[0].path;await openDataset();}}catch(error){toast(`扫描失败：${error?.message||error}`);}})();
 """
 
@@ -580,5 +752,6 @@ def dataset_annotation_component_kwargs() -> dict[str, Any]:
             ui_open_annotation_dataset,
             ui_load_annotation_sample,
             ui_save_annotation_sample,
+            ui_set_annotation_sample_reviewed,
         ],
     }

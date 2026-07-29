@@ -1,6 +1,6 @@
 ---
 name: rebuild-leakage-safe-dataset
-description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage. Use when adding annotations to an existing train/val/test dataset, keeping existing split membership stable while distributing isolated incremental groups across splits, optionally freezing evaluation content for strict metric comparability, auditing a rebuilt JSON manifest, or creating split-lineage evidence before training.
+description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage while transactionally preserving workbench-edited canonical labels and SHA-bound human review mappings. Use when adding annotations to an existing train/val/test dataset, keeping existing split membership stable, protecting manual edits and verification state, optionally freezing evaluation content for metric comparability, auditing a rebuilt manifest, or creating split-lineage evidence before training.
 ---
 
 # Rebuild Leakage-Safe Dataset
@@ -23,6 +23,24 @@ Both policies reject missing or moved old samples, source-group overlap,
 duplicate image hashes, split disagreement between records and assignments,
 nonzero declared leakage counts, and excessive final ratio deviation.
 
+## Protect Workbench State
+
+Use `protected-run` for every active dataset that exposes editable
+`canonical/labels` or has a human review map. Never use plain `run` for that
+dataset. The protected action:
+
+- validates every existing review SHA before changing the dataset;
+- atomically moves the complete active dataset to a unique backup;
+- requires `{protected_canonical}` in the builder command so manual labels are
+  included as a source;
+- rejects any existing canonical JSON change except `dataset_management`;
+- rebinds review entries by image SHA to the rebuilt label paths and hashes;
+- restores the original dataset automatically if build or validation fails.
+
+Keep the dataset backup and review-map snapshot after success. Do not delete a
+backup while the active manifest or canonical provenance references it. A
+manifest-only snapshot is not sufficient workbench protection.
+
 ## Manifest Contract
 
 Require one JSON object containing:
@@ -40,13 +58,31 @@ dataset output directory so a clearing rebuild cannot delete it.
 Use the project virtual environment. Keep discovery output and lineage files
 outside the active dataset directory.
 
-First ask the external builder to create a temporary candidate manifest from
-all currently approved annotations. This discovery build may use a fresh split
-because it never replaces the active dataset:
+Stop the workbench server, or otherwise guarantee that no label save or human
+review update can occur during the protected rebuild. The transaction protects
+files on disk but does not coordinate with a concurrently open editor.
+
+First create a source list containing the active canonical overlay and every
+eligible annotation export. This ensures the candidate contains manual edits
+as well as new annotations. The discovery build may use a fresh split because
+it never replaces the active dataset:
 
 ```powershell
-& '.\.venv\Scripts\python.exe' 'prepare_training_v2.py' `
-  --output-dir 'tmp\incremental-discovery' --clear --resplit
+$annotationSources = @(
+  Get-ChildItem -LiteralPath 'annotations' -Directory |
+    Where-Object {
+      $_.Name -ne 'score_annotations' -and
+      (Test-Path -LiteralPath (Join-Path $_.FullName 'labels'))
+    } |
+    Select-Object -ExpandProperty FullName
+)
+$discoveryArgs = @(
+  'prepare_training_v2.py', '--output-dir', 'tmp\incremental-discovery',
+  '--clear', '--resplit', '--source', 'datasets\yoyo_dataset\canonical'
+)
+foreach ($source in $annotationSources) { $discoveryArgs += @('--source', $source) }
+& '.\.venv\Scripts\python.exe' @discoveryArgs
+if ($LASTEXITCODE -ne 0) { throw 'protected discovery failed' }
 ```
 
 Create a stable incremental plan. The plan ignores candidate assignments for
@@ -65,30 +101,58 @@ groups for the final sample-count ratios:
 Treat a failed ratio or lineage check as a hard gate. Inspect
 `new_groups_by_split` before rebuilding.
 
-## Rebuild
+## Protected Rebuild
 
-Pass the builder after `--`; the wrapper uses `subprocess` without a shell.
-Give the completed plan to any builder that accepts a source-group assignment
-manifest. This project's adapter calls that input `--freeze-splits-from`; all
-new groups are already assigned in the plan, so the builder does not force
-them into `train`.
+Create unique backup paths once and reuse them for dry-run and execution. Pass
+the builder after `--`; the wrapper uses `subprocess` without a shell. Put the
+`{protected_canonical}` token first among builder sources, then pass all
+annotation exports. Give the completed plan through `--freeze-splits-from`.
 
 ```powershell
-& '.\.venv\Scripts\python.exe' `
-  'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py' run `
-  --manifest 'datasets\yoyo_dataset\manifest.json' `
-  --snapshot-out 'annotations\lineage\dataset-before.json' `
-  --report 'annotations\lineage\rebuild-report.json' `
-  --mode append-isolated --allow-command-without-baseline --dry-run -- `
-  '.\.venv\Scripts\python.exe' 'prepare_training_v2.py' --clear `
-  --freeze-splits-from 'annotations\lineage\incremental-plan.json'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$datasetBackup = "annotations\lineage\backups\yoyo-dataset-$stamp"
+$reviewSnapshot = "annotations\lineage\backups\dataset-review-status-$stamp.json"
+$protectedBuilder = @(
+  '.\.venv\Scripts\python.exe', 'prepare_training_v2.py',
+  '--output-dir', 'datasets\yoyo_dataset', '--clear',
+  '--freeze-splits-from', 'annotations\lineage\incremental-plan.json',
+  '--source', '{protected_canonical}'
+)
+foreach ($source in $annotationSources) { $protectedBuilder += @('--source', $source) }
+$guardArgs = @(
+  'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py',
+  'protected-run', '--manifest', 'datasets\yoyo_dataset\manifest.json',
+  '--backup-dir', $datasetBackup,
+  '--review-map', 'workbench_state\dataset_review_status.json',
+  '--review-snapshot-out', $reviewSnapshot,
+  '--review-dataset-key', 'yoyo_dataset',
+  '--report', 'annotations\lineage\rebuild-report.json',
+  '--mode', 'append-isolated', '--allow-command-without-baseline'
+)
+& '.\.venv\Scripts\python.exe' @guardArgs '--dry-run' '--' @protectedBuilder
+if ($LASTEXITCODE -ne 0) { throw 'protected rebuild dry-run failed' }
 ```
 
-Inspect the resolved paths and command printed by dry-run. Then repeat without
-`--dry-run`. Do not use a builder's fresh-resplit option in this active rebuild.
+Inspect every resolved path and source printed by dry-run. Confirm that the
+backup and review snapshot do not exist, then execute:
 
-For `strict-eval`, skip `plan`, use the literal `{baseline_manifest}` token as
-the builder's assignment input, and omit `--allow-command-without-baseline`.
+```powershell
+& '.\.venv\Scripts\python.exe' @guardArgs '--' @protectedBuilder
+if ($LASTEXITCODE -ne 0) { throw 'protected rebuild failed or was rolled back' }
+```
+
+Do not change `$stamp`, `$datasetBackup`, `$reviewSnapshot`, `$guardArgs`, or
+`$protectedBuilder` between calls. Do not use `--resplit`.
+
+Treat nonzero exit as a hard gate. Confirm `protected_label_count` matches the
+baseline sample count, `review_entry_count_rebound` matches the preflight
+review count, `dataset_backup_retained=true`, and `ok=true` before training.
+If `rolled_back=true`, diagnose the rejected candidate and start again with
+new backup paths; never bypass the label-content check.
+
+For `strict-eval`, skip `plan`, use `{baseline_manifest}` as the builder's
+assignment input, and omit `--allow-command-without-baseline`. Keep
+`{protected_canonical}` as a builder source.
 
 ## Verify An Existing Rebuild
 
@@ -97,7 +161,7 @@ Run verification without rebuilding when two manifests already exist:
 ```powershell
 & '.\.venv\Scripts\python.exe' `
   'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py' verify `
-  --baseline 'annotations\lineage\dataset-before.json' `
+  --baseline (Join-Path $datasetBackup 'manifest.json') `
   --rebuilt 'datasets\yoyo_dataset\manifest.json' `
   --mode append-isolated `
   --report 'annotations\lineage\verify-report.json'

@@ -62,6 +62,7 @@ credentials*.json
 /skills/*
 !/skills/rebuild-leakage-safe-dataset/
 /.workbuddy/
+/workbench_state/
 
 # Downloaded models, training runs, and inference output
 /models/*

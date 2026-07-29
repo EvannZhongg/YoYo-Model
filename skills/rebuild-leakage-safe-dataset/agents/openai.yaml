@@ -1,4 +1,4 @@
 interface:
   display_name: "Leakage-Safe Dataset Rebuild"
-  short_description: "Rebuild datasets without split leakage"
-  default_prompt: "Use $rebuild-leakage-safe-dataset to plan and rebuild reviewed incremental data without moving existing samples or leaking sources across train, validation, and test."
+  short_description: "Preserve reviewed edits during safe dataset rebuilds"
+  default_prompt: "Use $rebuild-leakage-safe-dataset to add approved data while preserving workbench edits, human review mappings, and existing split lineage."

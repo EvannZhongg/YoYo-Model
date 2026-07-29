@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test the leakage-safe manifest verifier."""
+"""Self-test leakage-safe planning and protected rebuild transactions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rebuild_leakage_safe import ContractError, load_manifest, main, verify_manifests
+from rebuild_leakage_safe import ContractError, load_manifest, main, sha256_file, verify_manifests
 
 
 def digest(index: int) -> str:
@@ -59,6 +59,75 @@ class LeakageSafeRebuildTests(unittest.TestCase):
             mode=mode,
             max_ratio_deviation=1.0,
         )
+
+    def protected_fixture(self) -> tuple[Path, Path, Path, Path, Path]:
+        dataset = self.root / "dataset"
+        labels = dataset / "canonical" / "labels"
+        labels.mkdir(parents=True)
+        value = json.loads(json.dumps(self.baseline_value))
+        for index, record in enumerate(value["records"], start=1):
+            label = labels / f"label-{index}.json"
+            label.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "test",
+                        "notes": "manual edit" if index == 1 else "",
+                        "workbench_edits": [{"actor": "reviewer"}] if index == 1 else [],
+                        "dataset_management": {"dataset_id": "old"},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            record["canonical_label"] = str(label)
+        manifest_path = dataset / "manifest.json"
+        manifest_path.write_text(json.dumps(value), encoding="utf-8")
+        review_map = self.root / "review-map.json"
+        review_map.write_text(
+            json.dumps(
+                {
+                    "schema_version": "review-test",
+                    "datasets": {
+                        "dataset": {
+                            "samples": {
+                                "label-1.json": {
+                                    "confirmed": True,
+                                    "reviewer": "human",
+                                    "label_sha256": sha256_file(labels / "label-1.json"),
+                                }
+                            }
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        builder = self.root / "protected_builder.py"
+        builder.write_text(
+            "\n".join(
+                (
+                    "import json,sys",
+                    "from pathlib import Path",
+                    "active=Path(sys.argv[1])",
+                    "protected=Path(sys.argv[2])",
+                    "mutate=sys.argv[3]=='mutate'",
+                    "value=json.loads((protected.parent/'manifest.json').read_text(encoding='utf-8'))",
+                    "target=active/'canonical'/'labels'",
+                    "target.mkdir(parents=True)",
+                    "for index,record in enumerate(value['records'],start=1):",
+                    " old=protected/'labels'/f'label-{index}.json'",
+                    " document=json.loads(old.read_text(encoding='utf-8'))",
+                    " document['dataset_management']={'dataset_id':'new'}",
+                    " if mutate and index==1: document['notes']='overwritten'",
+                    " new=target/old.name",
+                    " new.write_text(json.dumps(document,indent=2),encoding='utf-8')",
+                    " record['canonical_label']=str(new)",
+                    "(active/'manifest.json').write_text(json.dumps(value),encoding='utf-8')",
+                )
+            ),
+            encoding="utf-8",
+        )
+        return dataset, manifest_path, review_map, builder, labels / "label-1.json"
 
     def test_append_isolated_allows_new_groups_in_every_split(self) -> None:
         value = manifest(
@@ -184,6 +253,79 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         saved_report = json.loads(report.read_text(encoding="utf-8"))
         self.assertTrue(saved_report["ok"])
         self.assertEqual(saved_report["lineage"]["new_image_count_by_split"]["train"], 1)
+
+    def test_protected_run_preserves_edits_and_rebinds_reviews(self) -> None:
+        dataset, manifest_path, review_map, builder, edited_label = self.protected_fixture()
+        backup = self.root / "backups" / "dataset-before"
+        review_snapshot = self.root / "lineage" / "review-before.json"
+        report = self.root / "lineage" / "protected-report.json"
+        exit_code = main(
+            [
+                "protected-run",
+                "--manifest", str(manifest_path),
+                "--backup-dir", str(backup),
+                "--review-map", str(review_map),
+                "--review-snapshot-out", str(review_snapshot),
+                "--review-dataset-key", "dataset",
+                "--report", str(report),
+                "--max-ratio-deviation", "1",
+                "--allow-command-without-baseline",
+                "--", sys.executable, str(builder), str(dataset),
+                "{protected_canonical}", "preserve",
+            ]
+        )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(backup.is_dir())
+        self.assertTrue(review_snapshot.is_file())
+        rebuilt = json.loads(edited_label.read_text(encoding="utf-8"))
+        self.assertEqual(rebuilt["notes"], "manual edit")
+        rebound = json.loads(review_map.read_text(encoding="utf-8"))
+        review = rebound["datasets"]["dataset"]["samples"]["label-1.json"]
+        self.assertEqual(review["label_sha256"], sha256_file(edited_label))
+        self.assertEqual(review["reviewer"], "human")
+        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["review_entry_count_rebound"], 1)
+
+    def test_plain_run_rejects_dataset_with_canonical_labels(self) -> None:
+        dataset, manifest_path, _, _, _ = self.protected_fixture()
+        marker = self.root / "builder-ran.txt"
+        snapshot = self.root / "lineage" / "manifest-before.json"
+        exit_code = main(
+            [
+                "run", "--manifest", str(manifest_path),
+                "--snapshot-out", str(snapshot),
+                "--allow-command-without-baseline", "--",
+                sys.executable, "-c", f"from pathlib import Path;Path({str(marker)!r}).touch()",
+            ]
+        )
+        self.assertEqual(exit_code, 4)
+        self.assertTrue(dataset.is_dir())
+        self.assertFalse(snapshot.exists())
+        self.assertFalse(marker.exists())
+
+    def test_protected_run_rolls_back_changed_manual_label(self) -> None:
+        dataset, manifest_path, review_map, builder, edited_label = self.protected_fixture()
+        backup = self.root / "backups" / "dataset-before"
+        review_snapshot = self.root / "lineage" / "review-before.json"
+        review_before = review_map.read_bytes()
+        exit_code = main(
+            [
+                "protected-run",
+                "--manifest", str(manifest_path),
+                "--backup-dir", str(backup),
+                "--review-map", str(review_map),
+                "--review-snapshot-out", str(review_snapshot),
+                "--review-dataset-key", "dataset",
+                "--max-ratio-deviation", "1",
+                "--allow-command-without-baseline",
+                "--", sys.executable, str(builder), str(dataset),
+                "{protected_canonical}", "mutate",
+            ]
+        )
+        self.assertEqual(exit_code, 4)
+        self.assertTrue(dataset.is_dir())
+        self.assertFalse(backup.exists())
+        self.assertEqual(json.loads(edited_label.read_text(encoding="utf-8"))["notes"], "manual edit")
+        self.assertEqual(review_map.read_bytes(), review_before)
 
     def test_plan_preserves_old_splits_and_balances_new_groups(self) -> None:
         candidate_value = manifest(

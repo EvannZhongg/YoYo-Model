@@ -122,7 +122,7 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 - 单图自动标注
 - 图片目录批量自动标注
 - 统一数据集训练与评估
-- 悠悠球计分事件标注（三轨剪辑式时间轴、本地视频、Anchor、Evidence interval、自动续标与 JSON 元数据）
+- 悠悠球计分事件标注（五轨剪辑式时间轴，含三条计分轨、场景轨、不可标记轨，以及 Anchor、Evidence interval、自动续标与 JSON 元数据）
 - 完整视频追踪和逐帧审核
 
 计分标注每次修订都会原子写入 `annotations/score_annotations/`。每个 JSON 的 `video.source_path` 指向 `videos/` 下对应的受控源视频；`Score Annotation` 页签中的会话管理抽屉可直接加载视频并继续标注，也可修改组别/裁判、导出或删除会话。该目录属于独立的计分模型 pipeline，目前仅用于数据标注，不接入当前训练。
