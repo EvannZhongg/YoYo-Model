@@ -137,7 +137,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_unified_155860417a19_detection_best_incremental5-lr1e4-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_b2531d5e7431_detection_best_incremental101-lr1e4-v1/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
@@ -158,7 +158,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/v2v3/yoyo_v2v3_c48ce78a1181_semantic_string_neg4/weights/best.pt",
+            "runs/candidates/yoyo_unified_b2531d5e7431_semantic_string_lraspp_incremental101-lr3e5-v2/weights/best.pt",
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)

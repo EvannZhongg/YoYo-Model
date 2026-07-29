@@ -59,12 +59,12 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_unified_155860417a19_detection_best_incremental5-lr1e4-v1/weights/best.pt"
+  weights_path: "runs/candidates/yoyo_unified_b2531d5e7431_detection_best_incremental101-lr1e4-v1/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.25
   iou: 0.7
-  # Validation calibration for small 4K yoyo targets: 1280/0.25 reached
-  # precision 1.000 and recall 0.667; 640/0.25 detected none of 12 positives.
+  # The promoted incremental detector was trained and evaluated at 1280 px;
+  # lower resolutions materially reduce recall for small 4K yoyo targets.
   imgsz: 1280
   device: ""
   trace_length: 30
@@ -78,8 +78,9 @@ tracking:
   auto_download_pose: false
   # Unified-dataset LR-ASPP model. Predictions remain review-only and never
   # become label truth.
-  string_weights_path: "runs/candidates/yoyo_unified_6c7b1181cfe5_semantic_string_lraspp_clean-neg4-hn01-v1/weights/best.pt"
+  string_weights_path: "runs/candidates/yoyo_unified_b2531d5e7431_semantic_string_lraspp_incremental101-lr3e5-v2/weights/best.pt"
   enable_string_model: true
+  # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20
   # Match the input scale used for independent test evaluation.
   string_inference_scale: 1.0
