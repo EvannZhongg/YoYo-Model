@@ -11,21 +11,39 @@ from pathlib import Path
 
 from common.files import sha256_file
 from config import BASE_DIR
-from training_v2.train import _json_value, _weights_for
+from training_v2.train import _initialization_lineage, _json_value, _weights_for
 
 
-def train_orientation(view_manifest_path: Path, project_dir: Path, epochs: int, device: str) -> dict:
+def train_orientation(
+    view_manifest_path: Path,
+    project_dir: Path,
+    epochs: int,
+    device: str,
+    initial_weights: str | Path | None = None,
+    run_tag: str = "",
+    optimizer: str = "auto",
+    learning_rate: float | None = None,
+) -> dict:
     view_manifest_path = view_manifest_path.resolve()
     view = json.loads(view_manifest_path.read_text(encoding="utf-8"))
     parent_path = Path(view["parent_manifest"])
     if sha256_file(parent_path) != view["parent_manifest_sha256"]:
         raise RuntimeError("Canonical dataset manifest changed after ROI view creation")
-    weights = _weights_for("orientation", BASE_DIR / "models", auto_download=True)
+    weights = _weights_for(
+        "orientation",
+        BASE_DIR / "models",
+        auto_download=True,
+        override=initial_weights,
+    )
+    lineage_manifest = {"split_policy": {"source_groups": view["source_groups"]}}
+    initialization_lineage = _initialization_lineage(weights, lineage_manifest)
     from ultralytics import YOLO
     import torch
     import ultralytics
 
-    name = f"{view['dataset_id']}_{view['view_id']}"
+    model_token = weights.stem.replace("_", "-")
+    suffix = f"_{run_tag.strip()}" if run_tag.strip() else ""
+    name = f"{view['dataset_id']}_{view['view_id']}_{model_token}{suffix}"
     kwargs = {
         "data": view["data"],
         "epochs": int(epochs),
@@ -39,7 +57,10 @@ def train_orientation(view_manifest_path: Path, project_dir: Path, epochs: int, 
         "patience": 20,
         "cos_lr": True,
         "dropout": 0.2,
+        "optimizer": optimizer,
     }
+    if learning_rate is not None:
+        kwargs["lr0"] = float(learning_rate)
     if device:
         kwargs["device"] = device
     model = YOLO(str(weights))
@@ -62,6 +83,7 @@ def train_orientation(view_manifest_path: Path, project_dir: Path, epochs: int, 
         "dataset_counts": view["counts"],
         "initial_weights": str(weights),
         "initial_weights_sha256": sha256_file(weights),
+        "initialization_lineage": initialization_lineage,
         "parameters": kwargs,
         "metrics": _json_value(getattr(results, "results_dict", {})),
         "environment": {
@@ -78,7 +100,14 @@ def train_orientation(view_manifest_path: Path, project_dir: Path, epochs: int, 
             "last": str(last),
             "last_sha256": sha256_file(last),
         },
-        "promotion": {"status": "candidate", "rule": "Evaluate once on the untouched ROI test split."},
+        "promotion": {
+            "status": "candidate" if initialization_lineage["promotion_eligible"] else "ineligible_source_overlap",
+            "rule": (
+                "Evaluate once on the untouched ROI test split."
+                if initialization_lineage["promotion_eligible"]
+                else "Do not promote: initialization training sources overlap this view's evaluation sources."
+            ),
+        },
     }
     (save_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest
@@ -90,8 +119,21 @@ def main() -> int:
     parser.add_argument("--project-dir", default=str(BASE_DIR / "runs" / "v2v3"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--device", default="0")
+    parser.add_argument("--initial-weights", default="")
+    parser.add_argument("--run-tag", default="")
+    parser.add_argument("--optimizer", default="auto")
+    parser.add_argument("--lr0", type=float, default=None)
     args = parser.parse_args()
-    result = train_orientation(Path(args.view_manifest), Path(args.project_dir), args.epochs, args.device)
+    result = train_orientation(
+        Path(args.view_manifest),
+        Path(args.project_dir),
+        args.epochs,
+        args.device,
+        args.initial_weights or None,
+        args.run_tag,
+        args.optimizer,
+        args.lr0,
+    )
     print(json.dumps({"run_dir": result["run_dir"], "view_id": result["dataset_view_id"]}, ensure_ascii=False, indent=2))
     return 0
 

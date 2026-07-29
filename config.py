@@ -158,7 +158,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_b2531d5e7431_semantic_string_lraspp_incremental101-lr3e5-v2/weights/best.pt",
+            "runs/candidates/yoyo_unified_1ae945ed3856_semantic_string_lraspp_incremental8-lr1e5-v1/weights/best.pt",
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
