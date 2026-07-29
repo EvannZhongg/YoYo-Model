@@ -137,11 +137,11 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_unified_b2531d5e7431_detection_best_incremental101-lr1e4-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_1ae945ed3856_detection_best_incremental8-lr5e5-v1/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
-    confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.25))
+    confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.15))
     iou: float = float(_env_or_config("TRACKING_IOU", "tracking.iou", 0.7))
     imgsz: int = int(_env_or_config("TRACKING_IMGSZ", "tracking.imgsz", 1280))
     device: str = str(_env_or_config("TRACKING_DEVICE", "tracking.device", ""))

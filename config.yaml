@@ -59,9 +59,9 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_unified_b2531d5e7431_detection_best_incremental101-lr1e4-v1/weights/best.pt"
+  weights_path: "runs/candidates/yoyo_unified_1ae945ed3856_detection_best_incremental8-lr5e5-v1/weights/best.pt"
   output_dir: "tracked_videos"
-  confidence: 0.25
+  confidence: 0.15
   iou: 0.7
   # The promoted incremental detector was trained and evaluated at 1280 px;
   # lower resolutions materially reduce recall for small 4K yoyo targets.
