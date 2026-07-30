@@ -185,7 +185,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_ORIENTATION_WEIGHTS_PATH",
             "tracking.orientation_weights_path",
-            "runs/candidates/yoyo_unified_f5775b248d3b_orientation_roi_e9fe2c6d4664_yolo11n-cls_southchina36-freeze10-lr5e4-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_582cde69ebb8_orientation_roi_d88241f08b82_best_nyyc36-warm-freeze10-lr1e4-v1/weights/best.pt",
         )
     )
     enable_orientation_model: bool = _as_bool(

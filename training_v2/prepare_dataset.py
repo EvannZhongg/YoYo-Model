@@ -291,7 +291,11 @@ def _safe_name(value: str) -> str:
 
 
 def _relative_stem(sample: Sample) -> Path:
-    return Path(_safe_name(sample.source_group)) / f"{_safe_name(sample.image_path.stem)}-{sample.image_sha256[:8]}"
+    stem = _safe_name(sample.image_path.stem)
+    digest_suffix = f"-{sample.image_sha256[:8]}"
+    while stem.lower().endswith(digest_suffix):
+        stem = stem[: -len(digest_suffix)]
+    return Path(_safe_name(sample.source_group)) / f"{stem}{digest_suffix}"
 
 
 def _bbox_line(sample: Sample) -> str:

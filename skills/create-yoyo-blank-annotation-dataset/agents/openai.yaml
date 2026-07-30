@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Yoyo Blank Dataset"
+  short_description: "Safely append blank frames without losing reviews"
+  default_prompt: "Use $create-yoyo-blank-annotation-dataset to create or safely append deduplicated blank Workbench labels while preserving manual edits and human verification."

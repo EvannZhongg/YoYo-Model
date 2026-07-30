@@ -19,8 +19,8 @@ from workbench.dataset_annotation import (
 
 
 class DatasetAnnotationWorkbenchTests(unittest.TestCase):
-    def _dataset(self, root: Path) -> tuple[Path, str]:
-        dataset = root / "review_set"
+    def _dataset(self, root: Path, name: str = "review_set") -> tuple[Path, str]:
+        dataset = root / name
         group = "performer-01"
         image_path = dataset / "canonical" / "images" / group / "frame-001.jpg"
         label_path = dataset / "canonical" / "labels" / group / "frame-001.json"
@@ -36,6 +36,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                     "source_group": group,
                     "frame_index": 12,
                     "visibility": "visible",
+                    "trick_orientation": "normal",
                     "yoyo_bbox_pixel": [100, 50, 140, 90],
                     "string_visibility": "partial",
                     "string_polylines_pixel": [[[10, 20], [30, 40]]],
@@ -58,6 +59,20 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 self.assertEqual(list_annotation_datasets(), [{"name": "review_set", "path": str(dataset.resolve())}])
 
+    def test_lists_every_annotation_dataset_under_datasets_root(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, _ = self._dataset(root, "alpha")
+            second, _ = self._dataset(root, "second")
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                self.assertEqual(
+                    list_annotation_datasets(),
+                    [
+                        {"name": "alpha", "path": str(first.resolve())},
+                        {"name": "second", "path": str(second.resolve())},
+                    ],
+                )
+
     def test_component_exposes_redraw_precision_and_packed_server_requests(self):
         component = dataset_annotation_component_kwargs()
         self.assertIn("重绘绳线", component["value"])
@@ -68,6 +83,14 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
         self.assertIn('value="partially_visible">部分可见', component["value"])
         self.assertIn('value="out_of_frame">画面外', component["value"])
         self.assertIn('value="absent">不存在', component["value"])
+        self.assertIn('id="yda-trick-orientation"', component["value"])
+        self.assertNotIn('id="yda-item-name"', component["value"])
+        self.assertNotIn('id="yda-item-group"', component["value"])
+        self.assertIn('id="yda-dirty" role="status"', component["value"])
+        self.assertIn('value="horizontal">水平（horizontal）', component["value"])
+        self.assertIn('trick_orientation:$("#yda-trick-orientation").value', component["js_on_load"])
+        self.assertIn('trickOrientation:$("#yda-trick-orientation").value', component["js_on_load"])
+        self.assertIn('$("#yda-trick-orientation").value=annotation.trick_orientation', component["js_on_load"])
         self.assertIn("ui_set_annotation_sample_reviewed({", component["js_on_load"])
         self.assertIn('id="yda-toggle-annotations"', component["value"])
         self.assertIn('addEventListener("wheel"', component["js_on_load"])
@@ -81,6 +104,9 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
         self.assertIn('id="yda-reset"', component["value"])
         self.assertIn("function resetUnsavedChanges", component["js_on_load"])
         self.assertIn("state.baseline=editorSnapshot()", component["js_on_load"])
+        self.assertIn("function refreshDatasetOptions", component["js_on_load"])
+        self.assertIn("syncDatasetChoice(result.dataset_path)", component["js_on_load"])
+        self.assertIn('["pointerenter","focus","pointerdown"]', component["js_on_load"])
 
     def test_canvas_zoom_is_isolated_from_fixed_sidebars(self):
         component = dataset_annotation_component_kwargs()
@@ -89,8 +115,10 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
         javascript = component["js_on_load"]
 
         self.assertIn('class="yda__canvas-layer"', html)
-        self.assertIn("grid-template-columns:240px minmax(0,1fr) 300px", css)
-        self.assertIn("grid-template-columns:210px minmax(0,1fr) 280px", css)
+        self.assertIn("grid-template-columns:240px minmax(0,1fr) 330px", css)
+        self.assertIn("grid-template-columns:210px minmax(0,1fr) 300px", css)
+        self.assertIn("height:clamp(700px,calc(100dvh - 100px),960px)", css)
+        self.assertIn(".yda__editor-scroll { overflow:visible; padding-right:0; }", css)
         self.assertIn(".yda__canvas-layer", css)
         self.assertIn("contain:size layout paint", css)
         self.assertIn('$("#yda-viewport").addEventListener("wheel"', javascript)
@@ -180,6 +208,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             review_path = root / REVIEW_MAP_FILENAME
             edit = {
                 "yoyo_visibility": "visible",
+                "trick_orientation": "normal",
                 "yoyo_bbox_pixel": [100, 50, 140, 90],
                 "string_visibility": "partial",
                 "string_polylines_pixel": [[[10, 20], [30, 40]]],
@@ -202,6 +231,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             dataset, key = self._dataset(root)
             edit = {
                 "yoyo_visibility": "visible",
+                "trick_orientation": "horizontal",
                 "yoyo_bbox_pixel": [200, 25, 300, 75],
                 "string_visibility": "visible",
                 "string_polylines_pixel": [[[40, 20], [200, 100], [360, 180]]],
@@ -215,10 +245,28 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
 
             annotation = result["annotation"]
             self.assertEqual(annotation["yoyo_bbox_pixel"], [200.0, 25.0, 300.0, 75.0])
+            self.assertEqual(annotation["trick_orientation"], "horizontal")
             self.assertEqual(annotation["yoyo_bbox_2d"], [500.0, 125.0, 750.0, 375.0])
             self.assertEqual(annotation["string_polylines_2d"][0], [[100.0, 100.0], [500.0, 500.0], [900.0, 900.0]])
             self.assertIsNone(annotation["string_mask_polygons_pixel"])
             self.assertEqual(annotation["workbench_edits"][-1]["actor"], "tester")
+            self.assertIn("trick_orientation", annotation["workbench_edits"][-1]["fields"])
+
+    def test_save_rejects_invalid_trick_orientation(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = self._dataset(root)
+            edit = {
+                "yoyo_visibility": "visible",
+                "trick_orientation": "unknown",
+                "yoyo_bbox_pixel": [100, 50, 140, 90],
+                "string_visibility": "partial",
+                "string_polylines_pixel": [[[10, 20], [30, 40]]],
+                "string_review_status": "approved",
+            }
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                with self.assertRaisesRegex(ValueError, "invalid trick orientation"):
+                    save_annotation_sample(str(dataset), key, edit)
 
     def test_save_rejects_geometry_outside_original_image(self):
         with TemporaryDirectory() as directory:
@@ -226,6 +274,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             dataset, key = self._dataset(root)
             edit = {
                 "yoyo_visibility": "visible",
+                "trick_orientation": "normal",
                 "yoyo_bbox_pixel": [10, 10, 401, 100],
                 "string_visibility": "not_visible",
                 "string_polylines_pixel": [],

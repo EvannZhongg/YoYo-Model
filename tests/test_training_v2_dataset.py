@@ -112,6 +112,19 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                 self.assertEqual(class_dirs, ["horizontal", "normal", "not_applicable"])
                 self.assertTrue(all(not any(path.is_dir() for path in (output / "orientation" / split / name).iterdir()) for name in class_dirs))
 
+    def test_canonical_rebuild_keeps_image_hash_suffix_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "annotations" / "source"
+            self._write_source(source, ["a", "b", "c", "d", "e", "f"])
+            first = build_training_dataset([source], base / "dataset-v1", seed=7)
+            second = build_training_dataset([base / "dataset-v1" / "canonical"], base / "dataset-v2", seed=7)
+
+            first_names = sorted(Path(record["canonical_image"]).name for record in first["records"])
+            second_names = sorted(Path(record["canonical_image"]).name for record in second["records"])
+            self.assertEqual(second_names, first_names)
+            self.assertTrue(all(name.count("-") < 10 for name in second_names))
+
     def test_discovers_all_non_score_annotation_sources(self):
         with tempfile.TemporaryDirectory() as directory:
             annotations = Path(directory) / "annotations"

@@ -57,10 +57,12 @@ credentials*.json
 /yolo_dataset/
 /videos/
 /archive/
+/b/
 
 # Local Codex skills and agent workspace state
 /skills/*
 !/skills/rebuild-leakage-safe-dataset/
+!/skills/create-yoyo-blank-annotation-dataset/
 /.workbuddy/
 /workbench_state/
 
