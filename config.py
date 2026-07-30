@@ -158,7 +158,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_1ae945ed3856_semantic_string_lraspp_incremental8-lr1e5-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1/weights/best.pt",
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
@@ -185,7 +185,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_ORIENTATION_WEIGHTS_PATH",
             "tracking.orientation_weights_path",
-            "runs/v2v3/yoyo_v2v3_c48ce78a1181_orientation_roi_0c0225b2e6ed/weights/best.pt",
+            "runs/candidates/yoyo_unified_f5775b248d3b_orientation_roi_e9fe2c6d4664_yolo11n-cls_southchina36-freeze10-lr5e4-v1/weights/best.pt",
         )
     )
     enable_orientation_model: bool = _as_bool(

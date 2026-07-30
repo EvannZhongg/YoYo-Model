@@ -91,7 +91,7 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 评估器会校验数据 manifest 和 best weights 的 SHA-256，然后在来源隔离的 test split 上运行。
 
-当前已固化的训练版本、独立测试指标和权重哈希见 [`reports/training_20260730.md`](reports/training_20260730.md)。
+当前已固化的训练版本、独立测试指标和权重哈希见 [`reports/training_20260731.md`](reports/training_20260731.md)。
 
 ## 完整视频追踪
 

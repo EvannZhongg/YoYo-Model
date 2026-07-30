@@ -23,6 +23,12 @@ def train_orientation(
     run_tag: str = "",
     optimizer: str = "auto",
     learning_rate: float | None = None,
+    imgsz: int = 320,
+    batch: int = 16,
+    patience: int = 20,
+    dropout: float = 0.2,
+    freeze: int = 0,
+    seed: int = 20260726,
 ) -> dict:
     view_manifest_path = view_manifest_path.resolve()
     view = json.loads(view_manifest_path.read_text(encoding="utf-8"))
@@ -47,18 +53,20 @@ def train_orientation(
     kwargs = {
         "data": view["data"],
         "epochs": int(epochs),
-        "imgsz": 320,
-        "batch": 16,
+        "imgsz": int(imgsz),
+        "batch": int(batch),
         "workers": 0,
         "project": str(project_dir.resolve()),
         "name": name,
         "exist_ok": False,
-        "seed": 20260726,
-        "patience": 20,
+        "seed": int(seed),
+        "patience": max(0, int(patience)),
         "cos_lr": True,
-        "dropout": 0.2,
+        "dropout": float(dropout),
         "optimizer": optimizer,
     }
+    if freeze > 0:
+        kwargs["freeze"] = int(freeze)
     if learning_rate is not None:
         kwargs["lr0"] = float(learning_rate)
     if device:
@@ -123,6 +131,12 @@ def main() -> int:
     parser.add_argument("--run-tag", default="")
     parser.add_argument("--optimizer", default="auto")
     parser.add_argument("--lr0", type=float, default=None)
+    parser.add_argument("--imgsz", type=int, default=320)
+    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--freeze", type=int, default=0, help="Freeze the first N model layers for transfer learning.")
+    parser.add_argument("--seed", type=int, default=20260726)
     args = parser.parse_args()
     result = train_orientation(
         Path(args.view_manifest),
@@ -133,6 +147,12 @@ def main() -> int:
         args.run_tag,
         args.optimizer,
         args.lr0,
+        args.imgsz,
+        args.batch,
+        args.patience,
+        args.dropout,
+        args.freeze,
+        args.seed,
     )
     print(json.dumps({"run_dir": result["run_dir"], "view_id": result["dataset_view_id"]}, ensure_ascii=False, indent=2))
     return 0
