@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Yoyo Consecutive Dataset"
+  short_description: "Create consecutive blank yoyo frame datasets"
+  default_prompt: "Use $create-yoyo-consecutive-blank-annotation-dataset to create a blank annotation dataset from uninterrupted middle video frame runs."
