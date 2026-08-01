@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yoyo String Annotation VLM Assisted"
+  short_description: "VLM triage with agent-reviewed string geometry"
+  default_prompt: "Use $yoyo-string-annotation-vlm-assisted to triage sampled yoyo frames and complete review-gated string annotations."

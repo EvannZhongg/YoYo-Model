@@ -1,0 +1,12 @@
+# Core annotation and image processing
+numpy>=1.24
+Pillow>=10.0
+opencv-python>=4.8
+
+# OpenAI-compatible VLM configuration and requests
+openai>=1.0
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Fallback video decoding when OpenCV cannot open a source
+imageio[ffmpeg]>=2.31

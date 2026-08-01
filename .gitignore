@@ -63,6 +63,8 @@ credentials*.json
 /skills/*
 !/skills/rebuild-leakage-safe-dataset/
 !/skills/create-yoyo-blank-annotation-dataset/
+!/skills/yoyo-string-annotation-vlm-assisted/
+/skills/yoyo-string-annotation-vlm-assisted/.env
 /.workbuddy/
 /workbench_state/
 
