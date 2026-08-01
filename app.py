@@ -2,6 +2,11 @@ import logging
 import os
 from pathlib import Path
 
+# The system TEMP directory can receive sandbox-specific ACLs on Windows,
+# making Gradio's copied media intermittently unreadable by the ASGI worker.
+os.environ.setdefault("GRADIO_TEMP_DIR", str(Path(__file__).resolve().parent / "tmp" / "gradio"))
+Path(os.environ["GRADIO_TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
+
 import gradio as gr
 
 from annotation.annotator import annotate_image_for_dataset, run_detection_streaming
@@ -206,6 +211,7 @@ def run_video_tracking(
         logger.exception("Video tracking failed")
         return (*empty, f"Error: {exc}")
 
+    gr.set_static_paths(paths=[result["run_dir"]])
     review_gallery = _tracking_review_gallery(result.get("run_dir"))
     status = (
         f"Done. Frames: {result['frame_count']}\n"
@@ -239,6 +245,7 @@ def run_video_tracking(
 
 
 def create_demo():
+    gr.set_static_paths(paths=[TRACKING_CONFIG.output_dir])
     unified_dataset = BASE_DIR / "datasets" / "yoyo_dataset"
     with gr.Blocks(title="YoYo Model") as demo:
         gr.Markdown("# YoYo Model")
@@ -333,7 +340,13 @@ def create_demo():
             with gr.Tab("Video Tracking"):
                 with gr.Row():
                     with gr.Column(scale=1):
-                        video_input = gr.Video(label="Input Video")
+                        video_input = gr.FileExplorer(
+                            label="Input Video",
+                            root_dir=BASE_DIR / "videos",
+                            glob="*.mp4",
+                            file_count="single",
+                            height=280,
+                        )
                         tracking_weights = gr.Textbox(label="YOLO Weights", value=str(TRACKING_CONFIG.weights_path))
                         tracking_output_dir = gr.Textbox(label="Output Directory", value=str(TRACKING_CONFIG.output_dir))
                         tracking_preview_width = gr.Number(
