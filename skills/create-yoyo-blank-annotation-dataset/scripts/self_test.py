@@ -86,7 +86,7 @@ def run() -> None:
         videos.mkdir()
         video = videos / "unicode-测试.avi"
         write_video(video)
-        reference = datasets / "yoyo_dataset"
+        reference = datasets / "1Ayoyo_dataset"
         write_reference(reference, video, frame_index=20)
         cache = root / "hash_cache.json"
         common = [

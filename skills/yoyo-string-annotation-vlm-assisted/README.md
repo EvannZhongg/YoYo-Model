@@ -153,7 +153,7 @@ VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `
 | `string_mask_polygons_pixel` | 可选的可见绳区域多边形 |
 | `hands_pixel` | 左右手原图像素位置：`{"left": point|null, "right": point|null}` |
 | `hands_2d` | 左右手位置的 0–999 镜像 |
-| `string_attachment_class` | `hand_and_yoyo_attached`、`yoyo_detached`、`hand_detached`、`unknown` |
+| `yoyo_division` | `1A`、`2A`、`3A`、`4A`、`5A` |
 | `scene_label` | `trick`、`transition`、`non_trick`、`unknown` |
 | `trick_orientation` | `normal`、`horizontal`、`unknown`、`not_applicable` |
 | `string_path` | 绳路拓扑、锚点、有序点、边证据和未解决间隙 |

@@ -123,7 +123,7 @@ def train_orientation(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Train the ROI trick-orientation classifier.")
-    parser.add_argument("--view-manifest", default=str(BASE_DIR / "datasets" / "yoyo_dataset" / "orientation_roi" / "manifest.json"))
+    parser.add_argument("--view-manifest", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset" / "orientation_roi" / "manifest.json"))
     parser.add_argument("--project-dir", default=str(BASE_DIR / "runs" / "v2v3"))
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--device", default="0")

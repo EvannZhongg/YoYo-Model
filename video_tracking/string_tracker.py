@@ -372,7 +372,7 @@ def _geometry_to_wrist_distance(
 def _annotate_hand_anchor(
     observation: dict[str, Any],
     wrists: list[dict[str, Any]],
-    attachment_class: str,
+    yoyo_division: str,
     width: int,
     height: int,
 ) -> dict[str, Any]:
@@ -381,19 +381,6 @@ def _annotate_hand_anchor(
     distance = None
     status = "not_applicable"
     mismatch = False
-    if attachment_class == "hand_and_yoyo_attached":
-        geometry = _observation_geometry(result)
-        if not wrists:
-            status = "no_visible_wrist"
-        elif not geometry:
-            status = "no_geometry"
-        else:
-            distance = _geometry_to_wrist_distance(geometry, wrists)
-            if distance is None:
-                status = "no_visible_wrist"
-            else:
-                mismatch = distance > threshold
-                status = "mismatch" if mismatch else "matched"
     result.update(
         {
             "hand_anchor_status": status,
@@ -461,7 +448,7 @@ def estimate_string(
     wrists: list[dict[str, Any]],
     previous_gray: np.ndarray | None,
     previous_string: dict[str, Any] | None,
-    attachment_class: str = "unknown",
+    yoyo_division: str = "1A",
     observation: dict[str, Any] | None = None,
     max_propagation_frames: int = 12,
     max_forward_backward_error: float = 4.0,
@@ -473,7 +460,7 @@ def estimate_string(
     width, height = frame.shape[1], frame.shape[0]
 
     def finalize(result: dict[str, Any]) -> dict[str, Any]:
-        return _annotate_hand_anchor(result, wrists, attachment_class, width, height)
+        return _annotate_hand_anchor(result, wrists, yoyo_division, width, height)
 
     propagated = None
     if previous_string and previous_string.get("points"):
@@ -495,8 +482,8 @@ def estimate_string(
         color_observation = _color_line_observation(
             frame,
             yoyo,
-            require_yoyo_proximity=attachment_class in {"hand_and_yoyo_attached", "hand_detached"},
-            mark_far_ambiguous=attachment_class == "unknown",
+            require_yoyo_proximity=False,
+            mark_far_ambiguous=False,
             reference_points=(propagated or {}).get("points"),
         )
         if color_observation is not None:

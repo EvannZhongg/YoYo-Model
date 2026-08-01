@@ -83,7 +83,7 @@ def positive_candidate(
         "string_polylines_pixel": strokes,
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": HAND_LEFT, "right": HAND_RIGHT},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "trick",
         "trick_orientation": "normal",
         "string_path": observed_path(strokes, topology),
@@ -100,7 +100,7 @@ def negative_candidate(features: list[str], yoyo_visible: bool) -> dict[str, Any
         "string_polylines_pixel": None,
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": None, "right": None},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "non_trick",
         "trick_orientation": "not_applicable",
         "string_path": {

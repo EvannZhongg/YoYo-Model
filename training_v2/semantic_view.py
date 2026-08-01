@@ -55,7 +55,7 @@ def write_semantic_view_manifest(dataset_dir: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare the unified dataset for semantic string training.")
-    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset"))
+    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     args = parser.parse_args()
     manifest = write_semantic_view_manifest(Path(args.dataset_dir))
     print(json.dumps({"dataset_id": manifest["dataset_id"], "counts": manifest["counts"], "output_dir": manifest["output_dir"]}, ensure_ascii=False, indent=2))

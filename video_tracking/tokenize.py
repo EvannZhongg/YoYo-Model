@@ -21,7 +21,7 @@ STRING_METHODS = (
     "temporal_fusion",
     "hand_to_yoyo_geometric_prior",
 )
-STRING_ATTACHMENT_CLASSES = ("unknown", "hand_and_yoyo_attached", "yoyo_detached", "hand_detached")
+YOYO_DIVISIONS = ("1A", "2A", "3A", "4A", "5A")
 STRING_HAND_ANCHOR_STATUSES = (
     "unknown",
     "not_applicable",
@@ -72,7 +72,7 @@ def feature_names() -> list[str]:
     names.extend(f"visibility_{state}" for state in VISIBILITY_STATES)
     names.extend(["string_present", "string_confidence", "string_length_diag"])
     names.extend(f"string_method_{method}" for method in STRING_METHODS)
-    names.extend(f"string_attachment_{name}" for name in STRING_ATTACHMENT_CLASSES)
+    names.extend(f"yoyo_division_{name}" for name in YOYO_DIVISIONS)
     for index in range(STRING_POINT_COUNT):
         names.extend((f"string_{index}_x", f"string_{index}_y", f"string_{index}_present"))
     names.extend(
@@ -225,10 +225,10 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
         vector.extend((1.0 if string else 0.0, float((string or {}).get("confidence", 0.0)), _polyline_length(string_points) / diagonal))
         method = str((string or {}).get("method", ""))
         vector.extend(1.0 if method == name else 0.0 for name in STRING_METHODS)
-        attachment_class = str(record.get("string_attachment_class", "unknown"))
-        if attachment_class not in STRING_ATTACHMENT_CLASSES:
-            attachment_class = "unknown"
-        vector.extend(1.0 if attachment_class == name else 0.0 for name in STRING_ATTACHMENT_CLASSES)
+        yoyo_division = str(record.get("yoyo_division", "1A"))
+        if yoyo_division not in YOYO_DIVISIONS:
+            yoyo_division = "1A"
+        vector.extend(1.0 if yoyo_division == name else 0.0 for name in YOYO_DIVISIONS)
         for index in range(STRING_POINT_COUNT):
             if index < len(resampled):
                 vector.extend((resampled[index][0] / width, resampled[index][1] / height, 1.0))
@@ -289,7 +289,7 @@ def tracking_records_to_features(records: list[dict[str, Any]], width: int, heig
             "yoyo_present": bool(yoyo),
             "string_present": bool(string),
             "string_method": method or None,
-            "string_attachment_class": attachment_class,
+            "yoyo_division": yoyo_division,
             "string_component_count": len(string_components),
             "string_encoded_component_count": min(len(string_components), STRING_COMPONENT_COUNT),
             "string_hand_supported_component_count": int(
@@ -331,7 +331,7 @@ def export_tracking_features(records: list[dict[str, Any]], run_dir: str | Path,
         feature_names=np.asarray(feature_names()),
     )
     manifest = {
-        "schema_version": "yoyo_tracking_frame_features_v8",
+        "schema_version": "yoyo_tracking_frame_features_v9",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "frame_count": len(rows),
         "feature_count": len(feature_names()),
@@ -341,7 +341,7 @@ def export_tracking_features(records: list[dict[str, Any]], run_dir: str | Path,
         "string_component_point_count": STRING_COMPONENT_POINT_COUNT,
         "string_component_order_policy": "Preserve tracking observation order: yoyo-side primary first, then independently observed hand-supported components; never interpolate across components.",
         "string_methods": list(STRING_METHODS),
-        "string_attachment_classes": list(STRING_ATTACHMENT_CLASSES),
+        "yoyo_divisions": list(YOYO_DIVISIONS),
         "string_hand_anchor_statuses": list(STRING_HAND_ANCHOR_STATUSES),
         "pose_point_count": POSE_POINT_COUNT,
         "orientation_classes": list(ORIENTATION_CLASSES),

@@ -549,7 +549,7 @@ def initial_label(record: dict[str, Any], sampling_manifest_sha256: str) -> dict
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": None, "right": None},
         "hands_2d": {"left": None, "right": None},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "normal",
         "string_path": {

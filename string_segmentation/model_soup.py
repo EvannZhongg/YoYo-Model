@@ -169,7 +169,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Interpolate two semantic string checkpoints and calibrate on validation.")
     parser.add_argument("--baseline-weights", required=True)
     parser.add_argument("--candidate-weights", required=True)
-    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset" / "string_segmentation"))
+    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset" / "string_segmentation"))
     parser.add_argument("--project", default=str(BASE_DIR / "runs" / "candidates"))
     parser.add_argument("--name", required=True)
     parser.add_argument("--alpha", type=float, required=True, help="Candidate model weight in [0, 1].")

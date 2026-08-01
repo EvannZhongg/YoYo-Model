@@ -200,7 +200,7 @@ def train_task(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train yoyo models from the unified NYPC1A dataset with versioned run manifests.")
-    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset"))
+    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     parser.add_argument("--task", choices=("all", *TASKS), default="all")
     parser.add_argument("--project-dir", default=str(BASE_DIR / "runs" / "v2v3"))
     parser.add_argument("--models-dir", default=str(BASE_DIR / "models"))

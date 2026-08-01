@@ -178,8 +178,8 @@ class TrackingConfig:
     string_fusion_distance_px: float = float(
         _env_or_config("TRACKING_STRING_FUSION_DISTANCE_PX", "tracking.string_fusion_distance_px", 48.0)
     )
-    string_attachment_class: str = str(
-        _env_or_config("TRACKING_STRING_ATTACHMENT_CLASS", "tracking.string_attachment_class", "unknown")
+    yoyo_division: str = str(
+        _env_or_config("TRACKING_YOYO_DIVISION", "tracking.yoyo_division", "1A")
     )
     orientation_weights_path: Path = _as_path(
         _env_or_config(
@@ -202,7 +202,7 @@ class TrackingConfig:
 @dataclass(frozen=True)
 class SemanticStringConfig:
     dataset_dir: Path = _as_path(
-        _env_or_config("SEMANTIC_STRING_DATASET_DIR", "semantic_string.dataset_dir", "datasets/yoyo_dataset/string_segmentation")
+        _env_or_config("SEMANTIC_STRING_DATASET_DIR", "semantic_string.dataset_dir", "datasets/1Ayoyo_dataset/string_segmentation")
     )
     project: Path = _as_path(_env_or_config("SEMANTIC_STRING_PROJECT", "semantic_string.project", "runs/semantic"))
     run_name: str = str(_env_or_config("SEMANTIC_STRING_RUN_NAME", "semantic_string.run_name", "yoyo_string_semantic_candidate"))

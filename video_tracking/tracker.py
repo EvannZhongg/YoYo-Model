@@ -180,7 +180,7 @@ def _predict_string_model(
     confidence: float,
     imgsz: int,
     device: str,
-    attachment_class: str,
+    yoyo_division: str,
     semantic_inference_scale: float = 1.0,
     wrists: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
@@ -205,7 +205,6 @@ def _predict_string_model(
             meta,
             threshold=threshold,
             yoyo=yoyo,
-            attachment_class=attachment_class,
             min_component_pixels=max(1, int(round(8 * component_area_scale))),
             hand_points=[
                 [float(wrist["x"]), float(wrist["y"])]
@@ -247,10 +246,7 @@ def _predict_string_model(
         candidates.append((distance, -float(score), array))
     if not candidates:
         return None
-    if attachment_class == "hand_and_yoyo_attached":
-        candidates.sort(key=lambda item: (item[0], item[1]))
-    else:
-        candidates.sort(key=lambda item: (item[1], item[0]))
+    candidates.sort(key=lambda item: (item[1], item[0]))
     _, negative_score, polygon = candidates[0]
     selected = [item[2] for item in candidates]
     return {
@@ -721,7 +717,7 @@ def track_video(
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
-    string_attachment_class: str = TRACKING_CONFIG.string_attachment_class,
+    yoyo_division: str = TRACKING_CONFIG.yoyo_division,
     orientation_weights_path: str | Path | None = None,
     enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
     orientation_imgsz: int = TRACKING_CONFIG.orientation_imgsz,
@@ -730,9 +726,8 @@ def track_video(
     start_seconds: float = 0.0,
     max_frames: int = 0,
 ) -> dict[str, Any]:
-    allowed_attachment_classes = {"hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"}
-    if string_attachment_class not in allowed_attachment_classes:
-        raise ValueError(f"Unsupported string attachment class: {string_attachment_class}")
+    if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
+        raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
     if not 0.5 <= float(string_inference_scale) <= 2.0:
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
@@ -870,7 +865,7 @@ def track_video(
                 string_confidence,
                 imgsz,
                 device,
-                string_attachment_class,
+                yoyo_division,
                 string_inference_scale,
                 wrists,
             )
@@ -881,7 +876,7 @@ def track_video(
             wrists,
             previous_gray,
             previous_string,
-            string_attachment_class,
+            yoyo_division,
             observation=model_string,
             max_propagation_frames=string_max_propagation_frames,
             max_forward_backward_error=string_flow_fb_max_error,
@@ -905,7 +900,7 @@ def track_video(
                 string_confidence,
                 imgsz,
                 device,
-                string_attachment_class,
+                yoyo_division,
                 string_inference_scale,
                 wrists,
             )
@@ -916,7 +911,7 @@ def track_video(
                 wrists,
                 previous_gray,
                 previous_string,
-                string_attachment_class,
+                yoyo_division,
                 observation=model_string,
                 max_propagation_frames=string_max_propagation_frames,
                 max_forward_backward_error=string_flow_fb_max_error,
@@ -1032,7 +1027,7 @@ def track_video(
                     else "model_unavailable"
                 ),
             },
-            "string_attachment_class": string_attachment_class,
+            "yoyo_division": yoyo_division,
             "visibility": {
                 "state": visibility_state,
                 "missing_streak_frames": missing_streak,
@@ -1165,7 +1160,7 @@ def track_video(
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_fusion_distance_px": float(string_fusion_distance_px),
-            "string_attachment_class": string_attachment_class,
+            "yoyo_division": yoyo_division,
             "orientation_model_enabled": bool(enable_orientation_model),
             "orientation_weights": str(resolved_orientation_weights),
             "orientation_imgsz": int(orientation_imgsz),
@@ -1278,9 +1273,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
     parser.add_argument("--string-fusion-distance-px", type=float, default=TRACKING_CONFIG.string_fusion_distance_px)
     parser.add_argument(
-        "--string-attachment-class",
-        choices=["hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"],
-        default=TRACKING_CONFIG.string_attachment_class,
+        "--yoyo-division",
+        choices=["1A", "2A", "3A", "4A", "5A"],
+        default=TRACKING_CONFIG.yoyo_division,
     )
     parser.add_argument("--orientation-weights", default=str(TRACKING_CONFIG.orientation_weights_path))
     parser.add_argument("--no-orientation-model", action="store_true")
@@ -1319,7 +1314,7 @@ def main() -> int:
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         string_fusion_distance_px=args.string_fusion_distance_px,
-        string_attachment_class=args.string_attachment_class,
+        yoyo_division=args.yoyo_division,
         orientation_weights_path=args.orientation_weights,
         enable_orientation_model=not args.no_orientation_model,
         orientation_imgsz=args.orientation_imgsz,

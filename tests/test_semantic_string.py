@@ -230,7 +230,7 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["points"]), 2)
         self.assertGreaterEqual(len(result["polygon"]), 3)
 
-    def test_attached_mode_rejects_component_far_from_yoyo(self):
+    def test_division_does_not_reject_component_far_from_yoyo(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[5:8, 5:35] = 0.95
         meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
@@ -240,12 +240,12 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
         )
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
 
-    def test_attached_mode_rejects_component_inside_yoyo_body(self):
+    def test_division_does_not_reject_component_inside_yoyo_body(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[43:53, 72:84] = 0.95
         meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
@@ -255,12 +255,12 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
         )
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
 
-    def test_attached_mode_keeps_string_extending_outside_yoyo_body(self):
+    def test_division_keeps_string_extending_outside_yoyo_body(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[47:50, 20:81] = 0.95
         meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
@@ -270,13 +270,13 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
         )
         self.assertIsNotNone(result)
         self.assertLess(result["yoyo_body_overlap_fraction"], 0.60)
 
-    def test_attached_mode_retains_observed_hand_supported_components(self):
+    def test_division_does_not_change_component_selection(self):
         probability = np.zeros((600, 1000), dtype=np.float32)
         probability[296:305, 820:901] = 0.95  # yoyo-side primary
         probability[296:305, 100:181] = 0.95  # direct wrist support
@@ -290,7 +290,7 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
         )
         with_hands = semantic_mask_observation(
@@ -298,7 +298,7 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
             hand_points=[[100.0, 300.0]],
         )
@@ -307,7 +307,7 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             min_component_pixels=1,
             max_components=1,
             hand_points=[[100.0, 300.0]],
@@ -315,16 +315,15 @@ class SemanticStringTests(unittest.TestCase):
 
         self.assertIsNotNone(without_hands)
         self.assertIsNotNone(with_hands)
-        self.assertEqual(without_hands["component_count"], 1)
-        self.assertEqual(with_hands["component_selection"], "yoyo_and_hand_anchors")
-        self.assertEqual(with_hands["component_count"], 3)
-        self.assertEqual(with_hands["hand_supported_component_count"], 2)
-        self.assertTrue(all(min(point[1] for point in polygon) > 250 for polygon in with_hands["polygons"]))
+        self.assertEqual(without_hands["component_count"], 4)
+        self.assertEqual(with_hands["component_selection"], "confidence")
+        self.assertEqual(with_hands["component_count"], 4)
+        self.assertEqual(with_hands["hand_supported_component_count"], 0)
         self.assertIsNotNone(capped)
-        self.assertEqual(capped["component_selection"], "yoyo_anchor")
+        self.assertEqual(capped["component_selection"], "confidence")
         self.assertEqual(capped["hand_supported_component_count"], 0)
 
-    def test_unknown_mode_keeps_far_component_as_ambiguous(self):
+    def test_far_component_is_kept_as_ambiguous(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[5:8, 5:35] = 0.95
         meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
@@ -334,7 +333,7 @@ class SemanticStringTests(unittest.TestCase):
             meta,
             threshold=0.8,
             yoyo=yoyo,
-            attachment_class="unknown",
+            yoyo_division="1A",
             min_component_pixels=1,
         )
         self.assertIsNotNone(result)

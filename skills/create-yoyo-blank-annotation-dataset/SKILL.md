@@ -40,9 +40,9 @@ the Workbench server stopped and pass `--append` with the same dataset name:
 
 Treat a missing `--append`, stale human-review SHA, missing old sample, path
 collision, or changed protected file as a hard failure. Do not bypass these
-checks and do not append directly to `datasets/yoyo_dataset`.
+checks and do not append directly to `datasets/1Ayoyo_dataset`.
 
-The default exclusion baseline is `datasets/yoyo_dataset`. The generator also
+The default exclusion baseline is `datasets/1Ayoyo_dataset`. The generator also
 excludes every sibling dataset whose manifest identifies it as an earlier
 output of this skill. Add other baselines with repeatable `--exclude-dataset`.
 Never disable the root baseline check.

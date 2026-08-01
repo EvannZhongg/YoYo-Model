@@ -78,7 +78,7 @@ $annotationSources = @(
 )
 $discoveryArgs = @(
   'prepare_training_v2.py', '--output-dir', 'tmp\incremental-discovery',
-  '--clear', '--resplit', '--source', 'datasets\yoyo_dataset\canonical'
+  '--clear', '--resplit', '--source', 'datasets\1Ayoyo_dataset\canonical'
 )
 foreach ($source in $annotationSources) { $discoveryArgs += @('--source', $source) }
 & '.\.venv\Scripts\python.exe' @discoveryArgs
@@ -92,7 +92,7 @@ groups for the final sample-count ratios:
 ```powershell
 & '.\.venv\Scripts\python.exe' `
   'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py' plan `
-  --baseline 'datasets\yoyo_dataset\manifest.json' `
+  --baseline 'datasets\1Ayoyo_dataset\manifest.json' `
   --candidate 'tmp\incremental-discovery\manifest.json' `
   --output 'annotations\lineage\incremental-plan.json' `
   --report 'annotations\lineage\plan-report.json'
@@ -114,18 +114,18 @@ $datasetBackup = "annotations\lineage\backups\yoyo-dataset-$stamp"
 $reviewSnapshot = "annotations\lineage\backups\dataset-review-status-$stamp.json"
 $protectedBuilder = @(
   '.\.venv\Scripts\python.exe', 'prepare_training_v2.py',
-  '--output-dir', 'datasets\yoyo_dataset', '--clear',
+  '--output-dir', 'datasets\1Ayoyo_dataset', '--clear',
   '--freeze-splits-from', 'annotations\lineage\incremental-plan.json',
   '--source', '{protected_canonical}'
 )
 foreach ($source in $annotationSources) { $protectedBuilder += @('--source', $source) }
 $guardArgs = @(
   'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py',
-  'protected-run', '--manifest', 'datasets\yoyo_dataset\manifest.json',
+  'protected-run', '--manifest', 'datasets\1Ayoyo_dataset\manifest.json',
   '--backup-dir', $datasetBackup,
   '--review-map', 'workbench_state\dataset_review_status.json',
   '--review-snapshot-out', $reviewSnapshot,
-  '--review-dataset-key', 'yoyo_dataset',
+  '--review-dataset-key', '1Ayoyo_dataset',
   '--report', 'annotations\lineage\rebuild-report.json',
   '--mode', 'append-isolated', '--allow-command-without-baseline'
 )
@@ -162,7 +162,7 @@ Run verification without rebuilding when two manifests already exist:
 & '.\.venv\Scripts\python.exe' `
   'skills\rebuild-leakage-safe-dataset\scripts\rebuild_leakage_safe.py' verify `
   --baseline (Join-Path $datasetBackup 'manifest.json') `
-  --rebuilt 'datasets\yoyo_dataset\manifest.json' `
+  --rebuilt 'datasets\1Ayoyo_dataset\manifest.json' `
   --mode append-isolated `
   --report 'annotations\lineage\verify-report.json'
 ```

@@ -171,7 +171,7 @@ def run_video_tracking(
     string_confidence: float,
     string_inference_scale: float,
     string_inference_fps: float,
-    string_attachment_class: str,
+    yoyo_division: str,
     enable_orientation_model: bool,
     orientation_weights_path: str,
     orientation_inference_fps: float,
@@ -199,7 +199,7 @@ def run_video_tracking(
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),
-            string_attachment_class=string_attachment_class,
+            yoyo_division=yoyo_division,
             enable_orientation_model=bool(enable_orientation_model),
             orientation_weights_path=orientation_weights_path.strip() or None,
             orientation_imgsz=TRACKING_CONFIG.orientation_imgsz,
@@ -246,7 +246,7 @@ def run_video_tracking(
 
 def create_demo():
     gr.set_static_paths(paths=[TRACKING_CONFIG.output_dir])
-    unified_dataset = BASE_DIR / "datasets" / "yoyo_dataset"
+    unified_dataset = BASE_DIR / "datasets" / "1Ayoyo_dataset"
     with gr.Blocks(title="YoYo Model") as demo:
         gr.Markdown("# YoYo Model")
         with gr.Tabs():
@@ -379,13 +379,10 @@ def create_demo():
                                 minimum=0,
                                 precision=1,
                             )
-                        tracking_string_attachment = gr.Dropdown(
-                            label="String Attachment (current 1A)",
-                            choices=[
-                                ("Current 1A: hand and yoyo attached", "hand_and_yoyo_attached"),
-                                ("Unknown / not visible / needs review", "unknown"),
-                            ],
-                            value=TRACKING_CONFIG.string_attachment_class,
+                        tracking_yoyo_division = gr.Dropdown(
+                            label="YoYo Division",
+                            choices=["1A", "2A", "3A", "4A", "5A"],
+                            value=TRACKING_CONFIG.yoyo_division,
                         )
                         tracking_orientation_model = gr.Checkbox(
                             label="Coarse trick orientation model",
@@ -439,7 +436,7 @@ def create_demo():
                         video_input, tracking_weights, tracking_output_dir, tracking_conf, tracking_iou,
                         tracking_imgsz, tracking_device, tracking_pose, tracking_pose_weights,
                         tracking_string_model, tracking_string_weights, tracking_string_conf,
-                        tracking_string_scale, tracking_string_fps, tracking_string_attachment,
+                        tracking_string_scale, tracking_string_fps, tracking_yoyo_division,
                         tracking_orientation_model, tracking_orientation_weights,
                         tracking_orientation_fps, tracking_preview_width,
                     ],

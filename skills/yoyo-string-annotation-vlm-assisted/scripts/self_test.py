@@ -138,7 +138,7 @@ def main() -> int:
                     "string_visibility": "visible",
                     "string_polylines_pixel": [[[140, 60], [210, 105], [260, 180], [320, 245]]],
                     "hands_pixel": {"left": [140, 60], "right": None},
-                    "string_attachment_class": "hand_and_yoyo_attached",
+                    "yoyo_division": "1A",
                     "scene_label": "trick",
                     "trick_orientation": "normal",
                     "string_path": {
@@ -209,7 +209,7 @@ def main() -> int:
                     "string_visibility": "visible",
                     "string_polylines_pixel": [[[70, 30], [105, 52.5], [130, 90], [160, 122.5]]],
                     "hands_pixel": {"left": [70, 30], "right": None},
-                    "string_attachment_class": "hand_and_yoyo_attached",
+                    "yoyo_division": "1A",
                     "scene_label": "trick",
                     "trick_orientation": "normal",
                     "string_path": {
@@ -372,7 +372,7 @@ def main() -> int:
                         "string_polylines_pixel",
                         "string_mask_polygons_pixel",
                         "hands_pixel",
-                        "string_attachment_class",
+                        "yoyo_division",
                         "scene_label",
                         "trick_orientation",
                         "string_path",
@@ -513,8 +513,8 @@ def main() -> int:
                         "paths": [
                             {
                                 "path_id": "invalid-shortcut",
-                                "start_anchor": "unknown",
-                                "end_anchor": "unknown",
+                        "start_anchor": "unknown",
+                        "end_anchor": "unknown",
                                 "points_pixel": [[100, 80], [540, 80]],
                                 "edges": [{"from": 0, "to": 1, "evidence": "observed", "confidence": 0.9}],
                             }

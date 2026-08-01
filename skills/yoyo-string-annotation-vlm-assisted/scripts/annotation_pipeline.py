@@ -24,7 +24,7 @@ SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
 YOYO_VISIBILITY = {"visible", "partially_visible", "occluded", "out_of_frame", "absent", "uncertain"}
-ATTACHMENT_CLASSES = {"hand_and_yoyo_attached", "yoyo_detached", "hand_detached", "unknown"}
+YOYO_DIVISIONS = {"1A", "2A", "3A", "4A", "5A"}
 SCENE_LABELS = {"trick", "transition", "non_trick", "unknown"}
 TRICK_ORIENTATIONS = {"normal", "horizontal", "unknown", "not_applicable"}
 TOPOLOGIES = {"open", "loop", "branched", "multiple", "uncertain"}
@@ -44,7 +44,7 @@ CORE_FIELDS = (
     "string_polylines_pixel",
     "string_mask_polygons_pixel",
     "hands_pixel",
-    "string_attachment_class",
+    "yoyo_division",
     "scene_label",
     "trick_orientation",
     "string_path",
@@ -495,8 +495,8 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
             masks.append(points)
     result["string_mask_polygons_pixel"] = masks or None
     result["string_path"] = normalize_path(candidate.get("string_path"), width, height)
-    attachment = str(candidate.get("string_attachment_class", result.get("string_attachment_class", "unknown"))).lower()
-    result["string_attachment_class"] = attachment if attachment in ATTACHMENT_CLASSES else "unknown"
+    division = str(candidate.get("yoyo_division", result.get("yoyo_division", "1A"))).upper()
+    result["yoyo_division"] = division if division in YOYO_DIVISIONS else "1A"
     scene = str(candidate.get("scene_label", result.get("scene_label", "unknown"))).lower()
     result["scene_label"] = scene if scene in SCENE_LABELS else "unknown"
     orientation = str(candidate.get("trick_orientation", result.get("trick_orientation", "unknown"))).lower()
@@ -566,7 +566,7 @@ def initial_label(
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": None, "right": None},
         "hands_2d": {"left": None, "right": None},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "unknown",
         "string_path": {
@@ -1281,8 +1281,6 @@ def validate_label(
         errors.append("visible string requires an ordered string_path reconstruction")
     if visibility in {"visible", "partial"} and observed_edge_count == 0:
         errors.append("visible string_path requires at least one current-frame observed edge")
-    if label.get("string_attachment_class") == "hand_and_yoyo_attached" and visibility in {"visible", "partial"} and not yoyo_anchored:
-        errors.append("attached string path must be anchored to yoyo")
 
     if check_reviews:
         quality = label.get("quality") or {}

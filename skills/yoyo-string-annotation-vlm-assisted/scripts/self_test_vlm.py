@@ -61,7 +61,7 @@ def draft_label(image_path: Path) -> dict:
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": None, "right": None},
         "hands_2d": {"left": None, "right": None},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "unknown",
         "string_path": {

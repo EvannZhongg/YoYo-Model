@@ -39,7 +39,7 @@ Every full apply supplies the complete visible state:
   ],
   "string_mask_polygons_pixel": null,
   "hands_pixel": {"left": [510, 190], "right": null},
-  "string_attachment_class": "hand_and_yoyo_attached",
+  "yoyo_division": "1A",
   "scene_label": "trick",
   "trick_orientation": "horizontal",
   "string_path": {

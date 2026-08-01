@@ -591,7 +591,7 @@ def initial_label(record: dict[str, Any], sampling_manifest_sha256: str) -> dict
         "string_mask_polygons_pixel": None,
         "hands_pixel": {"left": None, "right": None},
         "hands_2d": {"left": None, "right": None},
-        "string_attachment_class": "unknown",
+        "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "normal",
         "string_path": {
@@ -819,9 +819,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     output = (datasets_root / dataset_name).resolve()
     if output.parent != datasets_root.resolve():
         raise ValueError("dataset output escaped datasets root")
-    root_reference = (datasets_root / "yoyo_dataset").resolve()
+    root_reference = (datasets_root / "1Ayoyo_dataset").resolve()
     if output == root_reference:
-        raise ValueError("this skill never writes or appends directly to datasets/yoyo_dataset")
+        raise ValueError("this skill never writes or appends directly to datasets/1Ayoyo_dataset")
     if output.exists() and not args.append:
         raise FileExistsError(f"dataset already exists; pass --append for protected incremental addition: {output}")
     review_map_path = (

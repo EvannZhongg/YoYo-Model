@@ -138,7 +138,7 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the trick-region orientation classification view.")
-    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset"))
+    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     parser.add_argument("--clear", action="store_true")
     args = parser.parse_args()
     manifest = build_orientation_view(Path(args.dataset_dir), args.clear)

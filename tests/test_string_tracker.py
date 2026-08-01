@@ -423,7 +423,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 "method": "semantic_segmentation",
                 "propagation_age_frames": 0,
             },
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             allow_color_fallback=False,
         )
 
@@ -433,7 +433,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(result["flow_source_component_count"], 2)
         self.assertFalse(result["flow_partial_component_loss"])
         self.assertEqual(len(result["polylines"]), 2)
-        self.assertEqual(result["hand_anchor_status"], "matched")
+        self.assertEqual(result["hand_anchor_status"], "not_applicable")
 
     def test_unanchored_semantic_string_is_suppressed_without_yoyo(self):
         result = estimate_string(
@@ -457,18 +457,18 @@ class StringTrackerTemporalTests(unittest.TestCase):
             [{"name": "right_wrist", "x": 60.0, "y": 90.0, "confidence": 0.95}],
             None,
             None,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
         )
         self.assertIsNone(result)
 
-    def test_far_attached_semantic_observation_has_hand_anchor_mismatch(self):
+    def test_division_metadata_does_not_apply_hand_anchor_gate(self):
         result = estimate_string(
             np.zeros((2160, 3840, 3), dtype=np.uint8),
             {"center": [2378.0, 882.0], "bbox": [2340.0, 844.0, 2416.0, 920.0]},
             [{"name": "left_wrist", "x": 1900.0, "y": 1219.0, "confidence": 0.9}],
             None,
             None,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             observation={
                 "points": [[2136.0, 956.0], [2323.0, 1083.0]],
                 "polygons": [[[2136.0, 956.0], [2323.0, 956.0], [2323.0, 1083.0], [2136.0, 1083.0]]],
@@ -479,20 +479,18 @@ class StringTrackerTemporalTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["hand_anchor_status"], "mismatch")
-        self.assertTrue(result["hand_anchor_mismatch"])
-        self.assertTrue(result["needs_review"])
-        self.assertGreater(result["distance_to_nearest_wrist_px"], result["hand_anchor_threshold_px"])
-        self.assertFalse(_can_seed_previous_string(result))
+        self.assertEqual(result["hand_anchor_status"], "not_applicable")
+        self.assertFalse(result["hand_anchor_mismatch"])
+        self.assertTrue(_can_seed_previous_string(result))
 
-    def test_attached_observation_near_wrist_is_a_temporal_anchor(self):
+    def test_division_metadata_leaves_hand_anchor_not_applicable(self):
         result = estimate_string(
             np.zeros((360, 640, 3), dtype=np.uint8),
             {"center": [240.0, 160.0], "bbox": [230.0, 150.0, 250.0, 170.0]},
             [{"name": "right_wrist", "x": 80.0, "y": 90.0, "confidence": 0.95}],
             None,
             None,
-            attachment_class="hand_and_yoyo_attached",
+            yoyo_division="1A",
             observation={
                 "points": [[70.0, 90.0], [240.0, 160.0]],
                 "confidence": 0.8,
@@ -502,9 +500,9 @@ class StringTrackerTemporalTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["hand_anchor_status"], "matched")
+        self.assertEqual(result["hand_anchor_status"], "not_applicable")
         self.assertFalse(result["hand_anchor_mismatch"])
-        self.assertLess(result["distance_to_nearest_wrist_px"], result["hand_anchor_threshold_px"])
+        self.assertIsNone(result["distance_to_nearest_wrist_px"])
         self.assertTrue(_can_seed_previous_string(result))
 
     def test_hand_anchor_mismatch_is_present_in_feature_vector(self):
@@ -512,7 +510,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
             "frame_index": 200,
             "timestamp_s": 4.0,
             "string": {"points": [[100.0, 100.0], [200.0, 200.0]], "confidence": 0.8},
-            "string_attachment_class": "hand_and_yoyo_attached",
+            "yoyo_division": "1A",
             "bad_case": ["string_hand_anchor_mismatch"],
         }
 
@@ -521,7 +519,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertEqual(float(vectors[0, feature_index]), 1.0)
 
-    def test_v8_features_preserve_independent_string_components(self):
+    def test_v9_features_preserve_independent_string_components(self):
         record = {
             "frame_index": 12,
             "timestamp_s": 0.24,
@@ -541,15 +539,16 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 "distance_to_nearest_wrist_px": 36.0,
                 "hand_anchor_threshold_px": 48.0,
             },
-            "string_attachment_class": "hand_and_yoyo_attached",
+            "yoyo_division": "1A",
         }
 
         vectors, rows = tracking_records_to_features([record], 640, 360, 50.0)
         names = feature_names()
         vector = vectors[0]
 
-        self.assertEqual(len(names), 257)
-        self.assertEqual(len(set(names)), 257)
+        self.assertEqual(len(names), 258)
+        self.assertEqual(len(set(names)), 258)
+        self.assertEqual(float(vector[names.index("yoyo_division_1A")]), 1.0)
         self.assertAlmostEqual(float(vector[names.index("string_component_count_ratio")]), 0.25)
         self.assertAlmostEqual(
             float(vector[names.index("string_hand_supported_component_count_ratio")]),
@@ -563,7 +562,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(rows[0]["string_component_count"], 2)
         self.assertEqual(rows[0]["string_hand_anchor_status"], "matched")
 
-    def test_v8_feature_manifest_declares_component_contract(self):
+    def test_v9_feature_manifest_declares_component_contract(self):
         record = {
             "frame_index": 0,
             "timestamp_s": 0.0,
@@ -578,8 +577,9 @@ class StringTrackerTemporalTests(unittest.TestCase):
             with np.load(outputs["npz"]) as archive:
                 exported_names = archive["feature_names"].tolist()
 
-        self.assertEqual(manifest["schema_version"], "yoyo_tracking_frame_features_v8")
-        self.assertEqual(manifest["feature_count"], 257)
+        self.assertEqual(manifest["schema_version"], "yoyo_tracking_frame_features_v9")
+        self.assertEqual(manifest["feature_count"], 258)
+        self.assertEqual(manifest["yoyo_divisions"], ["1A", "2A", "3A", "4A", "5A"])
         self.assertEqual(manifest["string_component_count"], 8)
         self.assertEqual(manifest["string_component_point_count"], 4)
         self.assertIn("never interpolate across components", manifest["string_component_order_policy"])

@@ -613,7 +613,7 @@ def build_training_dataset(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the unified multitask dataset from all non-score annotation exports.")
     parser.add_argument("--source", action="append", default=[], help="Annotation root; repeat to override automatic annotations/ discovery.")
-    parser.add_argument("--output-dir", default=str(BASE_DIR / "datasets" / "yoyo_dataset"))
+    parser.add_argument("--output-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     parser.add_argument("--seed", type=int, default=20260726)
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--test-ratio", type=float, default=0.15)

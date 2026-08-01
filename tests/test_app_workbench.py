@@ -351,7 +351,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         outputs = run_video_tracking(
             "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
             False, "pose.pt", True, "string.pt", 0.2, 2.0, 10.0,
-            "hand_and_yoyo_attached", True, "orientation.pt", 5.0, 1920,
+            "1A", True, "orientation.pt", 5.0, 1920,
         )
 
         self.assertEqual(len(outputs), 11)

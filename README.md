@@ -7,7 +7,7 @@
 统一数据集目录：
 
 ```text
-datasets/yoyo_dataset/
+datasets/1Ayoyo_dataset/
   manifest.json
   canonical/
   detection/
@@ -42,7 +42,7 @@ datasets/yoyo_dataset/
 
 ```powershell
 .\.venv\Scripts\python.exe train_training_v2.py `
-  --dataset-dir datasets/yoyo_dataset `
+  --dataset-dir datasets/1Ayoyo_dataset `
   --project-dir runs/v2v3 `
   --task detection `
   --epochs 100 `
@@ -61,7 +61,7 @@ datasets/yoyo_dataset/
 
 ```powershell
 .\.venv\Scripts\python.exe -m string_segmentation.train_semantic `
-  --dataset-dir datasets/yoyo_dataset/string_segmentation `
+  --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
   --project runs/v2v3 `
   --name yoyo_v2v3_semantic_string `
   --architecture lraspp_mobilenet_v3 `
@@ -74,7 +74,7 @@ ROI 方向模型使用：
 
 ```powershell
 .\.venv\Scripts\python.exe train_orientation_v2.py `
-  --view-manifest datasets/yoyo_dataset/orientation_roi/manifest.json `
+  --view-manifest datasets/1Ayoyo_dataset/orientation_roi/manifest.json `
   --project-dir runs/v2v3 `
   --device 0
 ```
