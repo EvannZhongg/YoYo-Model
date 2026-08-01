@@ -81,7 +81,7 @@ def _write_groups(dataset: Path, document: dict[str, Any]) -> None:
 def list_consecutive_annotation_datasets() -> list[dict[str, str]]:
     """List only datasets carrying the new consecutive-frame mapping."""
     results = []
-    for item in base.list_annotation_datasets():
+    for item in base.list_annotation_datasets(include_consecutive=True):
         path = Path(item["path"])
         if (path / CONSECUTIVE_FILENAME).is_file():
             try:

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from helpers import make_annotation_dataset
+from helpers import make_annotation_dataset, make_consecutive_dataset
 from workbench.dataset_annotation import (
     REVIEW_MAP_FILENAME,
     dataset_annotation_component_kwargs,
@@ -43,6 +43,18 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                         {"name": "second", "path": str(second.resolve())},
                     ],
                 )
+
+    def test_excludes_datasets_with_consecutive_group_mapping(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            regular, _ = make_annotation_dataset(root, "regular")
+            consecutive, _ = make_consecutive_dataset(root)
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                self.assertEqual(
+                    list_annotation_datasets(),
+                    [{"name": regular.name, "path": str(regular.resolve())}],
+                )
+            self.assertTrue((consecutive / "consecutive_groups.json").is_file())
 
     def test_component_exposes_redraw_precision_and_packed_server_requests(self):
         component = dataset_annotation_component_kwargs()

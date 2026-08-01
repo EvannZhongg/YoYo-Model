@@ -169,14 +169,19 @@ def _sample_summary(
     }
 
 
-def list_annotation_datasets() -> list[dict[str, str]]:
-    """List editable dataset roots below the managed datasets directory."""
+def list_annotation_datasets(*, include_consecutive: bool = False) -> list[dict[str, str]]:
+    """List editable dataset roots, optionally including mapped frame sequences."""
     if not DATASETS_DIR.is_dir():
         return []
     results: list[dict[str, str]] = []
     seen: set[Path] = set()
     for labels in sorted(DATASETS_DIR.rglob("labels")):
         if not labels.is_dir() or not (labels.parent / "images").is_dir():
+            continue
+        # Consecutive-frame datasets are owned by the consecutive annotation
+        # page, which validates and consumes their explicit group mapping.
+        dataset_root = labels.parent.parent if labels.parent.name == "canonical" else labels.parent
+        if not include_consecutive and (dataset_root / "consecutive_groups.json").is_file():
             continue
         first_label = next(labels.rglob("*.json"), None)
         if first_label is None:
@@ -186,7 +191,7 @@ def list_annotation_datasets() -> list[dict[str, str]]:
                 continue
         except (OSError, json.JSONDecodeError):
             continue
-        root = labels.parent.parent if labels.parent.name == "canonical" else labels.parent
+        root = dataset_root
         root = root.resolve()
         if root in seen:
             continue
