@@ -631,10 +631,9 @@ def _carry_preferred_track_id(
     max_gap_frames: int,
     multiple_yoyo: bool,
 ) -> bool:
-    """Bridge short ByteTrack ID gaps only for one spatially continuous yoyo."""
+    """Bridge short ByteTrack ID gaps or switches for one spatially continuous yoyo."""
     if (
         detection is None
-        or detection.get("track_id") is not None
         or preferred_track_id is None
         or previous_bbox is None
         or multiple_yoyo
@@ -650,8 +649,13 @@ def _carry_preferred_track_id(
     current_diagonal = math.hypot(current_bbox[2] - current_bbox[0], current_bbox[3] - current_bbox[1])
     if distance > 2.0 * max(1.0, previous_diagonal, current_diagonal):
         return False
+    tracker_track_id = detection.get("track_id")
+    if tracker_track_id is not None and int(tracker_track_id) == int(preferred_track_id):
+        return False
     detection["track_id"] = int(preferred_track_id)
     detection["track_id_source"] = "temporal_carry"
+    if tracker_track_id is not None:
+        detection["tracker_track_id"] = int(tracker_track_id)
     return True
 
 
@@ -1143,6 +1147,12 @@ def track_video(
             "iou": iou,
             "imgsz": imgsz,
             "device": device,
+            "yoyo_track_id_carry": {
+                "enabled": True,
+                "max_gap_frames": max(2, int(round(fps * 0.25))),
+                "spatial_gate": "2x_previous_or_current_bbox_diagonal",
+                "requires_single_yoyo": True,
+            },
             "visualization_max_width": int(visualization_max_width),
             "pose_enabled": enable_pose,
             "pose_weights": str(pose_weights_path or ""),

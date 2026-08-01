@@ -483,6 +483,8 @@ def evaluate_sequence(
     sample_spacing_px: float = 2.0,
     include_frames: bool = False,
     ground_truth_snapshot: str | Path | None = None,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
 ) -> dict[str, Any]:
     dataset_dir = Path(dataset_dir).resolve()
     predictions_path = Path(predictions_path).resolve()
@@ -496,6 +498,19 @@ def evaluate_sequence(
         if snapshot_path is not None
         else _load_group_frames(dataset_dir, group_id)
     )
+    if start_frame is not None or end_frame is not None:
+        lower = int(start_frame) if start_frame is not None else None
+        upper = int(end_frame) if end_frame is not None else None
+        if lower is not None and upper is not None and lower > upper:
+            raise ValueError("start_frame must not be greater than end_frame")
+        dataset_frames = [
+            item
+            for item in dataset_frames
+            if (lower is None or int(item["frame_index"]) >= lower)
+            and (upper is None or int(item["frame_index"]) <= upper)
+        ]
+        if not dataset_frames:
+            raise ValueError("No frames remain after applying the frame range")
     predictions: dict[int, dict[str, Any]] = {}
     method_counts: Counter[str] = Counter()
     try:
@@ -590,6 +605,10 @@ def evaluate_sequence(
         "ground_truth_snapshot": str(snapshot_path) if snapshot_path is not None else None,
         "predictions": str(predictions_path),
         "group_id": group_id,
+        "frame_range": {
+            "start": int(start_frame) if start_frame is not None else None,
+            "end": int(end_frame) if end_frame is not None else None,
+        },
         "frame_count": len(rows),
         "excluded_unknown": {
             "yoyo": len(rows) - len(yoyo_rows),

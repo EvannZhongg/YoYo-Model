@@ -35,11 +35,19 @@ def _component_call(url: str, component_id: int, function: str, data: Any) -> An
         raise RuntimeError(f"Workbench component call failed: {function}") from exc
 
 
-def export_snapshot(dataset_dir: str, output: str | Path, workbench_url: str, component_id: int) -> dict[str, Any]:
+def export_snapshot(
+    dataset_dir: str,
+    output: str | Path,
+    workbench_url: str,
+    component_id: int,
+    consecutive: bool = False,
+) -> dict[str, Any]:
+    open_function = "ui_open_consecutive_annotation_dataset" if consecutive else "ui_open_annotation_dataset"
+    load_function = "ui_load_consecutive_annotation_sample" if consecutive else "ui_load_annotation_sample"
     opened = _component_call(
         workbench_url,
         component_id,
-        "ui_open_annotation_dataset",
+        open_function,
         {"dataset_path": dataset_dir},
     )
     frames = []
@@ -47,7 +55,7 @@ def export_snapshot(dataset_dir: str, output: str | Path, workbench_url: str, co
         loaded = _component_call(
             workbench_url,
             component_id,
-            "ui_load_annotation_sample",
+            load_function,
             {"dataset_path": dataset_dir, "sample_key": sample["key"]},
         )
         frames.append(
@@ -65,6 +73,7 @@ def export_snapshot(dataset_dir: str, output: str | Path, workbench_url: str, co
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "dataset_dir": str(opened.get("dataset_path") or dataset_dir),
         "source": "gradio_html_component_read_api",
+        "consecutive": bool(consecutive),
         "frame_count": len(frames),
         "reviewed_count": sum(bool(item["reviewed"]) for item in frames),
         "frames": frames,
@@ -81,11 +90,15 @@ def main() -> int:
     parser.add_argument("output")
     parser.add_argument("--workbench-url", default="http://127.0.0.1:7866")
     parser.add_argument("--component-id", type=int, default=34)
+    parser.add_argument(
+        "--consecutive",
+        action="store_true",
+        help="Use the consecutive-frame Workbench API and preserve group order.",
+    )
     args = parser.parse_args()
-    print(json.dumps(export_snapshot(args.dataset_dir, args.output, args.workbench_url, args.component_id), ensure_ascii=False, indent=2))
+    print(json.dumps(export_snapshot(args.dataset_dir, args.output, args.workbench_url, args.component_id, args.consecutive), ensure_ascii=False, indent=2))
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

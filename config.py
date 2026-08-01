@@ -167,7 +167,7 @@ class TrackingConfig:
         _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 1.0)
     )
     string_inference_fps: float = float(
-        _env_or_config("TRACKING_STRING_INFERENCE_FPS", "tracking.string_inference_fps", 10.0)
+        _env_or_config("TRACKING_STRING_INFERENCE_FPS", "tracking.string_inference_fps", 0.0)
     )
     string_max_propagation_frames: int = int(
         _env_or_config("TRACKING_STRING_MAX_PROPAGATION_FRAMES", "tracking.string_max_propagation_frames", 12)
@@ -179,7 +179,7 @@ class TrackingConfig:
         _env_or_config("TRACKING_STRING_FUSION_DISTANCE_PX", "tracking.string_fusion_distance_px", 48.0)
     )
     string_attachment_class: str = str(
-        _env_or_config("TRACKING_STRING_ATTACHMENT_CLASS", "tracking.string_attachment_class", "hand_and_yoyo_attached")
+        _env_or_config("TRACKING_STRING_ATTACHMENT_CLASS", "tracking.string_attachment_class", "unknown")
     )
     orientation_weights_path: Path = _as_path(
         _env_or_config(

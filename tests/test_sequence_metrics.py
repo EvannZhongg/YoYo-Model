@@ -15,6 +15,21 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["tolerances"]["4"]["f1"], 1.0)
         self.assertAlmostEqual(metrics["chamfer_mean_px"], 3.0, places=4)
 
+    def test_centerline_recall_penalizes_a_missing_segment(self):
+        target = [
+            [[0.0, 0.0], [10.0, 0.0]],
+            [[0.0, 10.0], [10.0, 10.0]],
+        ]
+        prediction = [[[0.0, 0.0], [10.0, 0.0]]]
+        metrics = centerline_pair_metrics(target, prediction, (2.0,), spacing_px=1.0)
+
+        self.assertEqual(metrics["target_samples"], 22)
+        self.assertEqual(metrics["prediction_samples"], 11)
+        self.assertEqual(metrics["tolerances"]["2"]["precision"], 1.0)
+        self.assertEqual(metrics["tolerances"]["2"]["recall"], 0.5)
+        self.assertEqual(metrics["tolerances"]["2"]["f1"], 0.666667)
+        self.assertAlmostEqual(metrics["chamfer_mean_px"], 3.3333, places=4)
+
     def _dataset(self, root: Path) -> tuple[Path, Path]:
         dataset = root / "consecutive"
         label_root = dataset / "canonical" / "labels" / "video-a"
@@ -105,6 +120,13 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["frame_count"], 4)
         self.assertEqual(result["excluded_unknown"]["string"], 1)
         self.assertEqual(result["string"]["presence"]["known_frames"], 3)
+
+    def test_frame_range_can_hold_out_a_contiguous_subsequence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset, predictions = self._dataset(Path(directory))
+            result = evaluate_sequence(dataset, predictions, start_frame=1, end_frame=2)
+        self.assertEqual(result["frame_count"], 2)
+        self.assertEqual(result["frame_range"], {"start": 1, "end": 2})
 
 
 if __name__ == "__main__":

@@ -18,6 +18,8 @@ def main() -> int:
     parser.add_argument("--sample-spacing", type=float, default=2.0)
     parser.add_argument("--include-frames", action="store_true")
     parser.add_argument("--ground-truth-snapshot", default="")
+    parser.add_argument("--start-frame", type=int, default=None)
+    parser.add_argument("--end-frame", type=int, default=None)
     parser.add_argument("--output", default="")
     args = parser.parse_args()
     result = evaluate_sequence(
@@ -28,6 +30,8 @@ def main() -> int:
         args.sample_spacing,
         args.include_frames,
         args.ground_truth_snapshot or None,
+        args.start_frame,
+        args.end_frame,
     )
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:

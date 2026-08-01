@@ -95,6 +95,23 @@ class YoyoSelectionTests(unittest.TestCase):
             _carry_preferred_track_id(ambiguous, 7, [100, 100, 200, 200], 2, 12, multiple_yoyo=True)
         )
 
+    def test_short_spatially_continuous_tracker_switch_is_reassigned(self):
+        candidate = detection([115, 110, 215, 210], 0.8)
+        candidate["track_id"] = 19
+
+        carried = _carry_preferred_track_id(
+            candidate,
+            preferred_track_id=7,
+            previous_bbox=[100, 100, 200, 200],
+            gap_frames=1,
+            max_gap_frames=12,
+            multiple_yoyo=False,
+        )
+
+        self.assertTrue(carried)
+        self.assertEqual(candidate["track_id"], 7)
+        self.assertEqual(candidate["tracker_track_id"], 19)
+
     def test_semantic_inference_scale_preserves_stride_and_area_filter(self):
         width, height, area_scale = _semantic_inference_parameters(
             {"input_width": 960, "input_height": 544},
