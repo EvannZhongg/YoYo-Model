@@ -34,8 +34,9 @@ sized group while the Workbench server is stopped:
 ```
 
 Require every command to finish with `"ok": true`. Confirm each source's
-`run_start_frame` and `run_end_frame` in `sampling_manifest.json`, and verify
-that its record frame indices cover every integer in that inclusive range.
+`run_start_frame` and `run_end_frame` in `sampling_manifest.json`, then verify
+`consecutive_groups.json` contains the same uninterrupted frames and Workbench
+sample keys.
 
 The generator searches from the temporal middle outward. It preserves the root
 `datasets/yoyo_dataset` exclusion baseline and all earlier compatible blank

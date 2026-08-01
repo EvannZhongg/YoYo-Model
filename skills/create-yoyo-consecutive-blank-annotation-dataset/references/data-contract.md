@@ -7,8 +7,16 @@ Workbench discovers any directory below `datasets/` that contains paired
 its image filename and changes only the suffix to `.json`.
 
 Incremental generation is allowed only for a dataset whose `manifest.json`
-uses `yoyo_blank_annotation_dataset_v1` and whose `dataset_id` matches its
+uses `yoyo_consecutive_annotation_dataset_v1` and whose `dataset_id` matches its
 directory name. Never append into `datasets/yoyo_dataset`.
+
+Every dataset must contain `consecutive_groups.json` using
+`yoyo_consecutive_groups_v1`. Each group owns an ordered `frames` array with
+one `sample_key`, image path, frame index, and timestamp per uninterrupted
+frame. Workbench may trim this array to an inclusive start/end range; files
+outside the chosen range remain on disk but are no longer part of the active
+continuous group. The Workbench sync action copies the current frame's label
+to later frames in the same active group only.
 
 ## Label State
 
@@ -63,7 +71,7 @@ across processes.
 recognition model was used, and contains one `anchor` record per image. Each
 source records one inclusive `run_start_frame`/`run_end_frame` interval, and all
 records for that source share a sequence ID and cover every frame in the interval.
-`manifest.json` uses `yoyo_blank_annotation_dataset_v1` and records inputs,
+`manifest.json` uses `yoyo_consecutive_annotation_dataset_v1` and records inputs,
 reference datasets, deduplication settings, selected samples, and rejection
 counts. Keep the first run's `sampling_manifest.json` immutable. Store each
 append manifest under `provenance/sampling_manifest-<hash>.json` and list all

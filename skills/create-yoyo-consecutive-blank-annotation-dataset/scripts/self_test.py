@@ -89,6 +89,22 @@ def assert_consecutive_runs(dataset: Path) -> None:
         ordered = sorted(indices)
         assert ordered == list(range(ordered[0], ordered[0] + len(ordered)))
 
+    metadata = json.loads((dataset / generator.CONSECUTIVE_FILENAME).read_text(encoding="utf-8"))
+    assert metadata["schema_version"] == generator.CONSECUTIVE_SCHEMA_VERSION
+    mapped = {
+        str(frame["sample_key"])
+        for group in metadata["groups"]
+        for frame in group["frames"]
+    }
+    labels = {
+        path.relative_to(dataset / "canonical" / "labels").as_posix()
+        for path in (dataset / "canonical" / "labels").rglob("*.json")
+    }
+    assert mapped == labels
+    for group in metadata["groups"]:
+        indices = [int(frame["frame_index"]) for frame in group["frames"]]
+        assert indices == list(range(indices[0], indices[-1] + 1))
+
 
 def run() -> None:
     with tempfile.TemporaryDirectory(prefix="yoyo-blank-skill-test-") as raw:

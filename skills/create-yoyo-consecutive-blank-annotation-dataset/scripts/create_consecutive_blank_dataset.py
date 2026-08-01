@@ -26,7 +26,13 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
-DATASET_SCHEMA_VERSION = "yoyo_blank_annotation_dataset_v1"
+DATASET_SCHEMA_VERSION = "yoyo_consecutive_annotation_dataset_v1"
+CONSECUTIVE_SCHEMA_VERSION = "yoyo_consecutive_groups_v1"
+CONSECUTIVE_FILENAME = "consecutive_groups.json"
+REFERENCE_DATASET_SCHEMAS = {
+    DATASET_SCHEMA_VERSION,
+    "yoyo_blank_annotation_dataset_v1",
+}
 HASH_CACHE_SCHEMA_VERSION = "agent_video_sha256_cache_v1"
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
 
@@ -216,6 +222,8 @@ class ProtectedDataset:
     review_map_path: Path
     review_map_bytes: bytes | None
     review_entry_count: int
+    consecutive_manifest: dict[str, Any]
+    consecutive_bytes: bytes
 
 
 def resolve_inside(root: Path, relative_value: str) -> Path:
@@ -236,6 +244,15 @@ def load_protected_dataset(output: Path, review_map_path: Path, dataset_key: str
         raise ValueError(f"incremental append supports only datasets created by this skill: {output}")
     if manifest.get("dataset_id") != output.name:
         raise ValueError(f"dataset_id does not match directory name: {manifest_path}")
+    consecutive_path = output / CONSECUTIVE_FILENAME
+    if not consecutive_path.is_file():
+        raise ValueError(f"consecutive group metadata is missing: {consecutive_path}")
+    consecutive_bytes = consecutive_path.read_bytes()
+    consecutive_manifest = read_json(consecutive_path)
+    if consecutive_manifest.get("schema_version") != CONSECUTIVE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported consecutive group metadata: {consecutive_path}")
+    if consecutive_manifest.get("dataset_id") != output.name:
+        raise ValueError(f"consecutive metadata dataset_id does not match: {consecutive_path}")
     sampling_path = output / "sampling_manifest.json"
     expected_sampling_hash = str(manifest.get("sampling_manifest_sha256") or "").lower()
     if not sampling_path.is_file() or sha256_file(sampling_path) != expected_sampling_hash:
@@ -321,13 +338,22 @@ def load_protected_dataset(output: Path, review_map_path: Path, dataset_key: str
         review_map_path=review_map_path,
         review_map_bytes=review_bytes,
         review_entry_count=review_count,
+        consecutive_manifest=consecutive_manifest,
+        consecutive_bytes=consecutive_bytes,
     )
 
 
-def assert_protected_unchanged(state: ProtectedDataset, check_manifest: bool = True) -> None:
+def assert_protected_unchanged(
+    state: ProtectedDataset,
+    check_manifest: bool = True,
+    check_consecutive: bool = True,
+) -> None:
     manifest_path = state.root / "manifest.json"
     if check_manifest and manifest_path.read_bytes() != state.manifest_bytes:
         raise ValueError("existing manifest changed during incremental generation")
+    consecutive_path = state.root / CONSECUTIVE_FILENAME
+    if check_consecutive and consecutive_path.read_bytes() != state.consecutive_bytes:
+        raise ValueError("existing consecutive group metadata changed during incremental generation")
     labels_root, images_root = annotation_roots(state.root)
     for relative, expected in state.label_hashes.items():
         path = labels_root / Path(relative)
@@ -356,7 +382,7 @@ def collect_reference_datasets(datasets_root: Path, root_reference: Path, extra:
             manifest = read_json(manifest_path)
         except ValueError:
             continue
-        if manifest.get("schema_version") == DATASET_SCHEMA_VERSION:
+        if manifest.get("schema_version") in REFERENCE_DATASET_SCHEMAS:
             candidates.append(manifest_path.parent.resolve())
     result: list[Path] = []
     for path in candidates:
@@ -638,6 +664,76 @@ def generation_run(
     }
 
 
+def build_consecutive_manifest(
+    dataset_id: str,
+    sources: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the Workbench-owned ordering map for uninterrupted frame groups."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for record in records:
+        key = (str(record["source_group"]), str(record["sequence_id"]))
+        grouped.setdefault(key, []).append(record)
+    source_by_group = {str(source["source_group"]): source for source in sources}
+    groups: list[dict[str, Any]] = []
+    for (source_group, sequence_id), group_records in grouped.items():
+        ordered = sorted(group_records, key=lambda item: int(item["frame_index"]))
+        indices = [int(item["frame_index"]) for item in ordered]
+        if indices != list(range(indices[0], indices[-1] + 1)):
+            raise ValueError(f"generated group is not consecutive: {source_group}/{sequence_id}")
+        source = source_by_group[source_group]
+        frames = []
+        for record in ordered:
+            image = Path(str(record["output_image"]))
+            sample_key = (
+                Path(source_group) / image.with_suffix(".json").name
+            ).as_posix()
+            frames.append({
+                "sample_key": sample_key,
+                "image": image.as_posix(),
+                "frame_index": int(record["frame_index"]),
+                "timestamp_s": float(record["timestamp_s"]),
+            })
+        groups.append({
+            "group_id": f"{source_group}--{sequence_id}",
+            "source_video": str(source["source_video"]),
+            "source_video_sha256": str(source["source_video_sha256"]),
+            "source_group": source_group,
+            "sequence_id": sequence_id,
+            "original_start_frame": indices[0],
+            "original_end_frame": indices[-1],
+            "selected_start_frame": indices[0],
+            "selected_end_frame": indices[-1],
+            "start_sample_key": frames[0]["sample_key"],
+            "propagated_from_start_at_utc": None,
+            "frames": frames,
+        })
+    return {
+        "schema_version": CONSECUTIVE_SCHEMA_VERSION,
+        "dataset_id": dataset_id,
+        "created_at_utc": utc_now(),
+        "updated_at_utc": utc_now(),
+        "groups": groups,
+    }
+
+
+def merge_consecutive_manifests(
+    existing: dict[str, Any], addition: dict[str, Any]
+) -> dict[str, Any]:
+    old_groups = existing.get("groups")
+    new_groups = addition.get("groups")
+    if not isinstance(old_groups, list) or not isinstance(new_groups, list):
+        raise ValueError("consecutive group manifests must contain group arrays")
+    combined = [*old_groups, *new_groups]
+    ids = [str(group.get("group_id") or "") for group in combined if isinstance(group, dict)]
+    if len(ids) != len(combined) or not all(ids) or len(set(ids)) != len(ids):
+        raise ValueError("consecutive append contains an invalid or duplicate group_id")
+    merged = dict(existing)
+    merged["updated_at_utc"] = utc_now()
+    merged["groups"] = combined
+    return merged
+
+
 def merge_incremental_manifest(
     existing: dict[str, Any],
     addition: dict[str, Any],
@@ -699,8 +795,13 @@ def publish_incremental(
     sampling_hash = str(addition_manifest["sampling_manifest_sha256"])
     run_relative = Path("provenance") / f"sampling_manifest-{sampling_hash[:16]}.json"
     merged = merge_incremental_manifest(protected.manifest, addition_manifest, run_relative.as_posix())
+    addition_consecutive = read_json(staging / CONSECUTIVE_FILENAME)
+    merged_consecutive = merge_consecutive_manifests(
+        protected.consecutive_manifest, addition_consecutive
+    )
     created: list[Path] = []
     manifest_written = False
+    consecutive_written = False
     try:
         run_destination = output / run_relative
         copy_file_exclusive(staging / "sampling_manifest.json", run_destination)
@@ -715,6 +816,11 @@ def publish_incremental(
         write_json(output / "manifest.json", merged)
         manifest_written = True
         assert_protected_unchanged(protected, check_manifest=False)
+        write_json(output / CONSECUTIVE_FILENAME, merged_consecutive)
+        consecutive_written = True
+        assert_protected_unchanged(
+            protected, check_manifest=False, check_consecutive=False
+        )
         postflight = load_protected_dataset(
             output,
             protected.review_map_path,
@@ -723,7 +829,9 @@ def publish_incremental(
         for relative, expected in protected.label_hashes.items():
             if postflight.label_hashes.get(relative) != expected:
                 raise ValueError(f"protected Workbench label changed after append: {relative}")
-        assert_protected_unchanged(protected, check_manifest=False)
+        assert_protected_unchanged(
+            protected, check_manifest=False, check_consecutive=False
+        )
         return {
             "ok": True,
             "dataset": str(output),
@@ -739,6 +847,10 @@ def publish_incremental(
     except Exception:
         if manifest_written:
             write_bytes_atomic(output / "manifest.json", protected.manifest_bytes)
+        if consecutive_written:
+            write_bytes_atomic(
+                output / CONSECUTIVE_FILENAME, protected.consecutive_bytes
+            )
         remove_created_files(created, output)
         raise
 
@@ -893,6 +1005,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         }
         manifest["generation_runs"] = [generation_run(manifest, "sampling_manifest.json", "create")]
         write_json(staging / "manifest.json", manifest)
+        write_json(
+            staging / CONSECUTIVE_FILENAME,
+            build_consecutive_manifest(dataset_name, sources, records),
+        )
         validate_staged_dataset(
             staging,
             inventory,
