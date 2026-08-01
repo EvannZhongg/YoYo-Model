@@ -3,7 +3,6 @@ import unittest
 import numpy as np
 
 from video_tracking.orientation import carry_orientation, orientation_crop_box, predict_orientation
-from video_tracking.tokenize import feature_names, tracking_records_to_features
 
 
 class _Scalar:
@@ -64,30 +63,6 @@ class OrientationTrackingTests(unittest.TestCase):
         self.assertEqual(carried["inference_status"], "carried")
         self.assertEqual(carried["age_frames"], 2)
         self.assertEqual(prediction["inference_status"], "ran")
-
-    def test_orientation_is_exported_in_sequence_features(self):
-        vectors, rows = tracking_records_to_features(
-            [
-                {
-                    "frame_index": 5,
-                    "timestamp_s": 0.1,
-                    "trick_orientation": {
-                        "label": "horizontal",
-                        "confidence": 0.8,
-                        "age_frames": 2,
-                    },
-                }
-            ],
-            640,
-            360,
-            20.0,
-        )
-        names = feature_names()
-        self.assertEqual(float(vectors[0, names.index("orientation_present")]), 1.0)
-        self.assertEqual(float(vectors[0, names.index("orientation_horizontal")]), 1.0)
-        self.assertAlmostEqual(float(vectors[0, names.index("orientation_age_s")]), 0.1)
-        self.assertEqual(rows[0]["trick_orientation"], "horizontal")
-
 
 if __name__ == "__main__":
     unittest.main()

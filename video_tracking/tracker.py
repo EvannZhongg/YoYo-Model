@@ -33,7 +33,6 @@ from string_segmentation.semantic_model import (
 from video_tracking.review_sheet import make_tracking_review_sheet
 from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
 from video_tracking.string_tracker import estimate_string
-from video_tracking.tokenize import export_tracking_features
 
 
 LOG_FILE = BASE_DIR / "track_video.log"
@@ -1082,11 +1081,6 @@ def track_video(
     except Exception as exc:
         logger.warning("Could not create tracking review sheet: %s", exc)
         review_sheet_path = None
-    try:
-        frame_feature_outputs = export_tracking_features(records, run_dir, width, height, fps)
-    except Exception as exc:
-        logger.warning("Could not export tracking frame features: %s", exc)
-        frame_feature_outputs = {"jsonl": "", "npz": "", "manifest": ""}
     bad_case_counts = Counter(flag for record in records for flag in record["bad_case"])
     component_selection_counts = Counter(
         str(record["string"].get("component_selection"))
@@ -1189,13 +1183,10 @@ def track_video(
             "frames_jsonl": str(json_path) if export_json else "",
             "review_sheet": str(review_sheet_path or ""),
             "review_index": str(run_dir / "tracking_review_index.json") if review_sheet_path else "",
-            "frame_features_jsonl": frame_feature_outputs["jsonl"],
-            "frame_features_npz": frame_feature_outputs["npz"],
-            "frame_feature_manifest": frame_feature_outputs["manifest"],
         },
         "limitations": [
             "String observations are review-only; model/color observations are fused with forward/backward-checked optical flow and propagation is capped by string_max_propagation_frames.",
-            "In attached mode, hand-supported semantic components are retained only when observed near a visible wrist or one component-gap from such an observation; gaps remain separate polylines.",
+            "Division metadata is recorded for provenance and does not impose attachment-specific geometric filtering.",
             "string_without_yoyo marks frames where a visible string estimate persists while the yoyo is out of frame or occluded; these frames require manual review.",
             "not_visible_or_occluded does not distinguish occlusion from an off-camera yoyo without manual review.",
             "trick_orientation is the supported coarse three-way frame classification.",
@@ -1209,9 +1200,6 @@ def track_video(
         "output_video": str(output_path),
         "metadata_jsonl": str(json_path) if export_json else "",
         "review_sheet": str(review_sheet_path or ""),
-        "frame_features_jsonl": frame_feature_outputs["jsonl"],
-        "frame_features_npz": frame_feature_outputs["npz"],
-        "frame_feature_manifest": frame_feature_outputs["manifest"],
         "run_manifest": str(run_manifest_path),
         "run_dir": str(run_dir),
         "bad_case_counts": dict(sorted(bad_case_counts.items())),

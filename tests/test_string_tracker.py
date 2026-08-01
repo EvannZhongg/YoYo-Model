@@ -14,7 +14,6 @@ from video_tracking.review_sheet import (
     _string_caption,
     make_tracking_review_sheet,
 )
-from video_tracking.tokenize import export_tracking_features, feature_names, tracking_records_to_features
 from video_tracking.tracker import (
     _draw_frame,
     _can_seed_previous_string,
@@ -189,7 +188,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
             self.assertGreater(float(first_raw[:, :, 1].mean()), float(first_raw[:, :, 0].mean()))
             self.assertGreater(float(first_raw[:, :, 1].mean()), float(first_raw[:, :, 2].mean()))
 
-    def test_pose_review_caption_and_feature_vector_expose_identity_review(self):
+    def test_pose_review_caption_exposes_identity_review(self):
         record = {
             "frame_index": 7,
             "timestamp_s": 0.14,
@@ -205,12 +204,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
         }
 
         caption = _pose_caption(record)
-        vectors, _ = tracking_records_to_features([record], 640, 360, 30.0)
-        feature_index = feature_names().index("bad_case_pose_identity_needs_review")
-
         self.assertIn("pose=p1/3 temporal iou=0.088", caption)
         self.assertIn("low_temporal_iou", caption)
-        self.assertEqual(float(vectors[0, feature_index]), 1.0)
 
     def test_tracking_review_sampler_guarantees_hand_anchor_mismatch(self):
         rows = []
@@ -504,86 +499,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertFalse(result["hand_anchor_mismatch"])
         self.assertIsNone(result["distance_to_nearest_wrist_px"])
         self.assertTrue(_can_seed_previous_string(result))
-
-    def test_hand_anchor_mismatch_is_present_in_feature_vector(self):
-        record = {
-            "frame_index": 200,
-            "timestamp_s": 4.0,
-            "string": {"points": [[100.0, 100.0], [200.0, 200.0]], "confidence": 0.8},
-            "yoyo_division": "1A",
-            "bad_case": ["string_hand_anchor_mismatch"],
-        }
-
-        vectors, _ = tracking_records_to_features([record], 640, 360, 50.0)
-        feature_index = feature_names().index("bad_case_string_hand_anchor_mismatch")
-
-        self.assertEqual(float(vectors[0, feature_index]), 1.0)
-
-    def test_v9_features_preserve_independent_string_components(self):
-        record = {
-            "frame_index": 12,
-            "timestamp_s": 0.24,
-            "string": {
-                "points": [[100.0, 90.0], [200.0, 90.0]],
-                "polylines": [
-                    [[100.0, 90.0], [200.0, 90.0]],
-                    [[320.0, 180.0], [500.0, 180.0]],
-                ],
-                "confidence": 0.9,
-                "method": "semantic_segmentation",
-                "hand_supported_component_count": 1,
-                "flow_component_count": 2,
-                "flow_source_component_count": 3,
-                "flow_partial_component_loss": True,
-                "hand_anchor_status": "matched",
-                "distance_to_nearest_wrist_px": 36.0,
-                "hand_anchor_threshold_px": 48.0,
-            },
-            "yoyo_division": "1A",
-        }
-
-        vectors, rows = tracking_records_to_features([record], 640, 360, 50.0)
-        names = feature_names()
-        vector = vectors[0]
-
-        self.assertEqual(len(names), 258)
-        self.assertEqual(len(set(names)), 258)
-        self.assertEqual(float(vector[names.index("yoyo_division_1A")]), 1.0)
-        self.assertAlmostEqual(float(vector[names.index("string_component_count_ratio")]), 0.25)
-        self.assertAlmostEqual(
-            float(vector[names.index("string_hand_supported_component_count_ratio")]),
-            0.125,
-        )
-        self.assertEqual(float(vector[names.index("string_flow_partial_component_loss")]), 1.0)
-        self.assertEqual(float(vector[names.index("string_hand_anchor_status_matched")]), 1.0)
-        self.assertEqual(float(vector[names.index("string_component_1_present")]), 1.0)
-        self.assertAlmostEqual(float(vector[names.index("string_component_1_0_x")]), 0.5)
-        self.assertAlmostEqual(float(vector[names.index("string_component_1_0_y")]), 0.5)
-        self.assertEqual(rows[0]["string_component_count"], 2)
-        self.assertEqual(rows[0]["string_hand_anchor_status"], "matched")
-
-    def test_v9_feature_manifest_declares_component_contract(self):
-        record = {
-            "frame_index": 0,
-            "timestamp_s": 0.0,
-            "string": {
-                "points": [[10.0, 10.0], [20.0, 20.0]],
-                "polylines": [[[10.0, 10.0], [20.0, 20.0]]],
-            },
-        }
-        with TemporaryDirectory() as directory:
-            outputs = export_tracking_features([record], directory, 640, 360, 30.0)
-            manifest = json.loads(Path(outputs["manifest"]).read_text(encoding="utf-8"))
-            with np.load(outputs["npz"]) as archive:
-                exported_names = archive["feature_names"].tolist()
-
-        self.assertEqual(manifest["schema_version"], "yoyo_tracking_frame_features_v9")
-        self.assertEqual(manifest["feature_count"], 258)
-        self.assertEqual(manifest["yoyo_divisions"], ["1A", "2A", "3A", "4A", "5A"])
-        self.assertEqual(manifest["string_component_count"], 8)
-        self.assertEqual(manifest["string_component_point_count"], 4)
-        self.assertIn("never interpolate across components", manifest["string_component_order_policy"])
-        self.assertEqual(exported_names, manifest["feature_names"])
 
     def test_learned_model_absence_suppresses_color_fallback(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
