@@ -63,40 +63,6 @@ def _as_path(value: Any) -> Path:
     return BASE_DIR / path
 
 
-def _as_optional_path(value: Any) -> Path | None:
-    if value is None or not str(value).strip():
-        return None
-    return _as_path(value)
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    base_url: str = _env_or_config("BASE_URL", "model.base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    api_key_env: str = _get_config("model.api_key_env", "API_KEY")
-    api_key: str | None = os.getenv(api_key_env)
-    default_model: str = _env_or_config("DEFAULT_MODEL", "model.default_model", "qwen3.6-35b-a3b")
-    available_models: tuple[str, ...] = _as_tuple(
-        _env_or_config("AVAILABLE_MODELS", "model.available_models", None),
-        ("qwen3.6-35b-a3b", "qwen3.5-35b-a3b"),
-    )
-    min_image_tokens: str = str(_env_or_config("MIN_IMAGE_TOKENS", "model.min_image_tokens", "1024"))
-    max_image_tokens: str = str(_env_or_config("MAX_IMAGE_TOKENS", "model.max_image_tokens", "9800"))
-    max_response_tokens: int = int(_env_or_config("MAX_RESPONSE_TOKENS", "model.max_response_tokens", 20000))
-    enable_thinking: bool = _as_bool(_env_or_config("ENABLE_THINKING", "model.enable_thinking", True), True)
-    image_transport: str = str(_env_or_config("IMAGE_TRANSPORT", "model.image_transport", "oss")).lower()
-
-
-@dataclass(frozen=True)
-class OSSConfig:
-    endpoint: str | None = _env_or_config("OSS_ENDPOINT", "oss.endpoint", None)
-    region: str | None = _env_or_config("OSS_REGION", "oss.region", None)
-    bucket_name: str | None = _env_or_config("OSS_BUCKET_NAME", "oss.bucket_name", None)
-    object_prefix: str = _env_or_config("OSS_OBJECT_PREFIX", "oss.object_prefix", "studio-temp/qwen-det")
-    signed_url_expires_seconds: int = int(
-        _env_or_config("OSS_SIGNED_URL_EXPIRES_SECONDS", "oss.signed_url_expires_seconds", 3600)
-    )
-
-
 @dataclass(frozen=True)
 class DatasetConfig:
     image_input_dir: Path = _as_path(
@@ -108,7 +74,6 @@ class DatasetConfig:
     annotation_output_dir: Path = _as_path(
         _env_or_config("ANNOTATION_OUTPUT_DIR", "dataset.annotation_output_dir", "annotations")
     )
-    temp_output_dir: Path = _as_path(_env_or_config("TEMP_OUTPUT_DIR", "dataset.temp_output_dir", "tmp"))
     image_extensions: tuple[str, ...] = _as_tuple(
         _get_config("dataset.image_extensions", None),
         (".jpg", ".jpeg", ".png", ".bmp", ".webp"),
@@ -224,8 +189,6 @@ class SemanticStringConfig:
     device: str = str(_env_or_config("SEMANTIC_STRING_DEVICE", "semantic_string.device", "cuda"))
 
 
-MODEL_CONFIG = ModelConfig()
-OSS_CONFIG = OSSConfig()
 DATASET_CONFIG = DatasetConfig()
 YOLO_CONFIG = YOLOConfig()
 TRACKING_CONFIG = TrackingConfig()

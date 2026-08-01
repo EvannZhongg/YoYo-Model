@@ -1,10 +1,7 @@
-openai>=1.0
 gradio>=4.0
 python-dotenv>=1.0
 PyYAML>=6.0
-matplotlib>=3.5
 Pillow>=10.0
 numpy>=1.24
-oss2
 ultralytics>=8.3.0
 supervision>=0.25.0,<0.30.0

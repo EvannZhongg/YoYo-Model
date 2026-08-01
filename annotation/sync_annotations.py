@@ -2,7 +2,6 @@ import argparse
 import logging
 from pathlib import Path
 
-from annotation.annotator import annotation_output_paths
 from common.files import collect_files
 from config import BASE_DIR, DATASET_CONFIG
 
@@ -17,6 +16,23 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+def annotation_output_paths(
+    image_path: str | Path,
+    input_dir: str | Path,
+    output_dir: str | Path,
+) -> dict[str, Path]:
+    """Return the conventional output paths for an annotation source image."""
+    image_path = Path(image_path)
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    relative = image_path.relative_to(input_dir)
+    return {
+        "image": output_dir / "images" / relative,
+        "label": output_dir / "labels" / relative.with_suffix(".json"),
+        "visualization": output_dir / "visualizations" / relative.with_name(f"{relative.stem}_vis.png"),
+    }
 
 
 def remove_empty_dirs(root: Path) -> None:

@@ -9,10 +9,7 @@ Path(os.environ["GRADIO_TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
 
 import gradio as gr
 
-from annotation.annotator import annotate_image_for_dataset, run_detection_streaming
-from annotation.prompts import EXAMPLE_PROMPTS, YOYO_DETECTION_PROMPT
-from common.files import collect_files
-from config import BASE_DIR, DATASET_CONFIG, MODEL_CONFIG, TRACKING_CONFIG
+from config import BASE_DIR, TRACKING_CONFIG
 from video_tracking.frame_review import append_tracking_frame_review, load_tracking_frame_selection
 from video_tracking.tracker import track_video
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
@@ -32,77 +29,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-
-EXAMPLE_IMAGES = [
-    BASE_DIR / "example1.jpg",
-    BASE_DIR / "example2.png",
-    BASE_DIR / "example3.png",
-    None,
-]
-
-
-def _example_value(path: Path | None):
-    return str(path) if path is not None and path.exists() else None
-
-
-def run_dataset_annotation_streaming(
-    input_dir: str,
-    output_dir: str,
-    prompt: str,
-    model: str,
-    min_pixels_str: str,
-    max_pixels_str: str,
-):
-    try:
-        image_paths = collect_files(
-            Path(input_dir),
-            DATASET_CONFIG.image_extensions,
-            recursive=DATASET_CONFIG.recursive,
-        )
-    except Exception as exc:
-        yield f"Error: {exc}"
-        return
-
-    if not image_paths:
-        yield f"No images found in {input_dir}"
-        return
-
-    logs = [f"Found {len(image_paths)} image(s). Output: {output_dir}"]
-    yield "\n".join(logs)
-    success_count = 0
-    failed_count = 0
-    total_boxes = 0
-    input_root = Path(input_dir)
-    output_root = Path(output_dir)
-
-    for index, image_path in enumerate(image_paths, start=1):
-        logs.append(f"[{index}/{len(image_paths)}] Annotating {image_path.name}")
-        yield "\n".join(logs[-20:])
-        try:
-            result = annotate_image_for_dataset(
-                image_path=image_path,
-                input_dir=input_root,
-                output_dir=output_root,
-                prompt=prompt,
-                model=model,
-                min_pixels_str=min_pixels_str,
-                max_pixels_str=max_pixels_str,
-            )
-            success_count += 1
-            total_boxes += result["bbox_count"]
-            logs.append(f"[{index}/{len(image_paths)}] Saved {result['bbox_count']} bbox(es): {result['label_path']}")
-        except Exception as exc:
-            failed_count += 1
-            logger.exception("Failed to annotate %s", image_path)
-            logs.append(f"[{index}/{len(image_paths)}] Failed: {image_path.name} - {exc}")
-        yield "\n".join(logs[-20:])
-
-    logs.append(
-        f"Done. Success: {success_count}, Failed: {failed_count}, Total boxes: {total_boxes}. "
-        f"Images/labels/visualizations are under {output_root}"
-    )
-    yield "\n".join(logs[-20:])
 
 
 def _uploaded_video_path(video):
@@ -250,61 +176,6 @@ def create_demo():
     with gr.Blocks(title="YoYo Model") as demo:
         gr.Markdown("# YoYo Model")
         with gr.Tabs():
-            with gr.Tab("Single Image"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        example_selector = gr.Radio(
-                            choices=["YoYo Prompt", "Example 2: Cars", "Example 3: People", "Upload your own image"],
-                            value="YoYo Prompt",
-                            label="Select Example",
-                        )
-                        image_input = gr.Image(label="Input Image", type="pil", value=_example_value(EXAMPLE_IMAGES[0]))
-                        user_prompt = gr.Textbox(label="Prompt", lines=10, value=YOYO_DETECTION_PROMPT)
-                        model_dropdown = gr.Dropdown(
-                            label="Model",
-                            choices=list(MODEL_CONFIG.available_models),
-                            value=MODEL_CONFIG.default_model,
-                        )
-                        min_pixels_input = gr.Textbox(label="Min Image Tokens", value=MODEL_CONFIG.min_image_tokens)
-                        max_pixels_input = gr.Textbox(label="Max Image Tokens", value=MODEL_CONFIG.max_image_tokens)
-                        run_btn = gr.Button("Run Object Detection", variant="primary")
-                    with gr.Column(scale=1):
-                        output_vis = gr.Image(label="Detection Result")
-                        raw_output = gr.Textbox(label="Raw Model Response", lines=8, interactive=False, buttons=["copy"])
-                        status_output = gr.Textbox(label="Status / Summary", lines=3, interactive=False)
-
-                def on_example_select(selection):
-                    index = ["YoYo Prompt", "Example 2: Cars", "Example 3: People", "Upload your own image"].index(selection)
-                    return _example_value(EXAMPLE_IMAGES[index]), EXAMPLE_PROMPTS[index]
-
-                example_selector.change(on_example_select, [example_selector], [image_input, user_prompt])
-                run_btn.click(
-                    run_detection_streaming,
-                    [image_input, user_prompt, model_dropdown, min_pixels_input, max_pixels_input],
-                    [output_vis, raw_output, status_output],
-                )
-
-            with gr.Tab("Dataset Auto Label"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        dataset_input_dir = gr.Textbox(label="Dataset Image Directory", value=str(DATASET_CONFIG.image_input_dir))
-                        dataset_output_dir = gr.Textbox(label="Annotation Output Directory", value=str(DATASET_CONFIG.annotation_output_dir))
-                        dataset_prompt = gr.Textbox(label="Dataset Prompt", lines=10, value=YOYO_DETECTION_PROMPT)
-                        dataset_model = gr.Dropdown(
-                            label="Model",
-                            choices=list(MODEL_CONFIG.available_models),
-                            value=MODEL_CONFIG.default_model,
-                        )
-                        dataset_min_pixels = gr.Textbox(label="Min Image Tokens", value=MODEL_CONFIG.min_image_tokens)
-                        dataset_max_pixels = gr.Textbox(label="Max Image Tokens", value=MODEL_CONFIG.max_image_tokens)
-                        annotate_btn = gr.Button("Annotate Dataset", variant="primary")
-                    dataset_status = gr.Textbox(label="Batch Status", lines=24, interactive=False, buttons=["copy"])
-                annotate_btn.click(
-                    run_dataset_annotation_streaming,
-                    [dataset_input_dir, dataset_output_dir, dataset_prompt, dataset_model, dataset_min_pixels, dataset_max_pixels],
-                    [dataset_status],
-                )
-
             with gr.Tab("数据标注"):
                 gr.HTML(**dataset_annotation_component_kwargs())
 
@@ -465,8 +336,6 @@ def create_demo():
 
 
 if __name__ == "__main__":
-    os.makedirs(DATASET_CONFIG.temp_output_dir, exist_ok=True)
-    os.makedirs(DATASET_CONFIG.annotation_output_dir, exist_ok=True)
     create_demo().launch(
         server_name=os.getenv("APP_HOST", "0.0.0.0"),
         server_port=int(os.getenv("APP_PORT", "7866")),

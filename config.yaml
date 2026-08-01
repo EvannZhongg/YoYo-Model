@@ -1,31 +1,8 @@
-model:
-  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  api_key_env: "API_KEY"
-  default_model: "qwen3.6-35b-a3b"
-  available_models:
-    - "qwen3.6-35b-a3b"
-    - "qwen3.5-35b-a3b"
-  min_image_tokens: "1024"
-  max_image_tokens: "9800"
-  max_response_tokens: 20000
-  enable_thinking: true
-  # oss: upload images to Alibaba Cloud OSS and send signed URLs to the model.
-  # base64: send local images as data URLs directly, useful when OSS is not configured.
-  image_transport: "base64"
-
-oss:
-  endpoint: ""
-  region: ""
-  bucket_name: ""
-  object_prefix: "studio-temp/qwen-det"
-  signed_url_expires_seconds: 3600
-
 dataset:
   image_input_dir: "dataset/Positive_Sample/1A"
   # Current videos are exclusively 1A. Future groups remain schema-only.
   current_action_group: "1A"
   annotation_output_dir: "annotations"
-  temp_output_dir: "tmp"
   recursive: true
   keep_source_images: true
   image_extensions:
