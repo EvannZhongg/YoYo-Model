@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from helpers import make_annotation_dataset
 from workbench.dataset_annotation import (
-    ANNOTATION_SCHEMA_VERSION,
     REVIEW_MAP_FILENAME,
     dataset_annotation_component_kwargs,
     list_annotation_datasets,
@@ -19,39 +19,10 @@ from workbench.dataset_annotation import (
 
 
 class DatasetAnnotationWorkbenchTests(unittest.TestCase):
-    def _dataset(self, root: Path, name: str = "review_set") -> tuple[Path, str]:
-        dataset = root / name
-        group = "performer-01"
-        image_path = dataset / "canonical" / "images" / group / "frame-001.jpg"
-        label_path = dataset / "canonical" / "labels" / group / "frame-001.json"
-        image_path.parent.mkdir(parents=True)
-        label_path.parent.mkdir(parents=True)
-        Image.new("RGB", (400, 200), "white").save(image_path)
-        label_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": ANNOTATION_SCHEMA_VERSION,
-                    "source_image": "../../images/performer-01/frame-001.jpg",
-                    "image_size": [400, 200],
-                    "source_group": group,
-                    "frame_index": 12,
-                    "visibility": "visible",
-                    "trick_orientation": "normal",
-                    "yoyo_bbox_pixel": [100, 50, 140, 90],
-                    "string_visibility": "partial",
-                    "string_polylines_pixel": [[[10, 20], [30, 40]]],
-                    "string_review_status": "unresolved",
-                    "string_path": {"topology": "single_path", "paths": []},
-                }
-            ),
-            encoding="utf-8",
-        )
-        return dataset, f"{group}/frame-001.json"
-
     def test_lists_only_current_json_annotation_datasets(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, _ = self._dataset(root)
+            dataset, _ = make_annotation_dataset(root)
             derived = root / "derived"
             (derived / "labels").mkdir(parents=True)
             (derived / "images").mkdir()
@@ -62,8 +33,8 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_lists_every_annotation_dataset_under_datasets_root(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            first, _ = self._dataset(root, "alpha")
-            second, _ = self._dataset(root, "second")
+            first, _ = make_annotation_dataset(root, "alpha")
+            second, _ = make_annotation_dataset(root, "second")
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 self.assertEqual(
                     list_annotation_datasets(),
@@ -131,7 +102,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_open_and_load_expose_every_image_label_pair(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             with (
                 patch("workbench.dataset_annotation.DATASETS_DIR", root),
                 patch("workbench.dataset_annotation.gr.set_static_paths"),
@@ -146,7 +117,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_load_prefers_dataset_owned_image_over_external_source(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             label_path = dataset / "canonical" / "labels" / key
             canonical_image = dataset / "canonical" / "images" / "performer-01" / "frame-001.jpg"
             external_image = root / "annotation_archive" / "frame-001.jpg"
@@ -168,7 +139,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_review_status_uses_separate_mapping_without_changing_label(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             review_path = root / REVIEW_MAP_FILENAME
             label_path = dataset / "canonical" / "labels" / key
             label_before = label_path.read_bytes()
@@ -190,7 +161,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_label_change_invalidates_separate_review_status(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             review_path = root / REVIEW_MAP_FILENAME
             label_path = dataset / "canonical" / "labels" / key
             with (
@@ -208,7 +179,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_saving_annotation_removes_prior_review_mapping(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             review_path = root / REVIEW_MAP_FILENAME
             edit = {
                 "yoyo_visibility": "visible",
@@ -232,7 +203,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_save_preserves_original_pixel_coordinates_and_updates_1000_space(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             edit = {
                 "yoyo_visibility": "visible",
                 "trick_orientation": "horizontal",
@@ -259,7 +230,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_save_rejects_invalid_trick_orientation(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             edit = {
                 "yoyo_visibility": "visible",
                 "trick_orientation": "unknown",
@@ -275,7 +246,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
     def test_save_rejects_geometry_outside_original_image(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            dataset, key = self._dataset(root)
+            dataset, key = make_annotation_dataset(root)
             edit = {
                 "yoyo_visibility": "visible",
                 "trick_orientation": "normal",

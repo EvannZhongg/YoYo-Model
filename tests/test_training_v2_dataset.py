@@ -6,8 +6,13 @@ from pathlib import Path
 from PIL import Image
 
 from common.files import sha256_file
+from training_v2.evaluate import (
+    _artifact_suffix,
+    _check_dataset_manifest,
+    _detection_recall_from_confusion,
+    _json_value,
+)
 from training_v2.prepare_dataset import SOURCE_POLICY, build_training_dataset, discover_annotation_sources
-from training_v2.evaluate import _json_value
 from training_v2.orientation_view import build_orientation_view
 
 
@@ -214,6 +219,34 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                     base / "duplicate-output",
                     freeze_splits_from=duplicate_manifest,
                 )
+
+
+class TrainingEvaluationTests(unittest.TestCase):
+    def test_background_predictions_count_as_false_negatives(self) -> None:
+        recall, matrix = _detection_recall_from_confusion(
+            [[10.0, 2.0], [5.0, 0.0]],
+            ["yoyo"],
+        )
+
+        self.assertEqual(matrix, [[10.0, 2.0], [5.0, 0.0]])
+        self.assertAlmostEqual(recall["yoyo"], 10.0 / 15.0)
+
+    def test_native_manifest_has_no_artifact_suffix(self) -> None:
+        matches, warning = _check_dataset_manifest("abc", "abc", False)
+
+        self.assertTrue(matches)
+        self.assertEqual(warning, "")
+        self.assertEqual(_artifact_suffix(matches, "abc"), "")
+
+    def test_external_manifest_requires_explicit_opt_in(self) -> None:
+        with self.assertRaises(RuntimeError):
+            _check_dataset_manifest("old", "new", False)
+
+        matches, warning = _check_dataset_manifest("old", "1234567890abcdef", True)
+        self.assertFalse(matches)
+        self.assertIn("cross-model comparison", warning)
+        self.assertEqual(_artifact_suffix(matches, "1234567890abcdef"), "_external_1234567890ab")
+
 
 if __name__ == "__main__":
     unittest.main()

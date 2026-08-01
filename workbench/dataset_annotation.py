@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +11,7 @@ from typing import Any
 
 import gradio as gr
 
+from common.files import atomic_write_text
 from config import BASE_DIR
 
 
@@ -292,22 +291,7 @@ def set_annotation_sample_reviewed(
                 document["datasets"].pop(dataset_key)
         document["updated_at_utc"] = _utc_now()
         payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
-        review_path = REVIEW_MAP_PATH
-        review_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=review_path.parent,
-                prefix=f".{review_path.stem}.", suffix=".tmp", delete=False,
-            ) as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary_path = Path(handle.name)
-            os.replace(temporary_path, review_path)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
+        atomic_write_text(REVIEW_MAP_PATH, payload)
     return {"key": key, **_review_summary(label_path, _dataset_reviews(document, path).get(key))}
 
 
@@ -451,21 +435,8 @@ def save_annotation_sample(
     }
     document.setdefault("workbench_edits", []).append(edit_event)
     payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
-    temporary_path: Path | None = None
     with _STORAGE_LOCK:
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=label_path.parent,
-                prefix=f".{label_path.stem}.", suffix=".tmp", delete=False,
-            ) as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary_path = Path(handle.name)
-            os.replace(temporary_path, label_path)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
+        atomic_write_text(label_path, payload)
     if REVIEW_MAP_PATH.is_file():
         set_annotation_sample_reviewed(str(dataset_root), sample_key, "", confirmed=False)
     return {

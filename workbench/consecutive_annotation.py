@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from common.files import atomic_write_text
 from workbench import dataset_annotation as base
 
 
@@ -76,24 +75,7 @@ def _read_groups(dataset_path: str | Path) -> tuple[Path, dict[str, Any]]:
 def _write_groups(dataset: Path, document: dict[str, Any]) -> None:
     path = dataset / CONSECUTIVE_FILENAME
     payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=path.parent,
-            prefix=f".{path.stem}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    atomic_write_text(path, payload)
 
 
 def list_consecutive_annotation_datasets() -> list[dict[str, str]]:

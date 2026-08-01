@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import tempfile
 import threading
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 
+from common.files import atomic_write_text
 from config import BASE_DIR
 
 
@@ -134,27 +133,9 @@ def save_score_annotation(document_json: str | dict[str, Any]) -> dict[str, Any]
         raise ValueError("score annotation must be a JSON object")
     validate_score_annotation(document)
     output_path = _score_annotation_path(document)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
-    temporary_path: Path | None = None
     with _STORAGE_LOCK:
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=output_path.parent,
-                prefix=f".{output_path.stem}.",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-                temporary_path = Path(handle.name)
-            os.replace(temporary_path, output_path)
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
+        atomic_write_text(output_path, payload)
     return {
         "storage_key": output_path.name,
         "path": str(output_path),
