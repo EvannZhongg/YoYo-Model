@@ -105,6 +105,20 @@ def validate_score_annotation(document: dict[str, Any]) -> None:
         if interval.get("scene_type") not in SCENE_TYPES:
             raise ValueError(f"scene_intervals[{index}].scene_type is invalid")
 
+    serve_receive_events = document.get("serve_receive_events", [])
+    if not isinstance(serve_receive_events, list):
+        raise ValueError("serve_receive_events must be a list")
+    for index, event in enumerate(serve_receive_events):
+        if event.get("kind") not in {"begin", "end"}:
+            raise ValueError(f"serve_receive_events[{index}].kind is invalid")
+        keyframe = event.get("keyframe_s")
+        start = event.get("start_s")
+        end = event.get("end_s")
+        if not all(isinstance(value, (int, float)) for value in (keyframe, start, end)):
+            raise ValueError(f"serve_receive_events[{index}] timing values must be numeric")
+        if start < 0 or not start <= keyframe <= end:
+            raise ValueError(f"serve_receive_events[{index}] has invalid timing")
+
 
 def _storage_identity(browser_identity: str) -> str:
     return hashlib.sha256(browser_identity.encode("utf-8")).hexdigest()[:16]
@@ -345,6 +359,10 @@ SCORE_ANNOTATION_HTML = r"""
     <div class="ysa__timeline-heading">
       <h3>分轨时间轴</h3>
       <div class="ysa__timeline-tools">
+        <span class="ysa__serve-receive-actions">发球/收球
+          <button type="button" class="ysa__button" id="ysa-serve-begin" disabled>begin</button>
+          <button type="button" class="ysa__button" id="ysa-serve-end" disabled>end</button>
+        </span>
         <label>场景标签
           <select id="ysa-scene-type" title="无关场景包含广告、赞助商页等无需细分的内容" disabled>
             <option value="irrelevant_scene">无关场景</option>
@@ -374,6 +392,7 @@ SCORE_ANNOTATION_HTML = r"""
         <div class="ysa__track-row" data-family="negative"><span class="ysa__track-label">负向计分</span><div class="ysa__track-lane" data-track="negative" role="group" aria-label="负向计分轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row" data-family="major_penalty"><span class="ysa__track-label">重点扣分</span><div class="ysa__track-lane" data-track="major_penalty" role="group" aria-label="重点扣分轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row ysa__track-row--scene" data-family="scene"><span class="ysa__track-label">场景标注</span><div class="ysa__track-lane" data-track="scene" role="group" aria-label="无关场景与选手入离场标注轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
+        <div class="ysa__track-row ysa__track-row--serve-receive" data-family="serve_receive"><span class="ysa__track-label">发球/收球</span><div class="ysa__track-lane" data-track="serve_receive" role="group" aria-label="发球和收球标注轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
         <div class="ysa__track-row ysa__track-row--excluded" data-family="excluded"><span class="ysa__track-label">不可标记</span><div class="ysa__track-lane" data-track="excluded" role="group" aria-label="不可标记区间轨"><div class="ysa__track-playhead" role="slider" tabindex="0" aria-label="播放位置" aria-valuemin="0" title="拖动定位播放帧"></div></div></div>
       </div>
     </div>
@@ -494,6 +513,7 @@ SCORE_ANNOTATION_CSS = r"""
 .ysa__clip { align-items:center; background:#287c65; border:1px solid #60aa93; border-radius:3px; bottom:7px; color:#fff; cursor:grab; display:flex; font-size:10px; font-weight:700; min-width:8px; overflow:visible; padding:0 7px; position:absolute; text-overflow:ellipsis; top:7px; touch-action:none; white-space:nowrap; z-index:3; }
 .ysa__clip[data-family="negative"] { background:#a84a4a; border-color:#d28585; }
 .ysa__clip[data-family="major_penalty"] { background:#8b5d29; border-color:#c49459; }
+.ysa__clip[data-family="serve_receive"] { background:#2d6392; border-color:#79acd2; }
 .ysa__clip[data-family="scene"] { background:#276b76; border-color:#78b5bf; }
 .ysa__clip[data-family="excluded"] { background:#60458b; border-color:#a991cf; }
 .ysa__clip[data-family="excluded"]::before { background:repeating-linear-gradient(135deg,rgba(255,255,255,.16) 0,rgba(255,255,255,.16) 4px,transparent 4px,transparent 8px); content:""; inset:0; pointer-events:none; position:absolute; }
@@ -621,6 +641,7 @@ let pendingExclusionStart = null;
 let selectedExclusionId = null;
 let pendingSceneStart = null;
 let selectedSceneId = null;
+let selectedServeReceiveId = null;
 let editorDirty = false;
 let toastTimer = null;
 let saveQueue = Promise.resolve();
@@ -667,6 +688,7 @@ function normalizeDocument(document) {
     excluded_intervals_field:"excluded_intervals",
     rule:"frames_overlapping_excluded_intervals_are_ineligible"
   };
+  document.serve_receive_events = Array.isArray(document.serve_receive_events) ? document.serve_receive_events : [];
   return document;
 }
 
@@ -687,7 +709,7 @@ function blankDocument(file, sourcePath) {
     annotator:{judge:(judge.value || "judge1").trim() || "judge1"},
     timing_basis:{unit:"seconds", fps_assumption:fps(), frame_index_rounding:"nearest"},
     training_data_policy:{excluded_intervals_field:"excluded_intervals", rule:"frames_overlapping_excluded_intervals_are_ineligible"},
-    events:[], scene_intervals:[], excluded_intervals:[], created_at:timestamp, updated_at:timestamp
+    events:[], scene_intervals:[], excluded_intervals:[], serve_receive_events:[], created_at:timestamp, updated_at:timestamp
   };
 }
 
@@ -776,10 +798,10 @@ function closeActiveSession() {
   video.pause(); video.removeAttribute("src"); video.load(); video.classList.remove("is-ready");
   $("#ysa-empty").hidden = false;
   currentDocument = null; currentStorageKey = null; currentStoragePath = null;
-  selectedEventId = null; pendingEventStart = null; pendingEventAnchor = null; pendingExclusionStart = null; selectedExclusionId = null; pendingSceneStart = null; selectedSceneId = null; editorDirty = false;
+  selectedEventId = null; pendingEventStart = null; pendingEventAnchor = null; pendingExclusionStart = null; selectedExclusionId = null; pendingSceneStart = null; selectedSceneId = null; selectedServeReceiveId = null; editorDirty = false;
   videoFile.value = "";
   fields.disabled = true;
-  ["#ysa-prev","#ysa-next","#ysa-zoom","#ysa-timeline-zoom","#ysa-new","#ysa-export","#ysa-exclusion-toggle","#ysa-exclusion-reason","#ysa-scene-toggle","#ysa-scene-type"].forEach(selector => $(selector).disabled = true);
+  ["#ysa-prev","#ysa-next","#ysa-zoom","#ysa-timeline-zoom","#ysa-new","#ysa-export","#ysa-exclusion-toggle","#ysa-exclusion-reason","#ysa-scene-toggle","#ysa-scene-type","#ysa-serve-begin","#ysa-serve-end"].forEach(selector => $(selector).disabled = true);
   $("#ysa-video-identity").textContent = "尚未选择视频";
   $("#ysa-session-state").textContent = "选择本地视频开始新的标注会话";
   clearEditor(false); renderEvents(); updateTimecode();
@@ -955,8 +977,9 @@ function updateExclusionControls() {
   const button = $("#ysa-exclusion-toggle");
   button.disabled = !currentDocument || pendingSceneStart !== null;
   button.classList.toggle("is-recording", pendingExclusionStart !== null);
-  button.classList.toggle("is-selected", selectedExclusionId !== null && pendingExclusionStart === null);
-  button.textContent = pendingExclusionStart !== null ? "结束并标记不可用" : selectedExclusionId !== null ? "删除所选不可用区间" : "标记不可用起点";
+  const selectedDeletableId = selectedExclusionId !== null || selectedSceneId !== null || selectedServeReceiveId !== null;
+  button.classList.toggle("is-selected", selectedDeletableId && pendingExclusionStart === null);
+  button.textContent = pendingExclusionStart !== null ? "结束并标记不可用" : selectedDeletableId ? "删除所选不可用区间" : "标记不可用起点";
   $("#ysa-exclusion-reason").disabled = !currentDocument || pendingExclusionStart !== null || selectedExclusionId !== null || pendingSceneStart !== null;
 }
 
@@ -1178,6 +1201,24 @@ function renderTimeline() {
     clip.addEventListener("pointerdown", pointerEvent => beginSceneDrag(pointerEvent, interval, clip));
     lane.append(clip);
   });
+  (currentDocument?.serve_receive_events || []).forEach(event => {
+    const lane = element.querySelector('[data-track="serve_receive"]');
+    if (!lane) return;
+    const clip = document.createElement("div");
+    clip.className = `ysa__clip ysa__clip--serve-receive${event.serve_receive_id === selectedServeReceiveId ? " is-selected" : ""}`;
+    clip.dataset.serveReceiveId = event.serve_receive_id;
+    clip.dataset.family = "serve_receive";
+    clip.title = `${event.kind} · ${formatTime(event.start_s)}–${formatTime(event.end_s)}`;
+    clip.innerHTML = `<span>${event.kind}</span>`;
+    updateExclusionGeometry(clip, event, duration);
+    clip.addEventListener("click", pointerEvent => {
+      pointerEvent.stopPropagation();
+      selectedServeReceiveId = event.serve_receive_id;
+      selectedEventId = null; selectedExclusionId = null; selectedSceneId = null;
+      updateExclusionControls(); renderTimeline();
+    });
+    lane.append(clip);
+  });
   updateTimecode();
 }
 
@@ -1205,7 +1246,7 @@ function beginExclusionDrag(pointerEvent, exclusion, clip) {
   const origin = {...exclusion};
   const startX = pointerEvent.clientX;
   let moved = false;
-  selectedExclusionId = exclusion.exclusion_id; selectedEventId = null; selectedSceneId = null;
+  selectedExclusionId = exclusion.exclusion_id; selectedEventId = null; selectedSceneId = null; selectedServeReceiveId = null;
   $("#ysa-exclusion-reason").value = exclusion.reason;
   updateExclusionControls(); updateSceneControls();
   element.querySelectorAll(".ysa__clip,#ysa-event-list tr").forEach(node => node.classList.toggle("is-selected", node.dataset.exclusionId === selectedExclusionId));
@@ -1244,7 +1285,7 @@ function beginSceneDrag(pointerEvent, sceneInterval, clip) {
   const origin = {...sceneInterval};
   const startX = pointerEvent.clientX;
   let moved = false;
-  selectedSceneId = sceneInterval.scene_interval_id; selectedEventId = null; selectedExclusionId = null;
+  selectedSceneId = sceneInterval.scene_interval_id; selectedEventId = null; selectedExclusionId = null; selectedServeReceiveId = null;
   $("#ysa-scene-type").value = sceneInterval.scene_type;
   updateSceneControls(); updateExclusionControls();
   element.querySelectorAll(".ysa__clip,#ysa-event-list tr").forEach(node => node.classList.toggle("is-selected", node.dataset.sceneIntervalId === selectedSceneId));
@@ -1412,7 +1453,7 @@ function activateScoreSession(stored, videoSource, identityLabel) {
   fpsInput.value = currentDocument.timing_basis?.fps_assumption || 30;
   video.src = videoSource;
   video.classList.add("is-ready"); $("#ysa-empty").hidden = true;
-  fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false;
+  fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false; $("#ysa-serve-begin").disabled = false; $("#ysa-serve-end").disabled = false;
   $("#ysa-video-identity").textContent = identityLabel;
   clearEditor();
   $("#ysa-session-state").textContent = `已从 ${stored.path} 恢复 ${currentDocument.events.length} 个事件、${currentDocument.scene_intervals.length} 个场景区间、${currentDocument.excluded_intervals.length} 个不可标记区间 · 修订 ${currentDocument.revision}`;
@@ -1473,7 +1514,7 @@ async function openVideo(file) {
     division.value = currentDocument.competition.division; judge.value = currentDocument.annotator.judge;
     video.src = objectUrl;
     video.classList.add("is-ready"); $("#ysa-empty").hidden = true;
-    fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false;
+    fields.disabled = false; $("#ysa-prev").disabled = false; $("#ysa-next").disabled = false; $("#ysa-zoom").disabled = false; $("#ysa-timeline-zoom").disabled = false; $("#ysa-new").disabled = false; $("#ysa-export").disabled = false; $("#ysa-exclusion-toggle").disabled = false; $("#ysa-exclusion-reason").disabled = false; $("#ysa-scene-toggle").disabled = false; $("#ysa-scene-type").disabled = false; $("#ysa-serve-begin").disabled = false; $("#ysa-serve-end").disabled = false;
     $("#ysa-video-identity").textContent = `${file.name} · ${(file.size / 1048576).toFixed(1)} MB`;
     clearEditor();
     $("#ysa-session-state").textContent = "新会话 · 将保存到 annotations/score_annotations";
@@ -1563,8 +1604,33 @@ $("#ysa-save").addEventListener("click", () => {
   currentDocument.events.push(event);
   $("#ysa-validation").textContent = ""; persist("事件已添加"); loadEvent(event.event_id, false);
 });
+function addServeReceiveMarker(kind) {
+  if (!currentDocument) return;
+  if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
+  const keyframe = snapToFrame(video.currentTime || 0);
+  const padding = 0.4;
+  const start = Math.max(0, roundTime(keyframe - padding));
+  const end = Math.min(mediaDuration() || keyframe + padding, roundTime(keyframe + padding));
+  currentDocument.serve_receive_events = currentDocument.serve_receive_events || [];
+  currentDocument.serve_receive_events.push({serve_receive_id:uid(), kind, keyframe_s:roundTime(keyframe), start_s:start, end_s:end, created_at:nowIso()});
+  persist(`${kind} 标注已添加`); renderEvents();
+}
+$("#ysa-serve-begin").addEventListener("click", () => addServeReceiveMarker("begin"));
+$("#ysa-serve-end").addEventListener("click", () => addServeReceiveMarker("end"));
 $("#ysa-exclusion-toggle").addEventListener("click", () => {
   if (!currentDocument) return;
+  if (selectedServeReceiveId !== null && pendingExclusionStart === null && pendingSceneStart === null) {
+    currentDocument.serve_receive_events = (currentDocument.serve_receive_events || []).filter(event => event.serve_receive_id !== selectedServeReceiveId);
+    selectedServeReceiveId = null;
+    updateExclusionControls(); persist("发球/收球区间已删除"); renderEvents();
+    return;
+  }
+  if (selectedSceneId !== null && pendingExclusionStart === null && pendingSceneStart === null) {
+    currentDocument.scene_intervals = currentDocument.scene_intervals.filter(interval => interval.scene_interval_id !== selectedSceneId);
+    selectedSceneId = null;
+    updateExclusionControls(); updateSceneControls(); persist("场景区间已删除"); renderEvents();
+    return;
+  }
   if (selectedExclusionId !== null && pendingExclusionStart === null) {
     currentDocument.excluded_intervals = currentDocument.excluded_intervals.filter(interval => interval.exclusion_id !== selectedExclusionId);
     selectedExclusionId = null;
@@ -1584,12 +1650,6 @@ $("#ysa-exclusion-toggle").addEventListener("click", () => {
 });
 $("#ysa-scene-toggle").addEventListener("click", () => {
   if (!currentDocument) return;
-  if (selectedSceneId !== null && pendingSceneStart === null) {
-    currentDocument.scene_intervals = currentDocument.scene_intervals.filter(interval => interval.scene_interval_id !== selectedSceneId);
-    selectedSceneId = null;
-    updateSceneControls(); persist("场景区间已删除"); renderEvents();
-    return;
-  }
   if (selectedEventId && !syncSelectedFromEditor("事件已自动更新", false)) return;
   clearEditor(false);
   const current = snapToFrame(video.currentTime || 0);
@@ -1709,6 +1769,11 @@ def score_annotation_schema() -> str:
                 "fields": ["start_s", "end_s", "reason", "training_eligible"],
                 "reasons": list(EXCLUSION_REASONS),
                 "training_eligible": False,
+            },
+            "serve_receive_events": {
+                "fields": ["kind", "keyframe_s", "start_s", "end_s"],
+                "kinds": ["begin", "end"],
+                "window_s": 0.4,
             },
             "optional_fields": ["action_name"],
         },
