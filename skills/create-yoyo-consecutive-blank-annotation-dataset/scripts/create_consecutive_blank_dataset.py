@@ -864,9 +864,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     output = (datasets_root / dataset_name).resolve()
     if output.parent != datasets_root.resolve():
         raise ValueError("dataset output escaped datasets root")
-    root_reference = (datasets_root / "yoyo_dataset").resolve()
+    root_reference = (datasets_root / "1Ayoyo_dataset").resolve()
     if output == root_reference:
-        raise ValueError("this skill never writes or appends directly to datasets/yoyo_dataset")
+        raise ValueError("this skill never writes or appends directly to datasets/1Ayoyo_dataset")
     if output.exists() and not args.append:
         raise FileExistsError(f"dataset already exists; pass --append for protected incremental addition: {output}")
     review_map_path = (

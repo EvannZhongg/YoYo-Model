@@ -114,7 +114,7 @@ def run() -> None:
         videos.mkdir()
         video = videos / "unicode-测试.avi"
         write_video(video)
-        reference = datasets / "yoyo_dataset"
+        reference = datasets / "1Ayoyo_dataset"
         write_reference(reference, video, frame_index=20)
         cache = root / "hash_cache.json"
         common = [
@@ -223,7 +223,7 @@ def run() -> None:
             assert manifest["sample_count"] == expected_count
             labels = list((dataset / "canonical" / "labels").rglob("*.json"))
             assert len(labels) == expected_count
-        discovered = workbench_annotation.list_annotation_datasets()
+        discovered = workbench_annotation.list_annotation_datasets(include_consecutive=True)
         assert {item["name"] for item in discovered} >= {"batch-one", "batch-two"}
         assert reopened["sample_count"] == 8
         assert reopened["error_count"] == 0

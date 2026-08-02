@@ -39,14 +39,14 @@ Require every command to finish with `"ok": true`. Confirm each source's
 sample keys.
 
 The generator searches from the temporal middle outward. It preserves the root
-`datasets/yoyo_dataset` exclusion baseline and all earlier compatible blank
+`datasets/1Ayoyo_dataset` exclusion baseline and all earlier compatible blank
 datasets. Provenance and exact image hashes remain unique within a run.
 Perceptual similarity is allowed only among members of the same intentional
 run; candidates are still checked perceptually against reference datasets and
 previously completed runs. Use `--exclude-frame-window N` for wider separation
 from known source frames.
 
-Never append directly to `datasets/yoyo_dataset`. Never hand-edit generated
+Never append directly to `datasets/1Ayoyo_dataset`. Never hand-edit generated
 manifests, hashes, paths, or provenance. During append, preserve every existing
 image, label, and Workbench review entry byte-for-byte. Read
 `references/data-contract.md` when debugging compatibility or deduplication.

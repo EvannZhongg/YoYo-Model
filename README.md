@@ -4,34 +4,7 @@
 
 ## 命令行入口
 
-所有命令行入口集中在 `cli/`，从项目根目录使用 `python -m` 调用：
-
-```text
-cli.dataset.prepare_training
-cli.dataset.prepare_semantic_view
-cli.dataset.prepare_orientation_view
-cli.dataset.sync_annotations
-cli.dataset.export_reviewed_annotations
-cli.dataset.import_reviewed_annotations
-
-cli.training.train
-cli.training.train_orientation
-cli.training.train_semantic
-cli.training.evaluate
-cli.training.evaluate_semantic
-
-cli.tracking.track_video
-cli.tracking.review_tracking
-cli.tracking.evaluate_sequence
-cli.tracking.export_ground_truth
-
-cli.models.download_yolo
-cli.models.model_registry
-cli.models.yolo_model_soup
-cli.models.semantic_model_soup
-```
-
-查看任一命令的参数说明：
+所有命令行入口集中在 `cli/`，从项目根目录使用 `python -m` 调用，查看任一命令的参数说明：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train --help
