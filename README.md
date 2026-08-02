@@ -2,6 +2,41 @@
 
 悠悠球检测、绳线分割、三分类方向识别和完整视频追踪项目。训练数据统一由一个 canonical 数据集管理，不再按来源版本拆分训练流程。
 
+## 命令行入口
+
+所有命令行入口集中在 `cli/`，从项目根目录使用 `python -m` 调用：
+
+```text
+cli.dataset.prepare_training
+cli.dataset.prepare_semantic_view
+cli.dataset.prepare_orientation_view
+cli.dataset.sync_annotations
+cli.dataset.export_reviewed_annotations
+cli.dataset.import_reviewed_annotations
+
+cli.training.train
+cli.training.train_orientation
+cli.training.train_semantic
+cli.training.evaluate
+cli.training.evaluate_semantic
+
+cli.tracking.track_video
+cli.tracking.review_tracking
+cli.tracking.evaluate_sequence
+cli.tracking.export_ground_truth
+
+cli.models.download_yolo
+cli.models.model_registry
+cli.models.yolo_model_soup
+cli.models.semantic_model_soup
+```
+
+查看任一命令的参数说明：
+
+```powershell
+.\.venv\Scripts\python.exe -m cli.training.train --help
+```
+
 ## 当前数据集
 
 统一数据集目录：
@@ -21,8 +56,8 @@ datasets/1Ayoyo_dataset/
 数据集由 `annotations/` 下所有包含 `labels/` 的直接子目录统一构建，自动排除 `score_annotations/`。构建过程只纳入质量审核通过的标注，按图像 SHA-256 全局去重，并按来源视频组隔离、按标签分布优化 `train/val/test` 拆分：
 
 ```powershell
-.\.venv\Scripts\python.exe prepare_training_v2.py --clear
-.\.venv\Scripts\python.exe prepare_orientation_view_v2.py --clear
+.\.venv\Scripts\python.exe -m cli.dataset.prepare_training --clear
+.\.venv\Scripts\python.exe -m cli.dataset.prepare_orientation_view --clear
 ```
 
 对已有输出执行 `--clear` 时会默认冻结当前 manifest 的来源组拆分：旧来源保留原 `train/val/test`，新增来源只进入 `train`。只有在有意创建全新评估协议时才使用 `--resplit`；也可用 `--freeze-splits-from <manifest.json>` 明确指定拆分血缘。
@@ -38,10 +73,10 @@ datasets/1Ayoyo_dataset/
 
 ## 主训练流程
 
-统一训练入口位于 `training_v2/`。根目录脚本只是对应模块的简短 CLI 入口：
+统一训练入口位于 `training_v2/`，命令行入口集中在 `cli/`：
 
 ```powershell
-.\.venv\Scripts\python.exe train_training_v2.py `
+.\.venv\Scripts\python.exe -m cli.training.train `
   --dataset-dir datasets/1Ayoyo_dataset `
   --project-dir runs/v2v3 `
   --task detection `
@@ -60,7 +95,7 @@ datasets/1Ayoyo_dataset/
 语义绳模型继续使用统一数据集的 `string_segmentation` view：
 
 ```powershell
-.\.venv\Scripts\python.exe -m string_segmentation.train_semantic `
+.\.venv\Scripts\python.exe -m cli.training.train_semantic `
   --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
   --project runs/v2v3 `
   --name yoyo_v2v3_semantic_string `
@@ -73,7 +108,7 @@ datasets/1Ayoyo_dataset/
 ROI 方向模型使用：
 
 ```powershell
-.\.venv\Scripts\python.exe train_orientation_v2.py `
+.\.venv\Scripts\python.exe -m cli.training.train_orientation `
   --view-manifest datasets/1Ayoyo_dataset/orientation_roi/manifest.json `
   --project-dir runs/v2v3 `
   --device 0
@@ -86,7 +121,7 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 只评估带 `run_manifest.json` 的统一训练运行：
 
 ```powershell
-.\.venv\Scripts\python.exe evaluate_training_v2.py runs/v2v3/<run-name> --device 0
+.\.venv\Scripts\python.exe -m cli.training.evaluate runs/v2v3/<run-name> --device 0
 ```
 
 评估器会校验数据 manifest 和 best weights 的 SHA-256，然后在来源隔离的 test split 上运行。
@@ -96,7 +131,7 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 ## 完整视频追踪
 
 ```powershell
-.\.venv\Scripts\python.exe track_video.py path\to\input.mp4
+.\.venv\Scripts\python.exe -m cli.tracking.track_video path\to\input.mp4
 ```
 
 默认追踪配置在 `config.yaml` 的 `tracking` 区块。每次运行输出：

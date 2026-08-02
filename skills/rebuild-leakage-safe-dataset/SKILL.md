@@ -77,7 +77,8 @@ $annotationSources = @(
     Select-Object -ExpandProperty FullName
 )
 $discoveryArgs = @(
-  'prepare_training_v2.py', '--output-dir', 'tmp\incremental-discovery',
+  '-m', 'cli.dataset.prepare_training',
+  '--output-dir', 'tmp\incremental-discovery',
   '--clear', '--resplit', '--source', 'datasets\1Ayoyo_dataset\canonical'
 )
 foreach ($source in $annotationSources) { $discoveryArgs += @('--source', $source) }
@@ -113,7 +114,7 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $datasetBackup = "annotations\lineage\backups\yoyo-dataset-$stamp"
 $reviewSnapshot = "annotations\lineage\backups\dataset-review-status-$stamp.json"
 $protectedBuilder = @(
-  '.\.venv\Scripts\python.exe', 'prepare_training_v2.py',
+  '.\.venv\Scripts\python.exe', '-m', 'cli.dataset.prepare_training',
   '--output-dir', 'datasets\1Ayoyo_dataset', '--clear',
   '--freeze-splits-from', 'annotations\lineage\incremental-plan.json',
   '--source', '{protected_canonical}'

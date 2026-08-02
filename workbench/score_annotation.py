@@ -109,15 +109,20 @@ def validate_score_annotation(document: dict[str, Any]) -> None:
     if not isinstance(serve_receive_events, list):
         raise ValueError("serve_receive_events must be a list")
     for index, event in enumerate(serve_receive_events):
-        if event.get("kind") not in {"begin", "end"}:
-            raise ValueError(f"serve_receive_events[{index}].kind is invalid")
-        keyframe = event.get("keyframe_s")
-        start = event.get("start_s")
-        end = event.get("end_s")
+        marker = event.get("marker") or {}
+        timing = event.get("timing") or {}
+        if marker.get("track") != "serve_receive" or marker.get("type") not in {"begin", "end"}:
+            raise ValueError(f"serve_receive_events[{index}].marker is invalid")
+        keyframe = timing.get("anchor_s")
+        start = timing.get("evidence_start_s")
+        end = timing.get("evidence_end_s")
         if not all(isinstance(value, (int, float)) for value in (keyframe, start, end)):
             raise ValueError(f"serve_receive_events[{index}] timing values must be numeric")
         if start < 0 or not start <= keyframe <= end:
             raise ValueError(f"serve_receive_events[{index}] has invalid timing")
+        for field in ("anchor_frame_index", "evidence_start_frame_index", "evidence_end_frame_index"):
+            if not isinstance(timing.get(field), int):
+                raise ValueError(f"serve_receive_events[{index}].timing.{field} must be an integer")
 
 
 def _storage_identity(browser_identity: str) -> str:
@@ -1205,15 +1210,15 @@ function renderTimeline() {
     const lane = element.querySelector('[data-track="serve_receive"]');
     if (!lane) return;
     const clip = document.createElement("div");
-    clip.className = `ysa__clip ysa__clip--serve-receive${event.serve_receive_id === selectedServeReceiveId ? " is-selected" : ""}`;
-    clip.dataset.serveReceiveId = event.serve_receive_id;
+    clip.className = `ysa__clip ysa__clip--serve-receive${event.event_id === selectedServeReceiveId ? " is-selected" : ""}`;
+    clip.dataset.serveReceiveId = event.event_id;
     clip.dataset.family = "serve_receive";
-    clip.title = `${event.kind} · ${formatTime(event.start_s)}–${formatTime(event.end_s)}`;
-    clip.innerHTML = `<span>${event.kind}</span>`;
-    updateExclusionGeometry(clip, event, duration);
+    clip.title = `${event.marker.type} · ${formatTime(event.timing.evidence_start_s)}–${formatTime(event.timing.evidence_end_s)}`;
+    clip.innerHTML = `<span>${event.marker.type}</span>`;
+    updateExclusionGeometry(clip, {start_s:event.timing.evidence_start_s,end_s:event.timing.evidence_end_s}, duration);
     clip.addEventListener("click", pointerEvent => {
       pointerEvent.stopPropagation();
-      selectedServeReceiveId = event.serve_receive_id;
+      selectedServeReceiveId = event.event_id;
       selectedEventId = null; selectedExclusionId = null; selectedSceneId = null;
       updateExclusionControls(); renderTimeline();
     });
@@ -1612,7 +1617,13 @@ function addServeReceiveMarker(kind) {
   const start = Math.max(0, roundTime(keyframe - padding));
   const end = Math.min(mediaDuration() || keyframe + padding, roundTime(keyframe + padding));
   currentDocument.serve_receive_events = currentDocument.serve_receive_events || [];
-  currentDocument.serve_receive_events.push({serve_receive_id:uid(), kind, keyframe_s:roundTime(keyframe), start_s:start, end_s:end, created_at:nowIso()});
+  const timestamp = nowIso();
+  currentDocument.serve_receive_events.push({
+    event_id:uid(), sequence_index:currentDocument.serve_receive_events.length + 1,
+    marker:{track:"serve_receive", type:kind, display_name:kind},
+    timing:{anchor_s:roundTime(keyframe), anchor_source:"manual", evidence_start_s:start, evidence_end_s:end, anchor_frame_index:frameAt(keyframe), evidence_start_frame_index:frameAt(start), evidence_end_frame_index:frameAt(end), fps_assumption:fps(), boundary_uncertainty_allowed:true},
+    action_name:null, created_at:timestamp, updated_at:timestamp
+  });
   persist(`${kind} 标注已添加`); renderEvents();
 }
 $("#ysa-serve-begin").addEventListener("click", () => addServeReceiveMarker("begin"));
@@ -1620,7 +1631,8 @@ $("#ysa-serve-end").addEventListener("click", () => addServeReceiveMarker("end")
 $("#ysa-exclusion-toggle").addEventListener("click", () => {
   if (!currentDocument) return;
   if (selectedServeReceiveId !== null && pendingExclusionStart === null && pendingSceneStart === null) {
-    currentDocument.serve_receive_events = (currentDocument.serve_receive_events || []).filter(event => event.serve_receive_id !== selectedServeReceiveId);
+    currentDocument.serve_receive_events = (currentDocument.serve_receive_events || []).filter(event => event.event_id !== selectedServeReceiveId);
+    currentDocument.serve_receive_events.forEach((event, index) => event.sequence_index = index + 1);
     selectedServeReceiveId = null;
     updateExclusionControls(); persist("发球/收球区间已删除"); renderEvents();
     return;
@@ -1771,7 +1783,7 @@ def score_annotation_schema() -> str:
                 "training_eligible": False,
             },
             "serve_receive_events": {
-                "fields": ["kind", "keyframe_s", "start_s", "end_s"],
+                "fields": ["event_id", "sequence_index", "marker", "timing", "action_name", "created_at", "updated_at"],
                 "kinds": ["begin", "end"],
                 "window_s": 0.4,
             },

@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from common.files import atomic_write_text, collect_files, sha256_file
-from model_registry import _metric_summary
+from cli.models.model_registry import _metric_summary
 
 
 class CommonFileTests(unittest.TestCase):

@@ -15,7 +15,7 @@ dataset:
 yolo:
   model_name: "yolo11n.pt"
   models_dir: "models"
-  # Used by download_yolo_model.py. Override with --url if Ultralytics changes asset URLs.
+  # Used by cli.models.download_yolo. Override with --url if Ultralytics changes asset URLs.
   model_url_template: "https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
 
 semantic_string:
