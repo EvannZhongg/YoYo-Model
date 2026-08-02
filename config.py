@@ -102,7 +102,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_unified_1ae945ed3856_detection_best_incremental8-lr5e5-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_6f7a5497c903_detection_soup-a50-v1/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
