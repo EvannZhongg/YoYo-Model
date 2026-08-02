@@ -716,6 +716,10 @@ def track_video(
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
+    string_bridge_max_gap_px: float = TRACKING_CONFIG.string_bridge_max_gap_px,
+    string_bridge_max_angle_deg: float = TRACKING_CONFIG.string_bridge_max_angle_deg,
+    string_bridge_confirmation_frames: int = TRACKING_CONFIG.string_bridge_confirmation_frames,
+    string_bridge_match_tolerance_px: float = TRACKING_CONFIG.string_bridge_match_tolerance_px,
     yoyo_division: str = TRACKING_CONFIG.yoyo_division,
     orientation_weights_path: str | Path | None = None,
     enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
@@ -880,6 +884,10 @@ def track_video(
             max_propagation_frames=string_max_propagation_frames,
             max_forward_backward_error=string_flow_fb_max_error,
             fusion_distance_px=string_fusion_distance_px,
+            bridge_max_gap_px=string_bridge_max_gap_px,
+            bridge_max_angle_deg=string_bridge_max_angle_deg,
+            bridge_confirmation_frames=string_bridge_confirmation_frames,
+            bridge_match_tolerance_px=string_bridge_match_tolerance_px,
             # A loaded segmentation model returning no component is negative
             # evidence. Do not replace it with a weaker HSV/Hough proposal.
             allow_color_fallback=string_model is None,
@@ -915,6 +923,10 @@ def track_video(
                 max_propagation_frames=string_max_propagation_frames,
                 max_forward_backward_error=string_flow_fb_max_error,
                 fusion_distance_px=string_fusion_distance_px,
+                bridge_max_gap_px=string_bridge_max_gap_px,
+                bridge_max_angle_deg=string_bridge_max_angle_deg,
+                bridge_confirmation_frames=string_bridge_confirmation_frames,
+                bridge_match_tolerance_px=string_bridge_match_tolerance_px,
                 allow_color_fallback=False,
             )
         scheduled_orientation_inference = bool(
@@ -1105,6 +1117,18 @@ def track_video(
             int(bool((record.get("string") or {}).get("flow_partial_component_loss")))
             for record in records
         ),
+        "bridge_candidate_frames": sum(
+            int((record.get("string") or {}).get("bridge_candidate_count", 0) > 0)
+            for record in records
+        ),
+        "bridge_confirmed_frames": sum(
+            int(bool((record.get("string") or {}).get("bridge_applied")))
+            for record in records
+        ),
+        "bridge_candidate_count": sum(
+            int((record.get("string") or {}).get("bridge_candidate_count", 0))
+            for record in records
+        ),
     }
     run_manifest = {
         "schema_version": "1.2",
@@ -1154,6 +1178,10 @@ def track_video(
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_fusion_distance_px": float(string_fusion_distance_px),
+            "string_bridge_max_gap_px": float(string_bridge_max_gap_px),
+            "string_bridge_max_angle_deg": float(string_bridge_max_angle_deg),
+            "string_bridge_confirmation_frames": int(string_bridge_confirmation_frames),
+            "string_bridge_match_tolerance_px": float(string_bridge_match_tolerance_px),
             "yoyo_division": yoyo_division,
             "orientation_model_enabled": bool(enable_orientation_model),
             "orientation_weights": str(resolved_orientation_weights),
@@ -1260,6 +1288,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--string-max-propagation-frames", type=int, default=TRACKING_CONFIG.string_max_propagation_frames)
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
     parser.add_argument("--string-fusion-distance-px", type=float, default=TRACKING_CONFIG.string_fusion_distance_px)
+    parser.add_argument("--string-bridge-max-gap-px", type=float, default=TRACKING_CONFIG.string_bridge_max_gap_px)
+    parser.add_argument("--string-bridge-max-angle-deg", type=float, default=TRACKING_CONFIG.string_bridge_max_angle_deg)
+    parser.add_argument("--string-bridge-confirmation-frames", type=int, default=TRACKING_CONFIG.string_bridge_confirmation_frames)
+    parser.add_argument("--string-bridge-match-tolerance-px", type=float, default=TRACKING_CONFIG.string_bridge_match_tolerance_px)
     parser.add_argument(
         "--yoyo-division",
         choices=["1A", "2A", "3A", "4A", "5A"],
@@ -1302,6 +1334,10 @@ def main() -> int:
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         string_fusion_distance_px=args.string_fusion_distance_px,
+        string_bridge_max_gap_px=args.string_bridge_max_gap_px,
+        string_bridge_max_angle_deg=args.string_bridge_max_angle_deg,
+        string_bridge_confirmation_frames=args.string_bridge_confirmation_frames,
+        string_bridge_match_tolerance_px=args.string_bridge_match_tolerance_px,
         yoyo_division=args.yoyo_division,
         orientation_weights_path=args.orientation_weights,
         enable_orientation_model=not args.no_orientation_model,

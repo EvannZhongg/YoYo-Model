@@ -7,7 +7,13 @@ from tempfile import TemporaryDirectory
 import cv2
 import numpy as np
 
-from video_tracking.string_tracker import _color_line_observation, estimate_string, propagate_optical_flow
+from video_tracking.string_tracker import (
+    _color_line_observation,
+    bridge_string_components,
+    estimate_string,
+    propose_component_bridges,
+    propagate_optical_flow,
+)
 from video_tracking.review_sheet import (
     _pose_caption,
     _select_rows,
@@ -25,6 +31,40 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_component_bridge_requires_endpoint_tangent_alignment(self):
+        components = [
+            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
+            [[60.0, 0.0], [80.0, 0.0], [100.0, 0.0]],
+        ]
+        proposals = propose_component_bridges(components, max_gap_px=30.0)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0]["endpoint_a"], 1)
+        self.assertEqual(proposals[0]["endpoint_b"], 0)
+        self.assertLess(proposals[0]["angle_a_deg"], 1.0)
+
+        diagonal = [
+            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
+            [[55.0, 30.0], [75.0, 30.0], [95.0, 30.0]],
+        ]
+        self.assertEqual(propose_component_bridges(diagonal, max_gap_px=40.0), [])
+
+    def test_component_bridge_is_confirmed_on_two_consecutive_frames(self):
+        components = [
+            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
+            [[60.0, 0.0], [80.0, 0.0], [100.0, 0.0]],
+        ]
+        first = bridge_string_components({"points": components[0], "polylines": components, "confidence": 0.8})
+        self.assertFalse(first["bridge_confirmed"])
+        self.assertEqual(len(first["polylines"]), 2)
+        second = bridge_string_components(
+            {"points": components[0], "polylines": components, "confidence": 0.8},
+            previous_string=first,
+        )
+        self.assertTrue(second["bridge_confirmed"])
+        self.assertTrue(second["bridge_applied"])
+        self.assertEqual(len(second["polylines"]), 1)
+        self.assertGreater(second["bridge_confidence"], first["bridge_confidence"])
+
     def test_pose_person_selection_prefers_visible_wrists_near_yoyo(self):
         points = np.zeros((2, 17, 2), dtype=np.float32)
         confidence = np.zeros((2, 17), dtype=np.float32)

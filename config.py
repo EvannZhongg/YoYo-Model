@@ -143,6 +143,18 @@ class TrackingConfig:
     string_fusion_distance_px: float = float(
         _env_or_config("TRACKING_STRING_FUSION_DISTANCE_PX", "tracking.string_fusion_distance_px", 48.0)
     )
+    string_bridge_max_gap_px: float = float(
+        _env_or_config("TRACKING_STRING_BRIDGE_MAX_GAP_PX", "tracking.string_bridge_max_gap_px", 64.0)
+    )
+    string_bridge_max_angle_deg: float = float(
+        _env_or_config("TRACKING_STRING_BRIDGE_MAX_ANGLE_DEG", "tracking.string_bridge_max_angle_deg", 42.0)
+    )
+    string_bridge_confirmation_frames: int = int(
+        _env_or_config("TRACKING_STRING_BRIDGE_CONFIRMATION_FRAMES", "tracking.string_bridge_confirmation_frames", 2)
+    )
+    string_bridge_match_tolerance_px: float = float(
+        _env_or_config("TRACKING_STRING_BRIDGE_MATCH_TOLERANCE_PX", "tracking.string_bridge_match_tolerance_px", 28.0)
+    )
     yoyo_division: str = str(
         _env_or_config("TRACKING_YOYO_DIVISION", "tracking.yoyo_division", "1A")
     )

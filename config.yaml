@@ -70,6 +70,12 @@ tracking:
   string_max_propagation_frames: 12
   string_flow_fb_max_error: 4.0
   string_fusion_distance_px: 48.0
+  # Component bridges require endpoint proximity and aligned local tangents;
+  # two consecutive observations are required before geometry is merged.
+  string_bridge_max_gap_px: 64.0
+  string_bridge_max_angle_deg: 42.0
+  string_bridge_confirmation_frames: 2
+  string_bridge_match_tolerance_px: 28.0
   # Competition division metadata; it does not force a hand/yoyo connection.
   # Consecutive annotations contain multiple visible centerline components and
   # do not assert that every component touches the yoyo or a visible wrist.

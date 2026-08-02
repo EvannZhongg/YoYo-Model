@@ -55,6 +55,163 @@ def _orient_like(points: np.ndarray, reference: np.ndarray) -> np.ndarray:
     return points[::-1].copy() if reversed_distance < direct else points
 
 
+def _endpoint_tangents(points: list[list[float]], window: int = 4) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Return each endpoint and its inward centerline tangent."""
+    values = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    if len(values) < 2:
+        return []
+    span = max(1, min(int(window), len(values) - 1))
+    candidates = [(values[0], values[span] - values[0]), (values[-1], values[-span - 1] - values[-1])]
+    fallback = values[-1] - values[0]
+    result = []
+    for index, (endpoint, tangent) in enumerate(candidates):
+        norm = float(np.linalg.norm(tangent))
+        if norm <= 1e-5:
+            tangent = fallback if index == 0 else -fallback
+            norm = float(np.linalg.norm(tangent))
+        if norm > 1e-5:
+            result.append((endpoint, tangent / norm))
+    return result
+
+
+def propose_component_bridges(
+    polylines: list[list[list[float]]],
+    max_gap_px: float = 64.0,
+    max_angle_deg: float = 42.0,
+    tangent_window: int = 4,
+) -> list[dict[str, Any]]:
+    """Find plausible gaps between components using endpoint tangents.
+
+    A proposal is deliberately only geometry.  The caller must confirm it on
+    consecutive frames before applying it to the returned centerline.
+    """
+    components = [
+        np.asarray(points, dtype=np.float32).reshape(-1, 2)
+        for points in polylines
+        if isinstance(points, (list, tuple)) and len(points) >= 2
+    ]
+    endpoint_data = [_endpoint_tangents(points.tolist(), tangent_window) for points in components]
+    proposals: list[dict[str, Any]] = []
+    cosine_limit = math.cos(math.radians(float(max_angle_deg)))
+    for first in range(len(components)):
+        for second in range(first + 1, len(components)):
+            for first_endpoint, (point_a, tangent_a) in enumerate(endpoint_data[first]):
+                for second_endpoint, (point_b, tangent_b) in enumerate(endpoint_data[second]):
+                    delta = point_b - point_a
+                    gap = float(np.linalg.norm(delta))
+                    if gap <= 1e-5 or gap > float(max_gap_px):
+                        continue
+                    direction = delta / gap
+                    # Tangents point into each component; the missing bridge
+                    # must continue in the opposite (outward) direction.
+                    alignment_a = float(np.dot(-tangent_a, direction))
+                    alignment_b = float(np.dot(-tangent_b, -direction))
+                    if min(alignment_a, alignment_b) < cosine_limit:
+                        continue
+                    midpoint = (point_a + point_b) * 0.5
+                    angle_a = math.degrees(math.acos(max(-1.0, min(1.0, alignment_a))))
+                    angle_b = math.degrees(math.acos(max(-1.0, min(1.0, alignment_b))))
+                    score = min(alignment_a, alignment_b) * max(0.0, 1.0 - gap / max(1.0, float(max_gap_px)))
+                    proposals.append(
+                        {
+                            "component_a": first,
+                            "component_b": second,
+                            "endpoint_a": first_endpoint,
+                            "endpoint_b": second_endpoint,
+                            "point_a": [round(float(value), 2) for value in point_a],
+                            "point_b": [round(float(value), 2) for value in point_b],
+                            "midpoint": [round(float(value), 2) for value in midpoint],
+                            "gap_px": round(gap, 3),
+                            "angle_a_deg": round(angle_a, 3),
+                            "angle_b_deg": round(angle_b, 3),
+                            "score": round(float(score), 5),
+                        }
+                    )
+    proposals.sort(key=lambda item: (-float(item["score"]), float(item["gap_px"])))
+    return proposals
+
+
+def _proposal_matches(current: dict[str, Any], previous: dict[str, Any], tolerance_px: float) -> bool:
+    current_points = np.asarray([current["point_a"], current["point_b"]], dtype=np.float32)
+    previous_points = np.asarray([previous.get("point_a"), previous.get("point_b")], dtype=np.float32)
+    if previous_points.shape != (2, 2) or not np.isfinite(previous_points).all():
+        return False
+    direct = float(np.max(np.linalg.norm(current_points - previous_points, axis=1)))
+    reverse = float(np.max(np.linalg.norm(current_points - previous_points[::-1], axis=1)))
+    angle_delta = max(
+        abs(float(current.get("angle_a_deg", 180.0)) - float(previous.get("angle_a_deg", 180.0))),
+        abs(float(current.get("angle_b_deg", 180.0)) - float(previous.get("angle_b_deg", 180.0))),
+    )
+    return min(direct, reverse) <= float(tolerance_px) and angle_delta <= 20.0
+
+
+def bridge_string_components(
+    observation: dict[str, Any],
+    previous_string: dict[str, Any] | None = None,
+    max_gap_px: float = 64.0,
+    max_angle_deg: float = 42.0,
+    confirmation_frames: int = 2,
+    match_tolerance_px: float = 28.0,
+) -> dict[str, Any]:
+    """Annotate and conservatively bridge fragmented semantic components."""
+    result = dict(observation)
+    source_polylines = result.get("polylines") or ([result.get("points")] if result.get("points") else [])
+    source_polylines = [points for points in source_polylines if isinstance(points, (list, tuple)) and len(points) >= 2]
+    proposals = propose_component_bridges(source_polylines, max_gap_px, max_angle_deg)
+    previous_hypotheses = (previous_string or {}).get("bridge_hypotheses") or []
+    hypotheses = []
+    for proposal in proposals:
+        matches = [item for item in previous_hypotheses if _proposal_matches(proposal, item, match_tolerance_px)]
+        streak = max([int(item.get("streak", 1)) for item in matches] or [0]) + 1
+        enriched = dict(proposal)
+        enriched["streak"] = streak
+        enriched["confirmed"] = streak >= max(1, int(confirmation_frames))
+        hypotheses.append(enriched)
+    confirmed = [item for item in hypotheses if item["confirmed"]]
+    if confirmed:
+        # Apply non-overlapping highest-score bridges. This keeps a noisy set of
+        # components from being chained together in a single frame.
+        merged = [np.asarray(points, dtype=np.float32).reshape(-1, 2) for points in source_polylines]
+        used: set[int] = set()
+        applied = []
+        for bridge in confirmed:
+            a, b = int(bridge["component_a"]), int(bridge["component_b"])
+            if a in used or b in used or a >= len(merged) or b >= len(merged):
+                continue
+            line_a, line_b = merged[a], merged[b]
+            if int(bridge["endpoint_a"]) == 0:
+                line_a = line_a[::-1]
+            if int(bridge["endpoint_b"]) == 1:
+                line_b = line_b[::-1]
+            point_a = line_a[-1]
+            point_b = line_b[0]
+            bridge_points = np.linspace(point_a, point_b, 4, dtype=np.float32)[1:-1]
+            merged[a] = np.concatenate((line_a, bridge_points, line_b), axis=0)
+            used.update((a, b))
+            applied.append(bridge)
+        if applied:
+            output_polylines = [
+                [[round(float(x), 2), round(float(y), 2)] for x, y in points]
+                for index, points in enumerate(merged)
+                if index not in {int(item["component_b"]) for item in applied}
+            ]
+            result["polylines"] = output_polylines
+            result["points"] = output_polylines[0]
+            result["bridge_applied"] = True
+            result["bridged_component_count"] = len(applied)
+    result["bridge_hypotheses"] = hypotheses
+    result["bridge_candidate_count"] = len(proposals)
+    result["bridge_confirmed"] = bool(confirmed)
+    result["bridge_streak"] = max([int(item["streak"]) for item in hypotheses] or [0])
+    result["bridge_confidence"] = round(
+        min(0.98, max([float(item["score"]) for item in hypotheses] or [0.0]) * min(1.0, result["bridge_streak"] / max(1, int(confirmation_frames)))),
+        4,
+    )
+    if hypotheses:
+        result["needs_review"] = True
+    return result
+
+
 def _color_line_observation(
     frame: np.ndarray,
     yoyo: dict[str, Any],
@@ -454,6 +611,10 @@ def estimate_string(
     max_forward_backward_error: float = 4.0,
     fusion_distance_px: float = 48.0,
     allow_color_fallback: bool = True,
+    bridge_max_gap_px: float = 64.0,
+    bridge_max_angle_deg: float = 42.0,
+    bridge_confirmation_frames: int = 2,
+    bridge_match_tolerance_px: float = 28.0,
 ) -> dict[str, Any] | None:
     """Estimate a string while preserving uncertainty in the returned record."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -477,7 +638,17 @@ def estimate_string(
             )
             if propagated is not None:
                 propagated = _annotate_observation(propagated, previous_age + 1)
-    observed = _annotate_observation(observation) if observation is not None else None
+    observed = None
+    if observation is not None:
+        observed = bridge_string_components(
+            observation,
+            previous_string=previous_string,
+            max_gap_px=bridge_max_gap_px,
+            max_angle_deg=bridge_max_angle_deg,
+            confirmation_frames=bridge_confirmation_frames,
+            match_tolerance_px=bridge_match_tolerance_px,
+        )
+        observed = _annotate_observation(observed)
     if observed is None and yoyo is not None and allow_color_fallback:
         color_observation = _color_line_observation(
             frame,
