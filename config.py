@@ -123,7 +123,24 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/primary.pt",
+        )
+    )
+    string_ensemble_weights_path: Path = _as_path(
+        _env_or_config(
+            "TRACKING_STRING_ENSEMBLE_WEIGHTS_PATH",
+            "tracking.string_ensemble_weights_path",
+            "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/secondary.pt",
+        )
+    )
+    string_ensemble_alpha: float = float(
+        _env_or_config("TRACKING_STRING_ENSEMBLE_ALPHA", "tracking.string_ensemble_alpha", 0.30)
+    )
+    string_ensemble_candidate_threshold: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ENSEMBLE_CANDIDATE_THRESHOLD",
+            "tracking.string_ensemble_candidate_threshold",
+            0.50,
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)

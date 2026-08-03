@@ -11,13 +11,19 @@ from typing import Any
 
 import cv2
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 
 from common.files import sha256_file
 from config import SEMANTIC_STRING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_metrics import collect_probabilities, metrics_at_threshold, remove_small_components
-from string_segmentation.semantic_model import ReviewedStringDataset, letterbox, load_checkpoint
+from string_segmentation.semantic_model import (
+    ReviewedStringDataset,
+    fuse_calibrated_probabilities,
+    letterbox,
+    load_checkpoint,
+)
 
 
 def _check_dataset_manifest(
@@ -108,6 +114,10 @@ def evaluate(
     device_value: str,
     threshold_override: float | None = None,
     allow_dataset_mismatch: bool = False,
+    ensemble_weights: str | Path | None = None,
+    ensemble_alpha: float = 0.0,
+    ensemble_candidate_threshold: float = 0.5,
+    output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
@@ -123,8 +133,46 @@ def evaluate(
         augment=False,
     )
     loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=0, pin_memory=device.type == "cuda")
-    samples = collect_probabilities(model, loader, device)
-    threshold = float(checkpoint.get("threshold", 0.5) if threshold_override is None else threshold_override)
+    primary_threshold = float(
+        checkpoint.get("threshold", 0.5) if threshold_override is None else threshold_override
+    )
+    ensemble_path = Path(ensemble_weights) if ensemble_weights else None
+    if not 0.0 <= float(ensemble_alpha) <= 1.0:
+        raise ValueError("ensemble_alpha must be between 0 and 1")
+    if not 0.0 < float(ensemble_candidate_threshold) < 1.0:
+        raise ValueError("ensemble_candidate_threshold must be between 0 and 1")
+    if ensemble_path is not None and float(ensemble_alpha) > 0.0:
+        ensemble_model, ensemble_checkpoint = load_checkpoint(ensemble_path, device)
+        if ensemble_checkpoint.get("model_config") != checkpoint.get("model_config"):
+            raise ValueError("Semantic ensemble checkpoints use incompatible model configurations")
+        samples = []
+        with torch.inference_mode():
+            for batch in loader:
+                images = batch["image"].to(device, non_blocking=True)
+                primary_probability = torch.sigmoid(model(images)).detach().cpu().numpy()[:, 0]
+                secondary_probability = torch.sigmoid(ensemble_model(images)).detach().cpu().numpy()[:, 0]
+                targets = batch["mask"].numpy()[:, 0]
+                for primary, secondary, target, path in zip(
+                    primary_probability,
+                    secondary_probability,
+                    targets,
+                    batch["image_path"],
+                ):
+                    samples.append({
+                        "probability": fuse_calibrated_probabilities(
+                            primary,
+                            secondary,
+                            alpha=float(ensemble_alpha),
+                            primary_threshold=primary_threshold,
+                            secondary_threshold=float(ensemble_candidate_threshold),
+                        ),
+                        "target": (target > 0.5).astype(np.uint8),
+                        "image_path": str(path),
+                    })
+        threshold = 0.5
+    else:
+        samples = collect_probabilities(model, loader, device)
+        threshold = primary_threshold
     metrics = metrics_at_threshold(samples, threshold, tolerance_px=3, min_component_pixels=8)
     manifest_path = dataset_dir / "manifest.json"
     current_manifest_hash = sha256_file(manifest_path)
@@ -136,7 +184,8 @@ def evaluate(
     )
     if mismatch_warning:
         warnings.warn(mismatch_warning, RuntimeWarning, stacklevel=2)
-    run_dir = weights.parent.parent
+    run_dir = Path(output_dir) if output_dir is not None else weights.parent.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
     suffix = _artifact_suffix(dataset_matches_checkpoint, current_manifest_hash, threshold_override)
     sheet_path = run_dir / f"{split}_semantic_predictions{suffix}.jpg"
     _prediction_sheet(samples, threshold, sheet_path)
@@ -147,13 +196,23 @@ def evaluate(
         "split": split,
         "weights": str(weights.resolve()),
         "weights_sha256": sha256_file(weights),
+        "ensemble_weights": str(ensemble_path.resolve()) if ensemble_path is not None else "",
+        "ensemble_weights_sha256": (
+            sha256_file(ensemble_path) if ensemble_path is not None else ""
+        ),
+        "ensemble_alpha": float(ensemble_alpha),
+        "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
         "dataset_manifest_sha256": current_manifest_hash,
         "checkpoint_dataset_manifest_sha256": checkpoint_manifest_hash,
         "dataset_matches_checkpoint": dataset_matches_checkpoint,
         "warnings": [mismatch_warning] if mismatch_warning else [],
-        "threshold_source": "checkpoint_validation_selection" if threshold_override is None else "explicit_override",
+        "threshold_source": (
+            "calibrated_probability_ensemble"
+            if ensemble_path is not None and float(ensemble_alpha) > 0.0
+            else ("checkpoint_validation_selection" if threshold_override is None else "explicit_override")
+        ),
         "metrics": metrics,
         "prediction_sheet": str(sheet_path.resolve()),
         "limitations": [
@@ -179,6 +238,10 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Evaluate on a different manifest and record the mismatch for controlled same-set comparisons.",
     )
+    parser.add_argument("--ensemble-weights", default="")
+    parser.add_argument("--ensemble-alpha", type=float, default=0.0)
+    parser.add_argument("--ensemble-candidate-threshold", type=float, default=0.5)
+    parser.add_argument("--output-dir", default="")
     return parser.parse_args()
 
 
@@ -191,6 +254,10 @@ def main() -> int:
         args.device,
         args.threshold,
         args.allow_dataset_mismatch,
+        args.ensemble_weights or None,
+        args.ensemble_alpha,
+        args.ensemble_candidate_threshold,
+        args.output_dir or None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

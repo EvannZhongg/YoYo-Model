@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -367,6 +368,37 @@ def predict_letterboxed(
     tensor = normalize_image_for_inference(image, device)
     probability = torch.sigmoid(model(tensor))[0, 0].detach().cpu().numpy()
     return probability, meta
+
+
+def fuse_calibrated_probabilities(
+    primary: np.ndarray,
+    secondary: np.ndarray,
+    alpha: float,
+    primary_threshold: float,
+    secondary_threshold: float,
+) -> np.ndarray:
+    """Blend two calibrated probability maps in threshold-relative logit space."""
+    if primary.shape != secondary.shape:
+        raise ValueError("semantic probability maps must have matching shapes")
+    weight = float(alpha)
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError("semantic ensemble alpha must be between 0 and 1")
+    thresholds = (float(primary_threshold), float(secondary_threshold))
+    if not all(0.0 < value < 1.0 for value in thresholds):
+        raise ValueError("semantic calibration thresholds must be between 0 and 1")
+
+    epsilon = np.float32(1e-5)
+    left = np.clip(np.asarray(primary, dtype=np.float32), epsilon, 1.0 - epsilon)
+    right = np.clip(np.asarray(secondary, dtype=np.float32), epsilon, 1.0 - epsilon)
+    left_logit = np.log(left / (1.0 - left))
+    right_logit = np.log(right / (1.0 - right))
+    left_threshold_logit = math.log(thresholds[0] / (1.0 - thresholds[0]))
+    right_threshold_logit = math.log(thresholds[1] / (1.0 - thresholds[1]))
+    fused_logit = (
+        (1.0 - weight) * (left_logit - left_threshold_logit)
+        + weight * (right_logit - right_threshold_logit)
+    )
+    return (1.0 / (1.0 + np.exp(-fused_logit))).astype(np.float32)
 
 
 def load_dataset_manifest(dataset_dir: str | Path) -> dict[str, Any]:

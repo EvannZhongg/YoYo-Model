@@ -15,6 +15,7 @@ from common.files import sha256_file
 from config import TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
+    fuse_calibrated_probabilities,
     load_checkpoint,
     polyline_probability_support,
     predict_letterboxed,
@@ -64,6 +65,9 @@ def evaluate_consecutive_checkpoint(
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
     unanchored_semantic_grace_frames: int = 12,
+    ensemble_weights: Path | None = None,
+    ensemble_alpha: float = 0.0,
+    ensemble_candidate_threshold: float = 0.5,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -74,7 +78,22 @@ def evaluate_consecutive_checkpoint(
     config = checkpoint.get("model_config") or {}
     input_width = int(config.get("input_width", 960))
     input_height = int(config.get("input_height", 544))
-    selected_threshold = float(checkpoint.get("threshold", 0.5) if threshold is None else threshold)
+    primary_calibration_threshold = float(
+        checkpoint.get("threshold", 0.5) if threshold is None else threshold
+    )
+    selected_threshold = primary_calibration_threshold
+    ensemble_model = None
+    ensemble_checkpoint = None
+    if not 0.0 <= float(ensemble_alpha) <= 1.0:
+        raise ValueError("ensemble_alpha must be between 0 and 1")
+    if not 0.0 < float(ensemble_candidate_threshold) < 1.0:
+        raise ValueError("ensemble_candidate_threshold must be between 0 and 1")
+    if ensemble_weights is not None and float(ensemble_alpha) > 0.0:
+        ensemble_weights = ensemble_weights.resolve()
+        ensemble_model, ensemble_checkpoint = load_checkpoint(ensemble_weights, device)
+        if ensemble_checkpoint.get("model_config") != checkpoint.get("model_config"):
+            raise ValueError("Semantic ensemble checkpoints use incompatible model configurations")
+        selected_threshold = 0.5
     document = json.loads((dataset_dir / "consecutive_groups.json").read_text(encoding="utf-8"))
     selected = set(groups or [])
     results: list[dict[str, Any]] = []
@@ -99,6 +118,19 @@ def evaluate_consecutive_checkpoint(
             image_path = dataset_dir / str(frame["image"])
             image = _read_image(image_path)
             probability, meta = predict_letterboxed(model, image, input_width, input_height, device)
+            if ensemble_model is not None:
+                secondary_probability, secondary_meta = predict_letterboxed(
+                    ensemble_model, image, input_width, input_height, device,
+                )
+                if secondary_meta != meta:
+                    raise RuntimeError("Semantic ensemble produced incompatible letterbox metadata")
+                probability = fuse_calibrated_probabilities(
+                    probability,
+                    secondary_probability,
+                    alpha=float(ensemble_alpha),
+                    primary_threshold=primary_calibration_threshold,
+                    secondary_threshold=float(ensemble_candidate_threshold),
+                )
             yoyo = _yoyo(annotation)
             observation = semantic_mask_observation(
                 probability, meta, selected_threshold, yoyo=yoyo,
@@ -235,6 +267,12 @@ def evaluate_consecutive_checkpoint(
         "max_forward_backward_error": float(max_forward_backward_error),
         "fusion_distance_px": float(fusion_distance_px),
         "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
+        "ensemble_weights": str(ensemble_weights) if ensemble_weights is not None else "",
+        "ensemble_weights_sha256": (
+            sha256_file(ensemble_weights) if ensemble_weights is not None else ""
+        ),
+        "ensemble_alpha": float(ensemble_alpha),
+        "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
         "groups": results,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -269,6 +307,9 @@ def main() -> int:
         default=TRACKING_CONFIG.string_fusion_distance_px,
     )
     parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
+    parser.add_argument("--ensemble-weights", default="")
+    parser.add_argument("--ensemble-alpha", type=float, default=0.0)
+    parser.add_argument("--ensemble-candidate-threshold", type=float, default=0.5)
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(
         weights=Path(args.weights),
@@ -285,6 +326,9 @@ def main() -> int:
         max_forward_backward_error=args.max_forward_backward_error,
         fusion_distance_px=args.fusion_distance_px,
         unanchored_semantic_grace_frames=args.unanchored_semantic_grace_frames,
+        ensemble_weights=Path(args.ensemble_weights) if str(args.ensemble_weights).strip() else None,
+        ensemble_alpha=args.ensemble_alpha,
+        ensemble_candidate_threshold=args.ensemble_candidate_threshold,
     )
     compact = [{
         "source_group": item["source_group"],

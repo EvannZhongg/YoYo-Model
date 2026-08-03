@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app import create_demo, run_video_tracking
+from config import TRACKING_CONFIG
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
 from workbench.score_annotation import (
     ANCHOR_SOURCES,
@@ -369,8 +370,22 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(kwargs["orientation_inference_fps"], 5.0)
         self.assertTrue(kwargs["enable_orientation_model"])
         self.assertEqual(kwargs["visualization_max_width"], 1920)
+        self.assertEqual(kwargs["string_ensemble_alpha"], 0.0)
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
+
+        track_video.reset_mock()
+        run_video_tracking(
+            "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
+            False, "pose.pt", True, str(TRACKING_CONFIG.string_weights_path), 0.2, 2.0, 10.0,
+            "1A", True, "orientation.pt", 5.0, 1920,
+        )
+        default_kwargs = track_video.call_args.kwargs
+        self.assertEqual(default_kwargs["string_ensemble_alpha"], TRACKING_CONFIG.string_ensemble_alpha)
+        self.assertEqual(
+            default_kwargs["string_ensemble_weights_path"],
+            TRACKING_CONFIG.string_ensemble_weights_path,
+        )
 
     def test_tracking_without_video_returns_current_output_shape(self):
         outputs = run_video_tracking(

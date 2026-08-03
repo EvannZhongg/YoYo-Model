@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -24,6 +25,7 @@ from video_tracking.tracker import (
     _draw_frame,
     _can_seed_previous_string,
     _inference_interval_frames,
+    _predict_string_model,
     _select_pose_person,
     _should_reacquire_string,
     _visualization_size,
@@ -31,6 +33,60 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_semantic_ensemble_fuses_probabilities_before_geometry(self):
+        meta = SimpleNamespace(
+            original_width=16,
+            original_height=16,
+            target_width=16,
+            target_height=16,
+            resized_width=16,
+            resized_height=16,
+            pad_x=0,
+            pad_y=0,
+            scale=1.0,
+        )
+        model = {
+            "kind": "semantic_ensemble",
+            "model": object(),
+            "checkpoint": {
+                "threshold": 0.4,
+                "model_config": {"input_width": 16, "input_height": 16},
+            },
+            "ensemble_model": object(),
+            "ensemble_alpha": 0.3,
+            "ensemble_candidate_threshold": 0.5,
+            "device": "cpu",
+        }
+        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
+
+        with (
+            patch(
+                "video_tracking.tracker.predict_letterboxed",
+                side_effect=[
+                    (np.full((16, 16), 0.4, dtype=np.float32), meta),
+                    (np.full((16, 16), 0.5, dtype=np.float32), meta),
+                ],
+            ) as predict,
+            patch(
+                "video_tracking.tracker.semantic_mask_observation",
+                return_value=observation,
+            ) as geometry,
+        ):
+            result = _predict_string_model(
+                model,
+                np.zeros((16, 16, 3), dtype=np.uint8),
+                yoyo=None,
+                confidence=0.2,
+                imgsz=16,
+                device="cpu",
+                yoyo_division="1A",
+            )
+
+        self.assertEqual(predict.call_count, 2)
+        self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
+        self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
+        self.assertEqual(result["semantic_probability_ensemble"]["alpha"], 0.3)
+
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
         cv2.line(frame, (120, 90), (200, 40), (0, 255, 0), 4)

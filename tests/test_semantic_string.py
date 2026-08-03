@@ -13,6 +13,7 @@ from string_segmentation.semantic_model import (
     TinyUNet,
     build_string_model,
     focal_dice_loss,
+    fuse_calibrated_probabilities,
     load_checkpoint,
     normalize_image,
     normalize_image_for_inference,
@@ -26,6 +27,30 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_calibrated_probability_fusion_aligns_model_thresholds(self):
+        primary = np.asarray([[0.3985, 0.8]], dtype=np.float32)
+        secondary = np.asarray([[0.5, 0.8]], dtype=np.float32)
+
+        fused = fuse_calibrated_probabilities(
+            primary,
+            secondary,
+            alpha=0.3,
+            primary_threshold=0.3985,
+            secondary_threshold=0.5,
+        )
+
+        self.assertAlmostEqual(float(fused[0, 0]), 0.5, places=5)
+        self.assertGreater(float(fused[0, 1]), 0.8)
+
+    def test_calibrated_probability_fusion_rejects_invalid_inputs(self):
+        probability = np.full((2, 2), 0.5, dtype=np.float32)
+        with self.assertRaisesRegex(ValueError, "matching shapes"):
+            fuse_calibrated_probabilities(probability, probability[:1], 0.3, 0.4, 0.5)
+        with self.assertRaisesRegex(ValueError, "alpha"):
+            fuse_calibrated_probabilities(probability, probability, 1.1, 0.4, 0.5)
+        with self.assertRaisesRegex(ValueError, "thresholds"):
+            fuse_calibrated_probabilities(probability, probability, 0.3, 0.0, 0.5)
+
     def test_polyline_probability_support_samples_source_space_geometry(self):
         probability = np.zeros((10, 10), dtype=np.float32)
         probability[3:8, :] = 0.8

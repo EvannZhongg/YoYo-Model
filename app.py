@@ -109,6 +109,11 @@ def run_video_tracking(
         return (*empty, "Error: No video provided.")
 
     try:
+        selected_string_weights = Path(string_weights_path.strip()).resolve() if string_weights_path.strip() else None
+        use_default_string_ensemble = bool(
+            selected_string_weights is not None
+            and selected_string_weights == TRACKING_CONFIG.string_weights_path.resolve()
+        )
         result = track_video(
             source_video_path=video_path,
             weights_path=weights_path,
@@ -122,6 +127,17 @@ def run_video_tracking(
             auto_download_pose=TRACKING_CONFIG.auto_download_pose,
             enable_string_model=bool(enable_string_model),
             string_weights_path=string_weights_path.strip() or None,
+            string_ensemble_weights_path=(
+                TRACKING_CONFIG.string_ensemble_weights_path
+                if use_default_string_ensemble else None
+            ),
+            string_ensemble_alpha=(
+                TRACKING_CONFIG.string_ensemble_alpha
+                if use_default_string_ensemble else 0.0
+            ),
+            string_ensemble_candidate_threshold=(
+                TRACKING_CONFIG.string_ensemble_candidate_threshold
+            ),
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),

@@ -55,7 +55,12 @@ tracking:
   auto_download_pose: false
   # Validation-calibrated LR-ASPP model soup. Predictions remain review-only
   # and never become label truth.
-  string_weights_path: "runs/candidates/yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1/weights/best.pt"
+  string_weights_path: "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/primary.pt"
+  # Calibrated probability ensemble. The secondary model was fine-tuned on
+  # reviewed consecutive frames; thresholds are aligned before logit blending.
+  string_ensemble_weights_path: "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/secondary.pt"
+  string_ensemble_alpha: 0.30
+  string_ensemble_candidate_threshold: 0.50
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20

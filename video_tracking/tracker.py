@@ -25,6 +25,7 @@ import numpy as np
 from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
+    fuse_calibrated_probabilities,
     is_semantic_checkpoint,
     load_checkpoint as load_semantic_checkpoint,
     polyline_probability_support,
@@ -71,7 +72,14 @@ def _load_pose_model(weights_path: str | Path | None, auto_download: bool):
     return model, requested
 
 
-def _load_string_model(weights_path: str | Path | None, enabled: bool, device: str = ""):
+def _load_string_model(
+    weights_path: str | Path | None,
+    enabled: bool,
+    device: str = "",
+    ensemble_weights_path: str | Path | None = None,
+    ensemble_alpha: float = 0.0,
+    ensemble_candidate_threshold: float = 0.5,
+):
     if not enabled:
         return None, "disabled"
     path = Path(weights_path) if weights_path else TRACKING_CONFIG.string_weights_path
@@ -89,16 +97,43 @@ def _load_string_model(weights_path: str | Path | None, enabled: bool, device: s
                 requested_device or ("cuda" if torch.cuda.is_available() else "cpu")
             )
             model, checkpoint = load_semantic_checkpoint(path, semantic_device)
-            return (
-                {
-                    "kind": "semantic",
-                    "model": model,
-                    "checkpoint": checkpoint,
-                    "device": semantic_device,
-                    "path": str(path),
-                },
-                f"semantic:{path}",
+            bundle = {
+                "kind": "semantic",
+                "model": model,
+                "checkpoint": checkpoint,
+                "device": semantic_device,
+                "path": str(path),
+            }
+            secondary_path = Path(ensemble_weights_path) if ensemble_weights_path else None
+            if float(ensemble_alpha) > 0.0 and secondary_path is not None:
+                if not secondary_path.is_file():
+                    logger.warning("Semantic ensemble weights not found; using primary only: %s", secondary_path)
+                elif not is_semantic_checkpoint(secondary_path):
+                    logger.warning("Semantic ensemble weights are not a semantic checkpoint: %s", secondary_path)
+                else:
+                    secondary_model, secondary_checkpoint = load_semantic_checkpoint(
+                        secondary_path, semantic_device,
+                    )
+                    if secondary_checkpoint.get("model_config") != checkpoint.get("model_config"):
+                        logger.warning(
+                            "Semantic ensemble model config differs from primary; using primary only: %s",
+                            secondary_path,
+                        )
+                    else:
+                        bundle.update({
+                            "kind": "semantic_ensemble",
+                            "ensemble_model": secondary_model,
+                            "ensemble_checkpoint": secondary_checkpoint,
+                            "ensemble_path": str(secondary_path),
+                            "ensemble_alpha": float(ensemble_alpha),
+                            "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
+                        })
+            status = (
+                f"semantic_ensemble:{path}+{bundle['ensemble_path']}"
+                if bundle["kind"] == "semantic_ensemble"
+                else f"semantic:{path}"
             )
+            return bundle, status
         except Exception as exc:
             logger.warning("Semantic string weights unavailable (%s): %s", path, exc)
             return None, f"semantic_error: {exc}"
@@ -241,7 +276,7 @@ def _predict_string_model(
 ) -> dict[str, Any] | None:
     if model is None:
         return None
-    if isinstance(model, dict) and model.get("kind") == "semantic":
+    if isinstance(model, dict) and model.get("kind") in {"semantic", "semantic_ensemble"}:
         checkpoint = model["checkpoint"]
         model_device = model["device"]
         model_config = checkpoint["model_config"]
@@ -254,7 +289,34 @@ def _predict_string_model(
             input_height,
             model_device,
         )
-        threshold = max(float(checkpoint.get("threshold", 0.5)), float(confidence))
+        primary_threshold = float(checkpoint.get("threshold", 0.5))
+        threshold = max(primary_threshold, float(confidence))
+        ensemble_metadata = None
+        if model.get("kind") == "semantic_ensemble":
+            secondary_probability, secondary_meta = predict_letterboxed(
+                model["ensemble_model"],
+                frame,
+                input_width,
+                input_height,
+                model_device,
+            )
+            if secondary_meta != meta:
+                raise RuntimeError("Semantic ensemble produced incompatible letterbox metadata")
+            secondary_threshold = float(model["ensemble_candidate_threshold"])
+            probability = fuse_calibrated_probabilities(
+                probability,
+                secondary_probability,
+                alpha=float(model["ensemble_alpha"]),
+                primary_threshold=primary_threshold,
+                secondary_threshold=secondary_threshold,
+            )
+            threshold = max(0.5, float(confidence))
+            ensemble_metadata = {
+                "alpha": round(float(model["ensemble_alpha"]), 4),
+                "primary_threshold": round(primary_threshold, 4),
+                "secondary_threshold": round(secondary_threshold, 4),
+                "fused_threshold": round(threshold, 4),
+            }
         observation = semantic_mask_observation(
             probability,
             meta,
@@ -279,6 +341,8 @@ def _predict_string_model(
                 color_probability_min_fraction,
             )
         if observation is not None:
+            if ensemble_metadata is not None:
+                observation["semantic_probability_ensemble"] = ensemble_metadata
             observation["inference_scale"] = round(scale, 4)
             observation["inference_size"] = [input_width, input_height]
         return observation
@@ -776,6 +840,9 @@ def track_video(
     enable_pose: bool = False,
     auto_download_pose: bool = False,
     string_weights_path: str | Path | None = None,
+    string_ensemble_weights_path: str | Path | None = TRACKING_CONFIG.string_ensemble_weights_path,
+    string_ensemble_alpha: float = TRACKING_CONFIG.string_ensemble_alpha,
+    string_ensemble_candidate_threshold: float = TRACKING_CONFIG.string_ensemble_candidate_threshold,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
@@ -801,6 +868,10 @@ def track_video(
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
         raise ValueError("string_inference_fps must be non-negative")
+    if not 0.0 <= float(string_ensemble_alpha) <= 1.0:
+        raise ValueError("string_ensemble_alpha must be between 0 and 1")
+    if not 0.0 < float(string_ensemble_candidate_threshold) < 1.0:
+        raise ValueError("string_ensemble_candidate_threshold must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -817,7 +888,14 @@ def track_video(
     model = YOLO(str(weights_path))
     class_names = {int(key): str(value) for key, value in dict(getattr(model, "names", {}) or {}).items()}
     pose_model, pose_error = _load_pose_model(pose_weights_path, auto_download_pose) if enable_pose else (None, None)
-    string_model, string_model_status = _load_string_model(string_weights_path, enable_string_model, device)
+    string_model, string_model_status = _load_string_model(
+        string_weights_path,
+        enable_string_model,
+        device,
+        string_ensemble_weights_path,
+        string_ensemble_alpha,
+        string_ensemble_candidate_threshold,
+    )
     resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
         resolved_orientation_weights,
@@ -1209,6 +1287,12 @@ def track_video(
             sha256_file(Path(string_weights_path or TRACKING_CONFIG.string_weights_path))
             if string_model is not None else ""
         ),
+        "string_ensemble_weights_sha256": (
+            sha256_file(Path(string_model["ensemble_path"]))
+            if isinstance(string_model, dict)
+            and string_model.get("kind") == "semantic_ensemble"
+            else ""
+        ),
         "pose_weights_sha256": (
             sha256_file(Path(pose_weights_path))
             if pose_model is not None and pose_weights_path and Path(pose_weights_path).is_file()
@@ -1235,6 +1319,9 @@ def track_video(
             "pose_weights": str(pose_weights_path or ""),
             "string_model_enabled": bool(enable_string_model),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
+            "string_ensemble_weights": str(string_ensemble_weights_path or ""),
+            "string_ensemble_alpha": float(string_ensemble_alpha),
+            "string_ensemble_candidate_threshold": float(string_ensemble_candidate_threshold),
             "string_confidence": string_confidence,
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),
@@ -1335,6 +1422,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pose", action="store_true", help="Run optional YOLO pose inference for wrists/body landmarks.")
     parser.add_argument("--auto-download-pose", action="store_true")
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
+    parser.add_argument(
+        "--string-ensemble-weights",
+        default=str(TRACKING_CONFIG.string_ensemble_weights_path),
+    )
+    parser.add_argument(
+        "--string-ensemble-alpha",
+        type=float,
+        default=TRACKING_CONFIG.string_ensemble_alpha,
+    )
+    parser.add_argument(
+        "--string-ensemble-candidate-threshold",
+        type=float,
+        default=TRACKING_CONFIG.string_ensemble_candidate_threshold,
+    )
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
     parser.add_argument(
@@ -1403,6 +1504,9 @@ def main() -> int:
         enable_pose=args.pose,
         auto_download_pose=args.auto_download_pose,
         string_weights_path=args.string_weights,
+        string_ensemble_weights_path=args.string_ensemble_weights,
+        string_ensemble_alpha=args.string_ensemble_alpha,
+        string_ensemble_candidate_threshold=args.string_ensemble_candidate_threshold,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
         string_inference_scale=args.string_inference_scale,
