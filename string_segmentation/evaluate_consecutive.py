@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from common.files import sha256_file
+from config import TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
     load_checkpoint,
@@ -20,7 +21,7 @@ from string_segmentation.semantic_model import (
     semantic_mask_observation,
 )
 from video_tracking.sequence_metrics import evaluate_sequence
-from video_tracking.string_tracker import _color_line_observation
+from video_tracking.string_tracker import _color_line_observation, estimate_string
 
 
 def _safe_name(value: str) -> str:
@@ -58,6 +59,11 @@ def evaluate_consecutive_checkpoint(
     color_augment: bool = False,
     color_probability_min_mean: float | None = None,
     color_probability_min_fraction: float = 0.5,
+    temporal: bool = False,
+    max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
+    max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
+    fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
+    unanchored_semantic_grace_frames: int = 12,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -83,6 +89,9 @@ def evaluate_consecutive_checkpoint(
         target_components = []
         accepted_color_candidates = 0
         rejected_color_candidates = 0
+        previous_gray: np.ndarray | None = None
+        previous_string: dict[str, Any] | None = None
+        last_yoyo_frame: int | None = None
         for frame in group.get("frames") or []:
             relative = Path(str(frame["sample_key"]))
             annotation_path = dataset_dir / "canonical" / "labels" / relative
@@ -140,6 +149,38 @@ def evaluate_consecutive_checkpoint(
                             "color_points": color["points"],
                             "color_probability_support": color_support,
                         })
+            if temporal:
+                frame_index = int(frame["frame_index"])
+                allow_unanchored_semantic = bool(
+                    yoyo is None
+                    and last_yoyo_frame is not None
+                    and frame_index - last_yoyo_frame
+                    <= max(0, int(unanchored_semantic_grace_frames))
+                )
+                final_string = estimate_string(
+                    image,
+                    yoyo,
+                    [],
+                    previous_gray,
+                    previous_string,
+                    yoyo_division=str(annotation.get("yoyo_division") or "1A"),
+                    observation=final_string,
+                    max_propagation_frames=max(0, int(max_propagation_frames)),
+                    max_forward_backward_error=max_forward_backward_error,
+                    fusion_distance_px=fusion_distance_px,
+                    allow_color_fallback=False,
+                    allow_unanchored_semantic=allow_unanchored_semantic,
+                )
+                previous_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                previous_string = (
+                    final_string
+                    if final_string is not None
+                    and not final_string.get("spatially_ambiguous")
+                    and not final_string.get("hand_anchor_mismatch")
+                    else None
+                )
+                if yoyo is not None:
+                    last_yoyo_frame = frame_index
             predicted_components.append(
                 len((final_string or {}).get("polylines") or [])
                 or int((final_string or {}).get("component_count", 0))
@@ -189,6 +230,11 @@ def evaluate_consecutive_checkpoint(
         "color_augment": bool(color_augment),
         "color_probability_min_mean": color_probability_min_mean,
         "color_probability_min_fraction_at_0_10": color_probability_min_fraction,
+        "temporal": bool(temporal),
+        "max_propagation_frames": int(max_propagation_frames),
+        "max_forward_backward_error": float(max_forward_backward_error),
+        "fusion_distance_px": float(fusion_distance_px),
+        "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
         "groups": results,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -206,11 +252,39 @@ def main() -> int:
     parser.add_argument("--color-augment", action="store_true")
     parser.add_argument("--color-probability-min-mean", type=float, default=None)
     parser.add_argument("--color-probability-min-fraction", type=float, default=0.5)
+    parser.add_argument("--temporal", action="store_true")
+    parser.add_argument(
+        "--max-propagation-frames",
+        type=int,
+        default=TRACKING_CONFIG.string_max_propagation_frames,
+    )
+    parser.add_argument(
+        "--max-forward-backward-error",
+        type=float,
+        default=TRACKING_CONFIG.string_flow_fb_max_error,
+    )
+    parser.add_argument(
+        "--fusion-distance-px",
+        type=float,
+        default=TRACKING_CONFIG.string_fusion_distance_px,
+    )
+    parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(
-        Path(args.weights), Path(args.dataset_dir), Path(args.output_dir),
-        args.device, args.threshold, args.group or None, args.color_augment,
-        args.color_probability_min_mean, args.color_probability_min_fraction,
+        weights=Path(args.weights),
+        dataset_dir=Path(args.dataset_dir),
+        output_dir=Path(args.output_dir),
+        device_name=args.device,
+        threshold=args.threshold,
+        groups=args.group or None,
+        color_augment=args.color_augment,
+        color_probability_min_mean=args.color_probability_min_mean,
+        color_probability_min_fraction=args.color_probability_min_fraction,
+        temporal=args.temporal,
+        max_propagation_frames=args.max_propagation_frames,
+        max_forward_backward_error=args.max_forward_backward_error,
+        fusion_distance_px=args.fusion_distance_px,
+        unanchored_semantic_grace_frames=args.unanchored_semantic_grace_frames,
     )
     compact = [{
         "source_group": item["source_group"],

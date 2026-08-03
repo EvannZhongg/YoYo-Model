@@ -10,9 +10,7 @@ import numpy as np
 
 from video_tracking.string_tracker import (
     _color_line_observation,
-    bridge_string_components,
     estimate_string,
-    propose_component_bridges,
     propagate_optical_flow,
 )
 from video_tracking.review_sheet import (
@@ -69,40 +67,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(accepted["method"], "semantic_color_probability_union")
         self.assertEqual(len(accepted["polylines"]), 2)
         self.assertEqual(rejected, observation)
-
-    def test_component_bridge_requires_endpoint_tangent_alignment(self):
-        components = [
-            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
-            [[60.0, 0.0], [80.0, 0.0], [100.0, 0.0]],
-        ]
-        proposals = propose_component_bridges(components, max_gap_px=30.0)
-        self.assertEqual(len(proposals), 1)
-        self.assertEqual(proposals[0]["endpoint_a"], 1)
-        self.assertEqual(proposals[0]["endpoint_b"], 0)
-        self.assertLess(proposals[0]["angle_a_deg"], 1.0)
-
-        diagonal = [
-            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
-            [[55.0, 30.0], [75.0, 30.0], [95.0, 30.0]],
-        ]
-        self.assertEqual(propose_component_bridges(diagonal, max_gap_px=40.0), [])
-
-    def test_component_bridge_is_confirmed_on_two_consecutive_frames(self):
-        components = [
-            [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],
-            [[60.0, 0.0], [80.0, 0.0], [100.0, 0.0]],
-        ]
-        first = bridge_string_components({"points": components[0], "polylines": components, "confidence": 0.8})
-        self.assertFalse(first["bridge_confirmed"])
-        self.assertEqual(len(first["polylines"]), 2)
-        second = bridge_string_components(
-            {"points": components[0], "polylines": components, "confidence": 0.8},
-            previous_string=first,
-        )
-        self.assertTrue(second["bridge_confirmed"])
-        self.assertTrue(second["bridge_applied"])
-        self.assertEqual(len(second["polylines"]), 1)
-        self.assertGreater(second["bridge_confidence"], first["bridge_confidence"])
 
     def test_pose_person_selection_prefers_visible_wrists_near_yoyo(self):
         points = np.zeros((2, 17, 2), dtype=np.float32)
@@ -421,7 +385,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(result["flow_region"], "roi")
         self.assertLess(result["flow_region_fraction"], 0.5)
 
-    def test_observation_and_flow_are_fused(self):
+    def test_fresh_observation_keeps_geometry_when_flow_agrees(self):
         previous, current = self._shifted_frames()
         previous_string = {
             "points": [[35, 90], [145, 90]],
@@ -443,9 +407,10 @@ class StringTrackerTemporalTests(unittest.TestCase):
             },
         )
         self.assertIsNotNone(result)
-        self.assertEqual(result["method"], "temporal_fusion")
+        self.assertEqual(result["method"], "yolo_segmentation")
         self.assertEqual(result["propagation_age_frames"], 0)
-        self.assertIn("yolo_segmentation", result["source_methods"])
+        self.assertTrue(result["temporal_consistent"])
+        self.assertEqual(result["points"], [[41, 90], [151, 90]])
 
     def test_string_can_persist_without_yoyo_as_review_case(self):
         previous, current = self._shifted_frames()
@@ -523,6 +488,26 @@ class StringTrackerTemporalTests(unittest.TestCase):
             },
         )
         self.assertIsNone(result)
+
+    def test_recent_yoyo_context_can_allow_unanchored_semantic_string(self):
+        observation = {
+            "points": [[20.0, 20.0], [100.0, 100.0]],
+            "confidence": 0.9,
+            "method": "semantic_segmentation",
+        }
+
+        result = estimate_string(
+            np.zeros((180, 240, 3), dtype=np.uint8),
+            None,
+            [],
+            None,
+            None,
+            observation=observation,
+            allow_unanchored_semantic=True,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["method"], "semantic_segmentation")
 
     def test_wrist_and_yoyo_alone_do_not_create_a_string(self):
         result = estimate_string(
