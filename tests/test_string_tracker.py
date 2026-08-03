@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -21,6 +22,7 @@ from video_tracking.review_sheet import (
     make_tracking_review_sheet,
 )
 from video_tracking.tracker import (
+    _augment_semantic_color_observation,
     _draw_frame,
     _can_seed_previous_string,
     _inference_interval_frames,
@@ -31,6 +33,43 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_semantic_probability_gate_controls_color_augmentation(self):
+        frame = np.zeros((180, 240, 3), dtype=np.uint8)
+        cv2.line(frame, (120, 90), (200, 40), (0, 255, 0), 4)
+        yoyo = {"center": [120.0, 90.0], "bbox": [108.0, 78.0, 132.0, 102.0]}
+        observation = {
+            "points": [[120.0, 90.0], [150.0, 70.0]],
+            "polylines": [[[120.0, 90.0], [150.0, 70.0]]],
+            "confidence": 0.8,
+            "method": "semantic_segmentation",
+        }
+        meta = SimpleNamespace(scale=1.0, pad_x=0, pad_y=0)
+
+        accepted = _augment_semantic_color_observation(
+            frame,
+            yoyo,
+            observation,
+            np.ones((180, 240), dtype=np.float32),
+            meta,
+            threshold=0.4,
+            min_mean=0.4,
+            min_fraction_at_0_10=0.5,
+        )
+        rejected = _augment_semantic_color_observation(
+            frame,
+            yoyo,
+            observation,
+            np.zeros((180, 240), dtype=np.float32),
+            meta,
+            threshold=0.4,
+            min_mean=0.4,
+            min_fraction_at_0_10=0.5,
+        )
+
+        self.assertEqual(accepted["method"], "semantic_color_probability_union")
+        self.assertEqual(len(accepted["polylines"]), 2)
+        self.assertEqual(rejected, observation)
+
     def test_component_bridge_requires_endpoint_tangent_alignment(self):
         components = [
             [[0.0, 0.0], [20.0, 0.0], [40.0, 0.0]],

@@ -134,6 +134,28 @@ class TrackingConfig:
     string_inference_fps: float = float(
         _env_or_config("TRACKING_STRING_INFERENCE_FPS", "tracking.string_inference_fps", 0.0)
     )
+    string_color_probability_augment: bool = _as_bool(
+        _env_or_config(
+            "TRACKING_STRING_COLOR_PROBABILITY_AUGMENT",
+            "tracking.string_color_probability_augment",
+            True,
+        ),
+        True,
+    )
+    string_color_probability_min_mean: float = float(
+        _env_or_config(
+            "TRACKING_STRING_COLOR_PROBABILITY_MIN_MEAN",
+            "tracking.string_color_probability_min_mean",
+            0.40,
+        )
+    )
+    string_color_probability_min_fraction: float = float(
+        _env_or_config(
+            "TRACKING_STRING_COLOR_PROBABILITY_MIN_FRACTION",
+            "tracking.string_color_probability_min_fraction",
+            0.50,
+        )
+    )
     string_max_propagation_frames: int = int(
         _env_or_config("TRACKING_STRING_MAX_PROPAGATION_FRAMES", "tracking.string_max_propagation_frames", 12)
     )

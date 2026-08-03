@@ -388,6 +388,38 @@ def restore_coordinates(points: np.ndarray, meta: LetterboxMeta) -> list[list[fl
     return [[round(float(x), 2), round(float(y), 2)] for x, y in values]
 
 
+def polyline_probability_support(
+    probability: np.ndarray,
+    meta: LetterboxMeta,
+    points: list[list[float]],
+    threshold: float,
+    thickness: int = 3,
+) -> dict[str, float]:
+    """Summarize semantic probability around a source-space polyline."""
+    values = np.asarray(points, dtype=np.float32).reshape(-1, 2).copy()
+    if len(values) < 2:
+        return {}
+    values[:, 0] = values[:, 0] * float(meta.scale) + int(meta.pad_x)
+    values[:, 1] = values[:, 1] * float(meta.scale) + int(meta.pad_y)
+    values[:, 0] = np.clip(values[:, 0], 0, probability.shape[1] - 1)
+    values[:, 1] = np.clip(values[:, 1], 0, probability.shape[0] - 1)
+    mask = np.zeros(probability.shape, dtype=np.uint8)
+    line_points = values.round().astype(np.int32)
+    for start, end in zip(line_points[:-1], line_points[1:]):
+        cv2.line(mask, tuple(start), tuple(end), 1, thickness=max(1, int(thickness)))
+    samples = probability[mask > 0]
+    if not len(samples):
+        return {}
+    return {
+        "mean": round(float(np.mean(samples)), 6),
+        "p50": round(float(np.percentile(samples, 50)), 6),
+        "p90": round(float(np.percentile(samples, 90)), 6),
+        "fraction_at_0_10": round(float(np.mean(samples >= 0.10)), 6),
+        "fraction_at_0_20": round(float(np.mean(samples >= 0.20)), 6),
+        "fraction_at_threshold": round(float(np.mean(samples >= float(threshold))), 6),
+    }
+
+
 def _skeletonize(binary: np.ndarray) -> np.ndarray:
     """Morphological skeletonization without relying on opencv-contrib."""
     working = (binary > 0).astype(np.uint8) * 255

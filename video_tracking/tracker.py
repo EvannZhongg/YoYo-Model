@@ -27,12 +27,13 @@ from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
     is_semantic_checkpoint,
     load_checkpoint as load_semantic_checkpoint,
+    polyline_probability_support,
     predict_letterboxed,
     semantic_mask_observation,
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
 from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
-from video_tracking.string_tracker import estimate_string
+from video_tracking.string_tracker import _color_line_observation, estimate_string
 
 
 LOG_FILE = BASE_DIR / "track_video.log"
@@ -172,6 +173,58 @@ def _can_seed_previous_string(string: dict[str, Any] | None) -> bool:
     )
 
 
+def _augment_semantic_color_observation(
+    frame: np.ndarray,
+    yoyo: dict[str, Any] | None,
+    observation: dict[str, Any] | None,
+    probability: np.ndarray,
+    meta: Any,
+    threshold: float,
+    min_mean: float,
+    min_fraction_at_0_10: float,
+) -> dict[str, Any] | None:
+    """Add a color line only when the semantic map independently supports it."""
+    if observation is None or yoyo is None:
+        return observation
+    color = _color_line_observation(
+        frame,
+        yoyo,
+        require_yoyo_proximity=False,
+        mark_far_ambiguous=True,
+        reference_points=observation.get("points"),
+    )
+    if color is None:
+        return observation
+    support = polyline_probability_support(
+        probability,
+        meta,
+        color["points"],
+        threshold,
+    )
+    if (
+        float(support.get("mean", 0.0)) < float(min_mean)
+        or float(support.get("fraction_at_0_10", 0.0)) < float(min_fraction_at_0_10)
+    ):
+        return observation
+    result = dict(observation)
+    polylines = list(result.get("polylines") or [result["points"]])
+    polylines.append(color["points"])
+    result.update(
+        {
+            "polylines": polylines,
+            "component_count": len(polylines),
+            "method": "semantic_color_probability_union",
+            "needs_review": True,
+            "color_points": color["points"],
+            "color_confidence": color.get("confidence"),
+            "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
+            "color_spatially_ambiguous": color.get("spatially_ambiguous"),
+            "color_probability_support": support,
+        }
+    )
+    return result
+
+
 def _predict_string_model(
     model,
     frame: np.ndarray,
@@ -182,6 +235,9 @@ def _predict_string_model(
     yoyo_division: str,
     semantic_inference_scale: float = 1.0,
     wrists: list[dict[str, Any]] | None = None,
+    color_probability_augment: bool = False,
+    color_probability_min_mean: float = 0.40,
+    color_probability_min_fraction: float = 0.50,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -211,6 +267,17 @@ def _predict_string_model(
                 if "x" in wrist and "y" in wrist
             ],
         )
+        if color_probability_augment:
+            observation = _augment_semantic_color_observation(
+                frame,
+                yoyo,
+                observation,
+                probability,
+                meta,
+                threshold,
+                color_probability_min_mean,
+                color_probability_min_fraction,
+            )
         if observation is not None:
             observation["inference_scale"] = round(scale, 4)
             observation["inference_size"] = [input_width, input_height]
@@ -713,6 +780,9 @@ def track_video(
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
     string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
+    string_color_probability_augment: bool = TRACKING_CONFIG.string_color_probability_augment,
+    string_color_probability_min_mean: float = TRACKING_CONFIG.string_color_probability_min_mean,
+    string_color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
@@ -735,6 +805,10 @@ def track_video(
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
         raise ValueError("string_inference_fps must be non-negative")
+    if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
+        raise ValueError("string_color_probability_min_mean must be between 0 and 1")
+    if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
+        raise ValueError("string_color_probability_min_fraction must be between 0 and 1")
     if float(orientation_inference_fps) < 0.0:
         raise ValueError("orientation_inference_fps must be non-negative")
     source_video_path, weights_path, output_dir = Path(source_video_path), Path(weights_path), Path(output_dir)
@@ -871,6 +945,9 @@ def track_video(
                 yoyo_division,
                 string_inference_scale,
                 wrists,
+                string_color_probability_augment,
+                string_color_probability_min_mean,
+                string_color_probability_min_fraction,
             )
             string_inference_frames += 1
         string = estimate_string(
@@ -910,6 +987,9 @@ def track_video(
                 yoyo_division,
                 string_inference_scale,
                 wrists,
+                string_color_probability_augment,
+                string_color_probability_min_mean,
+                string_color_probability_min_fraction,
             )
             string_inference_frames += 1
             string = estimate_string(
@@ -1175,6 +1255,9 @@ def track_video(
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),
             "string_inference_interval_frames": int(string_inference_interval),
+            "string_color_probability_augment": bool(string_color_probability_augment),
+            "string_color_probability_min_mean": float(string_color_probability_min_mean),
+            "string_color_probability_min_fraction": float(string_color_probability_min_fraction),
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_fusion_distance_px": float(string_fusion_distance_px),
@@ -1285,6 +1368,22 @@ def parse_args() -> argparse.Namespace:
         default=TRACKING_CONFIG.string_inference_fps,
         help="Target semantic-model cadence; 0 runs semantic inference on every frame.",
     )
+    parser.add_argument(
+        "--no-string-color-probability-augment",
+        action="store_true",
+        default=not TRACKING_CONFIG.string_color_probability_augment,
+        help="Disable probability-gated color/Hough augmentation of semantic string observations.",
+    )
+    parser.add_argument(
+        "--string-color-probability-min-mean",
+        type=float,
+        default=TRACKING_CONFIG.string_color_probability_min_mean,
+    )
+    parser.add_argument(
+        "--string-color-probability-min-fraction",
+        type=float,
+        default=TRACKING_CONFIG.string_color_probability_min_fraction,
+    )
     parser.add_argument("--string-max-propagation-frames", type=int, default=TRACKING_CONFIG.string_max_propagation_frames)
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
     parser.add_argument("--string-fusion-distance-px", type=float, default=TRACKING_CONFIG.string_fusion_distance_px)
@@ -1331,6 +1430,9 @@ def main() -> int:
         string_confidence=args.string_conf,
         string_inference_scale=args.string_inference_scale,
         string_inference_fps=args.string_inference_fps,
+        string_color_probability_augment=not args.no_string_color_probability_augment,
+        string_color_probability_min_mean=args.string_color_probability_min_mean,
+        string_color_probability_min_fraction=args.string_color_probability_min_fraction,
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         string_fusion_distance_px=args.string_fusion_distance_px,

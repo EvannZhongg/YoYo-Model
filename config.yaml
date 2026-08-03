@@ -65,6 +65,12 @@ tracking:
   # optical-flow propagation alone, but the reviewed sequence showed a large
   # geometry-recall gain with no material yoyo localization change.
   string_inference_fps: 0.0
+  # Add a color/Hough centerline only when the semantic probability map also
+  # supports it. This recovers weak, fragmented string pixels without allowing
+  # unrelated saturated stage lines into the final geometry.
+  string_color_probability_augment: true
+  string_color_probability_min_mean: 0.40
+  string_color_probability_min_fraction: 0.50
   # Temporal string tracking is review-only: stop propagation after a short
   # gap and reject optical-flow drift with forward/backward consistency.
   string_max_propagation_frames: 12

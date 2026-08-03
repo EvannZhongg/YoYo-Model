@@ -16,6 +16,7 @@ from string_segmentation.semantic_model import (
     load_checkpoint,
     normalize_image,
     normalize_image_for_inference,
+    polyline_probability_support,
     render_yolo_segmentation,
     save_checkpoint,
     semantic_mask_observation,
@@ -25,6 +26,22 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_polyline_probability_support_samples_source_space_geometry(self):
+        probability = np.zeros((10, 10), dtype=np.float32)
+        probability[3:8, :] = 0.8
+        meta = LetterboxMeta(10, 10, 10, 10, 10, 10, 0, 0, 1.0)
+
+        support = polyline_probability_support(
+            probability,
+            meta,
+            [[2.0, 5.0], [7.0, 5.0]],
+            threshold=0.5,
+        )
+
+        self.assertGreater(support["mean"], 0.79)
+        self.assertEqual(support["fraction_at_0_10"], 1.0)
+        self.assertEqual(support["fraction_at_threshold"], 1.0)
+
     def test_model_soup_interpolates_floats_and_keeps_integer_buffers_discrete(self):
         baseline = {
             "weight": torch.tensor([0.0, 2.0]),
