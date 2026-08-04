@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import torch
 
@@ -10,6 +11,7 @@ from string_segmentation.evaluate_semantic import _artifact_suffix, _check_datas
 from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
     LetterboxMeta,
+    ReviewedStringDataset,
     TinyUNet,
     build_string_model,
     focal_dice_loss,
@@ -150,6 +152,29 @@ class SemanticStringTests(unittest.TestCase):
         actual = normalize_image_for_inference(image, "cpu")
 
         self.assertTrue(torch.allclose(actual, expected, atol=1e-6, rtol=0.0))
+
+    def test_reviewed_dataset_reads_unicode_source_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "字符串"
+            image_root = root / "images" / "train" / "中文组"
+            label_root = root / "labels" / "train" / "中文组"
+            image_root.mkdir(parents=True)
+            label_root.mkdir(parents=True)
+            image_path = image_root / "frame.jpg"
+            label_path = label_root / "frame.txt"
+            image = np.zeros((32, 48, 3), dtype=np.uint8)
+            image[10:14, 8:40] = (0, 255, 0)
+            encoded, buffer = cv2.imencode(".jpg", image)
+            self.assertTrue(encoded)
+            buffer.tofile(image_path)
+            label_path.write_text(
+                "0 0.15 0.30 0.85 0.30 0.85 0.45 0.15 0.45\n",
+                encoding="utf-8",
+            )
+            dataset = ReviewedStringDataset(root, "train", 48, 32, 1, False)
+            sample = dataset[0]
+            self.assertEqual(tuple(sample["image"].shape), (3, 32, 48))
+            self.assertGreater(float(sample["mask"].sum()), 0.0)
 
     def test_validation_selection_balances_string_quality_and_presence(self):
         reliable = {

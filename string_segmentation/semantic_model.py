@@ -246,7 +246,8 @@ class ReviewedStringDataset(Dataset):
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         image_path, label_path = self.pairs[index]
-        image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        encoded = np.fromfile(image_path, dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR) if encoded.size else None
         if image is None:
             raise RuntimeError(f"Could not read semantic training image: {image_path}")
         mask = render_yolo_segmentation(label_path, image.shape[1], image.shape[0])
