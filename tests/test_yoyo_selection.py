@@ -68,6 +68,34 @@ class YoyoSelectionTests(unittest.TestCase):
         self.assertEqual(selected["track_id"], 7)
         self.assertIn("multiple_yoyo", flags)
 
+    def test_trusted_temporal_reference_disambiguates_multiple_predictions(self):
+        continuous = detection([115, 110, 215, 210], 0.55)
+        distant = detection([500, 450, 580, 530], 0.95)
+
+        selected, flags = _pick_yoyo(
+            [distant, continuous],
+            previous_bbox=[100, 100, 200, 200],
+            temporal_reference_trusted=True,
+        )
+
+        self.assertEqual(selected["bbox"], continuous["bbox"])
+        self.assertEqual(selected["selection_source"], "temporal_motion")
+        self.assertIn("multiple_yoyo", flags)
+        self.assertIn("temporal_yoyo_selection", flags)
+
+    def test_untrusted_temporal_reference_keeps_confidence_selection(self):
+        continuous = detection([115, 110, 215, 210], 0.55)
+        distant = detection([500, 450, 580, 530], 0.95)
+
+        selected, flags = _pick_yoyo(
+            [distant, continuous],
+            previous_bbox=[100, 100, 200, 200],
+            temporal_reference_trusted=False,
+        )
+
+        self.assertEqual(selected["bbox"], distant["bbox"])
+        self.assertNotIn("temporal_yoyo_selection", flags)
+
     def test_short_spatially_continuous_gap_carries_selected_track_id(self):
         candidate = detection([115, 110, 215, 210], 0.8)
 

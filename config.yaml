@@ -43,6 +43,12 @@ tracking:
   # The promoted JN26 model soup was selected and evaluated at 1280 px;
   # lower resolutions materially reduce recall for small 4K yoyo targets.
   imgsz: 1280
+  # Run augmented detector inference only when the regular prediction is
+  # missing or weak. The augmented result must clear a stricter confidence
+  # gate before replacing the regular frame result.
+  yoyo_tta_rescue: true
+  yoyo_tta_trigger_confidence: 0.50
+  yoyo_tta_min_confidence: 0.40
   device: ""
   trace_length: 30
   line_thickness: 2

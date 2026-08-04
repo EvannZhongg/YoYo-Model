@@ -788,6 +788,8 @@ def _carry_preferred_track_id(
 def _pick_yoyo(
     detections: list[dict[str, Any]],
     preferred_track_id: int | None = None,
+    previous_bbox: list[float] | None = None,
+    temporal_reference_trusted: bool = False,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     yoyos = [item for item in detections if item["class_name"].lower() in {"yoyo", "yo-yo", "yoyo_body"}]
     if not yoyos:
@@ -802,7 +804,40 @@ def _pick_yoyo(
     if preferred_track_id is not None:
         stable = next((item for item in distinct if item.get("track_id") == preferred_track_id), None)
         if stable is not None:
+            stable["selection_source"] = "preferred_track"
             return stable, flags
+    if len(distinct) > 1 and previous_bbox is not None and temporal_reference_trusted:
+        previous_center = (
+            (previous_bbox[0] + previous_bbox[2]) / 2.0,
+            (previous_bbox[1] + previous_bbox[3]) / 2.0,
+        )
+        previous_diagonal = math.hypot(
+            previous_bbox[2] - previous_bbox[0],
+            previous_bbox[3] - previous_bbox[1],
+        )
+        temporal_candidates: list[tuple[float, float, dict[str, Any]]] = []
+        for candidate in distinct:
+            bbox = candidate["bbox"]
+            center = candidate["center"]
+            diagonal = max(
+                1.0,
+                previous_diagonal,
+                math.hypot(bbox[2] - bbox[0], bbox[3] - bbox[1]),
+            )
+            normalized_distance = math.hypot(
+                center[0] - previous_center[0],
+                center[1] - previous_center[1],
+            ) / diagonal
+            if normalized_distance <= 2.0:
+                score = math.log(max(float(candidate["confidence"]), 1e-6)) - 1.5 * normalized_distance
+                temporal_candidates.append((score, normalized_distance, candidate))
+        if temporal_candidates:
+            _, normalized_distance, selected = max(temporal_candidates, key=lambda item: item[0])
+            selected["selection_source"] = "temporal_motion"
+            selected["temporal_normalized_distance"] = round(float(normalized_distance), 4)
+            flags.append("temporal_yoyo_selection")
+            return selected, flags
+    distinct[0]["selection_source"] = "confidence"
     return distinct[0], flags
 
 
@@ -831,6 +866,9 @@ def track_video(
     confidence: float = TRACKING_CONFIG.confidence,
     iou: float = TRACKING_CONFIG.iou,
     imgsz: int = TRACKING_CONFIG.imgsz,
+    yoyo_tta_rescue: bool = TRACKING_CONFIG.yoyo_tta_rescue,
+    yoyo_tta_trigger_confidence: float = TRACKING_CONFIG.yoyo_tta_trigger_confidence,
+    yoyo_tta_min_confidence: float = TRACKING_CONFIG.yoyo_tta_min_confidence,
     device: str = TRACKING_CONFIG.device,
     trace_length: int = TRACKING_CONFIG.trace_length,
     line_thickness: int = TRACKING_CONFIG.line_thickness,
@@ -864,6 +902,10 @@ def track_video(
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
         raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
+    if not 0.0 < float(yoyo_tta_trigger_confidence) <= 1.0:
+        raise ValueError("yoyo_tta_trigger_confidence must be in (0, 1]")
+    if not 0.0 < float(yoyo_tta_min_confidence) <= 1.0:
+        raise ValueError("yoyo_tta_min_confidence must be in (0, 1]")
     if not 0.5 <= float(string_inference_scale) <= 2.0:
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
@@ -942,6 +984,8 @@ def track_video(
     selected_track_id: int | None = None
     selected_track_bbox: list[float] | None = None
     selected_track_frame: int | None = None
+    selected_yoyo_bbox: list[float] | None = None
+    selected_yoyo_trusted = False
     selected_pose_bbox: list[float] | None = None
     selected_pose_frame: int | None = None
     traces: dict[int, list[tuple[int, int]]] = {}
@@ -950,6 +994,8 @@ def track_video(
     processed_frames = 0
     string_inference_frames = 0
     orientation_inference_frames = 0
+    yoyo_tta_inference_frames = 0
+    yoyo_tta_accepted_frames = 0
     last_orientation: dict[str, Any] | None = None
     last_orientation_frame: int | None = None
     metadata_file = open(json_path, "w", encoding="utf-8") if export_json else None
@@ -958,23 +1004,71 @@ def track_video(
         ok, frame = capture.read()
         if not ok or (max_frames and processed_frames >= max_frames):
             break
-        kwargs: dict[str, Any] = {"source": frame, "conf": confidence, "iou": iou, "imgsz": imgsz, "verbose": False}
+        kwargs: dict[str, Any] = {
+            "source": frame,
+            "conf": confidence,
+            "iou": iou,
+            "imgsz": imgsz,
+            "augment": False,
+            "verbose": False,
+        }
         if device:
             kwargs["device"] = device
         result = model.predict(**kwargs)[0]
         detections_raw = _extract_detections(result, class_names)
+        regular_yoyo, _ = _pick_yoyo(detections_raw)
+        scheduled_yoyo_tta = bool(
+            yoyo_tta_rescue
+            and (
+                regular_yoyo is None
+                or float(regular_yoyo["confidence"]) < float(yoyo_tta_trigger_confidence)
+            )
+        )
+        accepted_yoyo_tta = False
+        if scheduled_yoyo_tta:
+            yoyo_tta_inference_frames += 1
+            tta_kwargs = dict(kwargs)
+            tta_kwargs["augment"] = True
+            tta_result = model.predict(**tta_kwargs)[0]
+            tta_detections = _extract_detections(tta_result, class_names)
+            tta_yoyo, _ = _pick_yoyo(
+                tta_detections,
+                previous_bbox=selected_yoyo_bbox,
+                temporal_reference_trusted=selected_yoyo_trusted,
+            )
+            if (
+                tta_yoyo is not None
+                and float(tta_yoyo["confidence"]) >= float(yoyo_tta_min_confidence)
+            ):
+                result = tta_result
+                detections_raw = tta_detections
+                accepted_yoyo_tta = True
+                yoyo_tta_accepted_frames += 1
         ultralytics_detections = sv.Detections.from_ultralytics(result)
         tracked = tracker.update_with_detections(ultralytics_detections)
         _assign_tracker_ids(detections_raw, tracked)
-        yoyo, flags = _pick_yoyo(detections_raw, selected_track_id)
+        yoyo, flags = _pick_yoyo(
+            detections_raw,
+            selected_track_id,
+            previous_bbox=selected_yoyo_bbox,
+            temporal_reference_trusted=selected_yoyo_trusted,
+        )
+        if accepted_yoyo_tta:
+            flags.append("yoyo_tta_rescue")
         _carry_preferred_track_id(
             yoyo,
             selected_track_id,
             selected_track_bbox,
             frame_index - selected_track_frame if selected_track_frame is not None else 0,
             max(2, int(round(fps * 0.25))),
-            "multiple_yoyo" in flags,
+            "multiple_yoyo" in flags and "temporal_yoyo_selection" not in flags,
         )
+        if yoyo is not None:
+            selected_yoyo_bbox = [float(value) for value in yoyo["bbox"]]
+            selected_yoyo_trusted = bool(
+                float(yoyo["confidence"]) >= float(yoyo_tta_trigger_confidence)
+                or yoyo.get("track_id") is not None
+            )
         if yoyo is not None and yoyo.get("track_id") is not None:
             selected_track_id = int(yoyo["track_id"])
             selected_track_bbox = [float(value) for value in yoyo["bbox"]]
@@ -1172,6 +1266,13 @@ def track_video(
                 "interval_frames": int(orientation_inference_interval),
                 "error_type": orientation_inference_error,
             },
+            "yoyo_model_inference": {
+                "status": "tta_rescue" if accepted_yoyo_tta else "regular",
+                "tta_scheduled": scheduled_yoyo_tta,
+                "tta_accepted": accepted_yoyo_tta,
+                "trigger_confidence": float(yoyo_tta_trigger_confidence),
+                "minimum_confidence": float(yoyo_tta_min_confidence),
+            },
             "string_model_inference": {
                 "status": (
                     "ran"
@@ -1308,6 +1409,14 @@ def track_video(
             "iou": iou,
             "imgsz": imgsz,
             "device": device,
+            "yoyo_tta_rescue": bool(yoyo_tta_rescue),
+            "yoyo_tta_trigger_confidence": float(yoyo_tta_trigger_confidence),
+            "yoyo_tta_min_confidence": float(yoyo_tta_min_confidence),
+            "yoyo_tta_temporal_selection": {
+                "enabled": True,
+                "score": "log_confidence_minus_1.5_normalized_center_distance",
+                "max_normalized_center_distance": 2.0,
+            },
             "yoyo_track_id_carry": {
                 "enabled": True,
                 "max_gap_frames": max(2, int(round(fps * 0.25))),
@@ -1343,6 +1452,8 @@ def track_video(
             "max_frames": max_frames,
         },
         "frame_count": processed_frames,
+        "yoyo_tta_inference_frame_count": yoyo_tta_inference_frames,
+        "yoyo_tta_accepted_frame_count": yoyo_tta_accepted_frames,
         "string_inference_frame_count": string_inference_frames,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_summary": _orientation_summary(records),
@@ -1399,6 +1510,9 @@ def track_video(
         "confidence": confidence,
         "iou": iou,
         "imgsz": imgsz,
+        "yoyo_tta_rescue": bool(yoyo_tta_rescue),
+        "yoyo_tta_inference_frame_count": yoyo_tta_inference_frames,
+        "yoyo_tta_accepted_frame_count": yoyo_tta_accepted_frames,
         "device": device,
     }
 
@@ -1411,6 +1525,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conf", type=float, default=TRACKING_CONFIG.confidence)
     parser.add_argument("--iou", type=float, default=TRACKING_CONFIG.iou)
     parser.add_argument("--imgsz", type=int, default=TRACKING_CONFIG.imgsz)
+    parser.add_argument(
+        "--no-yoyo-tta-rescue",
+        action="store_true",
+        default=not TRACKING_CONFIG.yoyo_tta_rescue,
+        help="Disable low-confidence augmented yoyo re-detection.",
+    )
+    parser.add_argument(
+        "--yoyo-tta-trigger-conf",
+        type=float,
+        default=TRACKING_CONFIG.yoyo_tta_trigger_confidence,
+    )
+    parser.add_argument(
+        "--yoyo-tta-min-conf",
+        type=float,
+        default=TRACKING_CONFIG.yoyo_tta_min_confidence,
+    )
     parser.add_argument("--device", default=TRACKING_CONFIG.device)
     parser.add_argument(
         "--visualization-max-width",
@@ -1498,6 +1628,9 @@ def main() -> int:
         confidence=args.conf,
         iou=args.iou,
         imgsz=args.imgsz,
+        yoyo_tta_rescue=not args.no_yoyo_tta_rescue,
+        yoyo_tta_trigger_confidence=args.yoyo_tta_trigger_conf,
+        yoyo_tta_min_confidence=args.yoyo_tta_min_conf,
         device=args.device,
         visualization_max_width=args.visualization_max_width,
         pose_weights_path=args.pose_weights or None,

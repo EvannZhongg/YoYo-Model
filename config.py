@@ -109,6 +109,24 @@ class TrackingConfig:
     confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.15))
     iou: float = float(_env_or_config("TRACKING_IOU", "tracking.iou", 0.7))
     imgsz: int = int(_env_or_config("TRACKING_IMGSZ", "tracking.imgsz", 1280))
+    yoyo_tta_rescue: bool = _as_bool(
+        _env_or_config("TRACKING_YOYO_TTA_RESCUE", "tracking.yoyo_tta_rescue", True),
+        True,
+    )
+    yoyo_tta_trigger_confidence: float = float(
+        _env_or_config(
+            "TRACKING_YOYO_TTA_TRIGGER_CONFIDENCE",
+            "tracking.yoyo_tta_trigger_confidence",
+            0.50,
+        )
+    )
+    yoyo_tta_min_confidence: float = float(
+        _env_or_config(
+            "TRACKING_YOYO_TTA_MIN_CONFIDENCE",
+            "tracking.yoyo_tta_min_confidence",
+            0.40,
+        )
+    )
     device: str = str(_env_or_config("TRACKING_DEVICE", "tracking.device", ""))
     trace_length: int = int(_env_or_config("TRACKING_TRACE_LENGTH", "tracking.trace_length", 30))
     line_thickness: int = int(_env_or_config("TRACKING_LINE_THICKNESS", "tracking.line_thickness", 2))

@@ -349,6 +349,8 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "orientation_inference_frame_count": 2,
             "orientation_summary": {"label": "horizontal"},
             "tracking_loop_fps": 4.5,
+            "yoyo_tta_inference_frame_count": 4,
+            "yoyo_tta_accepted_frame_count": 2,
             "output_width": 1920,
             "output_height": 1080,
             "weights": "detector.pt",
@@ -365,11 +367,21 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(outputs[1], "frames.jsonl")
         self.assertEqual(outputs[2], "run.json")
         self.assertIn("Semantic inference frames: 3", outputs[-1])
+        self.assertIn("Yoyo TTA: 2 accepted / 4 attempted", outputs[-1])
         kwargs = track_video.call_args.kwargs
         self.assertEqual(kwargs["string_inference_fps"], 10.0)
         self.assertEqual(kwargs["orientation_inference_fps"], 5.0)
         self.assertTrue(kwargs["enable_orientation_model"])
         self.assertEqual(kwargs["visualization_max_width"], 1920)
+        self.assertEqual(kwargs["yoyo_tta_rescue"], TRACKING_CONFIG.yoyo_tta_rescue)
+        self.assertEqual(
+            kwargs["yoyo_tta_trigger_confidence"],
+            TRACKING_CONFIG.yoyo_tta_trigger_confidence,
+        )
+        self.assertEqual(
+            kwargs["yoyo_tta_min_confidence"],
+            TRACKING_CONFIG.yoyo_tta_min_confidence,
+        )
         self.assertEqual(kwargs["string_ensemble_alpha"], 0.0)
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))

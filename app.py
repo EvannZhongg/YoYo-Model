@@ -121,6 +121,9 @@ def run_video_tracking(
             confidence=confidence,
             iou=iou,
             imgsz=int(imgsz),
+            yoyo_tta_rescue=TRACKING_CONFIG.yoyo_tta_rescue,
+            yoyo_tta_trigger_confidence=TRACKING_CONFIG.yoyo_tta_trigger_confidence,
+            yoyo_tta_min_confidence=TRACKING_CONFIG.yoyo_tta_min_confidence,
             device=device.strip(),
             enable_pose=bool(enable_pose),
             pose_weights_path=pose_weights_path.strip() or None,
@@ -160,6 +163,8 @@ def run_video_tracking(
         f"Output: {result['output_video']}\n"
         f"Bad cases: {result['bad_case_counts']}\n"
         f"String geometry: {result.get('string_geometry_counts', {})}\n"
+        f"Yoyo TTA: {result.get('yoyo_tta_accepted_frame_count', 0)} accepted / "
+        f"{result.get('yoyo_tta_inference_frame_count', 0)} attempted\n"
         f"String model: {result.get('string_model', 'disabled')}\n"
         f"Semantic inference frames: {result.get('string_inference_frame_count', 0)}\n"
         f"Orientation model: {result.get('orientation_model', 'disabled')}\n"
