@@ -20,6 +20,10 @@ Use `--videos-list` with one UTF-8 video path per line to control the source
 set. Use `--total-frames N` only when counts may be allocated nearly equally
 across all listed videos.
 
+Use `--position-bias front` or `--position-bias back` when the requested run
+should come from an eligible early or late part of the source. The default is
+`middle`. The edge exclusion still follows `--edge-fraction`.
+
 For different run lengths, create the first group and append each differently
 sized group while the Workbench server is stopped:
 

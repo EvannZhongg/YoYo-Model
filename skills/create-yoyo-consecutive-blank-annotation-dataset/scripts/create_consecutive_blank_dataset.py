@@ -24,6 +24,7 @@ from PIL import Image
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+POSITION_BIASES = ("middle", "front", "back")
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 DATASET_SCHEMA_VERSION = "yoyo_consecutive_annotation_dataset_v1"
@@ -428,14 +429,29 @@ class Candidate:
     difference_hash: int
 
 
-def middle_out_block_starts(frame_count: int, desired: int, edge_fraction: float) -> list[int]:
+def ordered_block_starts(
+    frame_count: int,
+    desired: int,
+    edge_fraction: float,
+    position_bias: str = "middle",
+) -> list[int]:
     start = min(frame_count - 1, max(0, int(frame_count * edge_fraction)))
     stop = max(start + 1, min(frame_count, int(math.ceil(frame_count * (1.0 - edge_fraction)))))
     last_start = stop - desired
     if last_start < start:
         return []
+    if position_bias == "front":
+        return list(range(start, last_start + 1))
+    if position_bias == "back":
+        return list(range(last_start, start - 1, -1))
+    if position_bias != "middle":
+        raise ValueError(f"unsupported position bias: {position_bias}")
     center = (start + last_start) / 2.0
     return sorted(range(start, last_start + 1), key=lambda value: (abs(value - center), value))
+
+
+def middle_out_block_starts(frame_count: int, desired: int, edge_fraction: float) -> list[int]:
+    return ordered_block_starts(frame_count, desired, edge_fraction, "middle")
 
 
 def encode_jpeg(image: Image.Image, quality: int) -> bytes:
@@ -471,7 +487,12 @@ def decode_candidates(
     reference_frames = sorted(index for digest, index in inventory.provenance if digest == video_hash)
     selected: list[Candidate] = []
     try:
-        for block_start in middle_out_block_starts(frame_count, desired, args.edge_fraction):
+        for block_start in ordered_block_starts(
+            frame_count,
+            desired,
+            args.edge_fraction,
+            getattr(args, "position_bias", "middle"),
+        ):
             current: list[Candidate] = []
             current_hashes: set[str] = set()
             capture.set(cv2.CAP_PROP_POS_FRAMES, block_start)
@@ -940,7 +961,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
         sampling_manifest = {
             "schema_version": SAMPLING_SCHEMA_VERSION,
             "created_at_utc": utc_now(),
-            "sampling_method": "middle-preferred consecutive runs with non-overlap checks",
+            "sampling_method": (
+                f"{args.position_bias}-preferred consecutive runs with non-overlap checks"
+            ),
             "recognition_model_used": False,
             "videos_root": str(Path(args.videos_list or args.videos).expanduser().resolve()),
             "output": ".",
@@ -949,6 +972,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "total_frames": args.total_frames,
                 "frames_per_source": counts,
                 "edge_fraction": args.edge_fraction,
+                "position_bias": args.position_bias,
                 "jpeg_quality": args.jpeg_quality,
                 "single_frame_only": True,
                 "consecutive_frames": True,
@@ -1051,6 +1075,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--frames-per-video", type=int, default=12)
     parser.add_argument("--total-frames", type=int)
     parser.add_argument("--edge-fraction", type=float, default=0.04)
+    parser.add_argument(
+        "--position-bias",
+        choices=POSITION_BIASES,
+        default="middle",
+        help="Prefer eligible runs near the temporal middle, front, or back.",
+    )
     parser.add_argument("--exclude-frame-window", type=int, default=0)
     parser.add_argument("--perceptual-hamming-threshold", type=int, default=0)
     parser.add_argument("--jpeg-quality", type=int, default=96)

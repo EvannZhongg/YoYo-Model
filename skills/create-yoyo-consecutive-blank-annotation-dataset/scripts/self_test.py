@@ -235,6 +235,7 @@ def run() -> None:
             exclude_frame_window=0,
             jpeg_quality=96,
             perceptual_hamming_threshold=0,
+            position_bias="middle",
         )
         long_run, _, metadata = generator.decode_candidates(
             long_video,
@@ -248,6 +249,26 @@ def run() -> None:
         long_indices = [candidate.frame_index for candidate in long_run]
         assert long_indices == list(range(long_indices[0], long_indices[0] + 100))
         assert abs(sum(long_indices) / len(long_indices) - (metadata["frame_count"] - 1) / 2) <= 0.5
+
+        front_args = generator.argparse.Namespace(
+            edge_fraction=0.04,
+            exclude_frame_window=0,
+            jpeg_quality=96,
+            perceptual_hamming_threshold=0,
+            position_bias="front",
+        )
+        front_run, _, _ = generator.decode_candidates(
+            long_video,
+            generator.sha256_file(long_video),
+            20,
+            generator.ReferenceInventory(),
+            front_args,
+            set(),
+            [],
+        )
+        front_indices = [candidate.frame_index for candidate in front_run]
+        expected_front_start = int(metadata["frame_count"] * front_args.edge_fraction)
+        assert front_indices == list(range(expected_front_start, expected_front_start + 20))
     print(json.dumps({"ok": True, "test": "create-yoyo-consecutive-blank-annotation-dataset"}))
 
 
