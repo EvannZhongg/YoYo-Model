@@ -18,7 +18,8 @@ from string_segmentation.semantic_model import (
     fuse_calibrated_probabilities,
     load_checkpoint,
     polyline_probability_support,
-    predict_letterboxed,
+    predict_prepared_probability,
+    prepare_letterboxed_input,
     semantic_mask_observation,
 )
 from video_tracking.sequence_metrics import evaluate_sequence
@@ -153,13 +154,14 @@ def evaluate_consecutive_checkpoint(
             active_ensemble_alpha = (
                 float(adaptive_ensemble_alpha) if adaptive_enabled else float(ensemble_alpha)
             )
-            probability, meta = predict_letterboxed(active_model, image, input_width, input_height, device)
+            tensor, meta = prepare_letterboxed_input(
+                image, input_width, input_height, device,
+            )
+            probability = predict_prepared_probability(active_model, tensor)
             if ensemble_model is not None:
-                secondary_probability, secondary_meta = predict_letterboxed(
-                    ensemble_model, image, input_width, input_height, device,
+                secondary_probability = predict_prepared_probability(
+                    ensemble_model, tensor,
                 )
-                if secondary_meta != meta:
-                    raise RuntimeError("Semantic ensemble produced incompatible letterbox metadata")
                 probability = fuse_calibrated_probabilities(
                     probability,
                     secondary_probability,

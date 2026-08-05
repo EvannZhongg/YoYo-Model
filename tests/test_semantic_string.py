@@ -16,9 +16,12 @@ from string_segmentation.semantic_model import (
     build_string_model,
     focal_dice_loss,
     fuse_calibrated_probabilities,
+    letterbox,
     load_checkpoint,
     normalize_image,
     normalize_image_for_inference,
+    predict_prepared_probability,
+    prepare_letterboxed_input,
     polyline_probability_support,
     render_yolo_segmentation,
     save_checkpoint,
@@ -152,6 +155,26 @@ class SemanticStringTests(unittest.TestCase):
         actual = normalize_image_for_inference(image, "cpu")
 
         self.assertTrue(torch.allclose(actual, expected, atol=1e-6, rtol=0.0))
+
+    def test_shared_preprocessing_matches_independent_predictions(self):
+        image = np.random.default_rng(7).integers(0, 256, size=(37, 53, 3), dtype=np.uint8)
+        primary = TinyUNet(base_channels=4).eval()
+        secondary = TinyUNet(base_channels=4).eval()
+
+        primary_image, _, independent_meta = letterbox(image, 96, 64)
+        primary_tensor = normalize_image_for_inference(primary_image, "cpu")
+        independent_primary = predict_prepared_probability(primary, primary_tensor)
+        secondary_image, _, secondary_meta = letterbox(image, 96, 64)
+        secondary_tensor = normalize_image_for_inference(secondary_image, "cpu")
+        independent_secondary = predict_prepared_probability(secondary, secondary_tensor)
+        tensor, shared_meta = prepare_letterboxed_input(image, 96, 64, "cpu")
+        shared_primary = predict_prepared_probability(primary, tensor)
+        shared_secondary = predict_prepared_probability(secondary, tensor)
+
+        self.assertEqual(independent_meta, shared_meta)
+        self.assertEqual(secondary_meta, shared_meta)
+        np.testing.assert_array_equal(shared_primary, independent_primary)
+        np.testing.assert_array_equal(shared_secondary, independent_secondary)
 
     def test_reviewed_dataset_reads_unicode_source_paths(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -29,7 +29,8 @@ from string_segmentation.semantic_model import (
     is_semantic_checkpoint,
     load_checkpoint as load_semantic_checkpoint,
     polyline_probability_support,
-    predict_letterboxed,
+    predict_prepared_probability,
+    prepare_letterboxed_input,
     semantic_mask_observation,
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
@@ -313,26 +314,21 @@ def _predict_string_model(
         model_config = checkpoint["model_config"]
         scale = float(semantic_inference_scale)
         input_width, input_height, component_area_scale = _semantic_inference_parameters(model_config, scale)
-        probability, meta = predict_letterboxed(
-            primary_model,
+        tensor, meta = prepare_letterboxed_input(
             frame,
             input_width,
             input_height,
             model_device,
         )
+        probability = predict_prepared_probability(primary_model, tensor)
         primary_threshold = float(checkpoint.get("threshold", 0.5))
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
         if model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
-            secondary_probability, secondary_meta = predict_letterboxed(
+            secondary_probability = predict_prepared_probability(
                 model["ensemble_model"],
-                frame,
-                input_width,
-                input_height,
-                model_device,
+                tensor,
             )
-            if secondary_meta != meta:
-                raise RuntimeError("Semantic ensemble produced incompatible letterbox metadata")
             secondary_threshold = float(model["ensemble_candidate_threshold"])
             probability = fuse_calibrated_probabilities(
                 probability,

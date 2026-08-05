@@ -123,10 +123,14 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         with (
             patch(
-                "video_tracking.tracker.predict_letterboxed",
+                "video_tracking.tracker.prepare_letterboxed_input",
+                return_value=(object(), meta),
+            ) as prepare,
+            patch(
+                "video_tracking.tracker.predict_prepared_probability",
                 side_effect=[
-                    (np.full((16, 16), 0.4, dtype=np.float32), meta),
-                    (np.full((16, 16), 0.5, dtype=np.float32), meta),
+                    np.full((16, 16), 0.4, dtype=np.float32),
+                    np.full((16, 16), 0.5, dtype=np.float32),
                 ],
             ) as predict,
             patch(
@@ -144,6 +148,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 yoyo_division="1A",
             )
 
+        self.assertEqual(prepare.call_count, 1)
         self.assertEqual(predict.call_count, 2)
         self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
         self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
@@ -176,9 +181,14 @@ class StringTrackerTemporalTests(unittest.TestCase):
         }
         observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
         with (
-            patch("video_tracking.tracker.predict_letterboxed", return_value=(
-                np.full((16, 16), 0.5, dtype=np.float32), meta,
-            )) as predict,
+            patch(
+                "video_tracking.tracker.prepare_letterboxed_input",
+                return_value=(object(), meta),
+            ) as prepare,
+            patch(
+                "video_tracking.tracker.predict_prepared_probability",
+                return_value=np.full((16, 16), 0.5, dtype=np.float32),
+            ) as predict,
             patch("video_tracking.tracker.semantic_mask_observation", return_value=observation),
         ):
             before = _predict_string_model(
@@ -190,6 +200,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
             )
 
+        self.assertEqual(prepare.call_count, 2)
         self.assertIs(predict.call_args_list[0].args[0], primary)
         self.assertIs(predict.call_args_list[1].args[0], secondary)
         self.assertIs(predict.call_args_list[2].args[0], adaptive)

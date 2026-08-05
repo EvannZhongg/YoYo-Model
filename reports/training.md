@@ -107,6 +107,8 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 门控末窗可解释性检查：周博文 confidence `0.8858`、距离比 `0.00846`；唐浩翔颜色通过数 `11`；DSCF7145 颜色通过数 `10`；池高宇 confidence `0.6637`、距离比 `0.05954` 且颜色通过数 `0`。四段任意滑动窗口检查也仅池高宇满足联合条件。打包权重正式复验位于 `runs/experiments/semantic_adaptive_candidate_0ff7d829e127_temporal_all/summary.json`，三个权重 SHA 和每组触发状态、F1@8、Chamfer、motion error 均与晋升实验一致。
 
+推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
+
 同一四组 source-video 区间还用于 detector/TTA 的正式 A/B。baseline 与 cascade 除 TTA rescue 外参数完全一致，绳线、pose 和方向模型均关闭；评估直接对齐 reviewed yoyo box。
 
 | sequence | mode | presence recall | mean IoU | p95 center error | longest miss | ID switches |

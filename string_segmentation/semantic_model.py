@@ -358,6 +358,29 @@ def is_semantic_checkpoint(path: str | Path) -> bool:
 
 
 @torch.inference_mode()
+def prepare_letterboxed_input(
+    frame_bgr: np.ndarray,
+    input_width: int,
+    input_height: int,
+    device: str | torch.device,
+) -> tuple[torch.Tensor, LetterboxMeta]:
+    """Letterbox and normalize one frame for one or more compatible models."""
+    image, _, meta = letterbox(frame_bgr, input_width, input_height)
+    tensor = normalize_image_for_inference(image, device)
+    return tensor, meta
+
+
+@torch.inference_mode()
+def predict_prepared_probability(
+    model: nn.Module,
+    tensor: torch.Tensor,
+) -> np.ndarray:
+    """Run a semantic model on a prepared NCHW tensor."""
+    probability = torch.sigmoid(model(tensor))[0, 0].detach().cpu().numpy()
+    return probability
+
+
+@torch.inference_mode()
 def predict_letterboxed(
     model: nn.Module,
     frame_bgr: np.ndarray,
@@ -365,9 +388,13 @@ def predict_letterboxed(
     input_height: int,
     device: str | torch.device,
 ) -> tuple[np.ndarray, LetterboxMeta]:
-    image, _, meta = letterbox(frame_bgr, input_width, input_height)
-    tensor = normalize_image_for_inference(image, device)
-    probability = torch.sigmoid(model(tensor))[0, 0].detach().cpu().numpy()
+    tensor, meta = prepare_letterboxed_input(
+        frame_bgr,
+        input_width,
+        input_height,
+        device,
+    )
+    probability = predict_prepared_probability(model, tensor)
     return probability, meta
 
 
