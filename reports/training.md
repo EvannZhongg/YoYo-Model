@@ -1,4 +1,4 @@
-# 悠悠球模型与追踪报告：2026-08-02（更新至 2026-08-05）
+# 悠悠球模型与追踪报告：2026-08-05
 
 本报告只覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。所有训练、评估和测试均在 `.venv` 中执行；`runs/` 中保留 checkpoint、manifest 和评估 JSON，模型文件使用 SHA-256 标识。
 
@@ -9,7 +9,7 @@
 - 主 manifest SHA-256：`e920b8742f0946ccd5550b281f7f8db031402151d36b7c1a436124422e668543`。
 - 绳线 view manifest SHA-256：`0ff7d829e1274ef5a49a3a0b225299128ae0df275adb04d1c29ac732886f0167`。
 - 方向 ROI view id：`orientation_roi_aee683aec99d`，由当前 canonical manifest 重建；view manifest SHA-256 可从 `datasets/1Ayoyo_dataset/orientation_roi/manifest.json` 校验。
-- split 之间按 source group 隔离。连续追踪集 `datasets/1Ayoyo_consecutive` 包含四个视频共 334 帧：周博文 72 帧、唐浩翔 100 帧、DSCF7145 95 帧、池高宇 67 帧。
+- split 之间按 source group 隔离。连续追踪集 `datasets/1Ayoyo_consecutive` 包含四个视频共 334 帧。
 
 ## 悠悠球检测
 
