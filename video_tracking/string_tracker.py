@@ -132,6 +132,11 @@ def _color_line_observation(
     )
     if lines is None:
         return None
+    reference_pair = (
+        _resample_polyline(reference_points, 2)
+        if reference_points and len(reference_points) >= 2
+        else None
+    )
     best: tuple[float, list[list[float]], float, float, float] | None = None
     for line in lines[:, 0, :]:
         ax, ay, bx, by = [float(value) for value in line]
@@ -148,9 +153,8 @@ def _color_line_observation(
         distance_penalty = 0.35 if require_yoyo_proximity else (0.28 if mark_far_ambiguous else 0.05)
         edge_penalty = 1.5 * max(0.0, 2.5 * scale - edge_distance)
         temporal_penalty = 0.0
-        if reference_points and len(reference_points) >= 2:
+        if reference_pair is not None:
             observed_pair = np.asarray([far, near], dtype=np.float32)
-            reference_pair = _resample_polyline(reference_points, 2)
             observed_pair = _orient_like(observed_pair, reference_pair)
             temporal_penalty = 0.45 * float(np.mean(np.linalg.norm(observed_pair - reference_pair, axis=1)))
         score = length - distance_penalty * near_distance - edge_penalty - temporal_penalty

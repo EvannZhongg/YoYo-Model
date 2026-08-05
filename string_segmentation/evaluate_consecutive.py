@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,11 @@ from video_tracking.string_tracker import (
 
 def _safe_name(value: str) -> str:
     return "".join(char if char.isalnum() or char in "-_." else "-" for char in value).strip("-_")
+
+
+def _group_artifact_stem(group_id: str) -> str:
+    digest = hashlib.sha256(group_id.encode("utf-8")).hexdigest()[:8]
+    return f"{_safe_name(group_id)}-{digest}"
 
 
 def _yoyo(annotation: dict[str, Any]) -> dict[str, Any] | None:
@@ -276,7 +282,7 @@ def evaluate_consecutive_checkpoint(
                 "string": final_string,
                 "bad_case": [],
             })
-        stem = _safe_name(source_group)
+        stem = _group_artifact_stem(group_id)
         predictions_path = output_dir / f"{stem}.frames.jsonl"
         predictions_path.write_text(
             "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",

@@ -1,24 +1,24 @@
-# 悠悠球模型与追踪报告：2026-08-05
+# 悠悠球模型与追踪报告：2026-08-06
 
 本报告只覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。所有训练、评估和测试均在 `.venv` 中执行；`runs/` 中保留 checkpoint、manifest 和评估 JSON，模型文件使用 SHA-256 标识。
 
 ## 当前数据与协议
 
-- canonical 数据集：`datasets/1Ayoyo_dataset`，dataset id `yoyo_unified_396ce5fa8e73`。
-- 当前样本数为 train/val/test = `310/61/60`；训练集包含 24 张新增南京审核图，val/test 内容和来源组保持冻结。
-- 主 manifest SHA-256：`e920b8742f0946ccd5550b281f7f8db031402151d36b7c1a436124422e668543`。
-- 绳线 view manifest SHA-256：`0ff7d829e1274ef5a49a3a0b225299128ae0df275adb04d1c29ac732886f0167`。
-- 方向 ROI view id：`orientation_roi_aee683aec99d`，由当前 canonical manifest 重建；view manifest SHA-256 可从 `datasets/1Ayoyo_dataset/orientation_roi/manifest.json` 校验。
-- split 之间按 source group 隔离。连续追踪集 `datasets/1Ayoyo_consecutive` 包含四个视频共 334 帧。
+- canonical 数据集：`datasets/1Ayoyo_dataset`，dataset id `yoyo_unified_2b0cfca8743a`。
+- 当前样本数为 train/val/test = `330/65/65`；新增 29 张 2025 WYYC 审核图按来源组隔离为 `20/4/5`，旧 canonical 样本为 `310/61/60`。
+- 主 manifest SHA-256：`14e51d6c595f2bef5ac4d8f0d7641e8c4ebf1735988aeef9b21d252994c34eac`。
+- 绳线 view manifest SHA-256：`42086e82249dd8386f551a51eb621fd6023e82a40e4b7e1adbbc2a7ee533851a`。
+- 方向 ROI view id：`orientation_roi_0615d5548d10`，由当前 canonical manifest 重建。
+- split 之间按 source group 隔离。连续追踪集 `datasets/1Ayoyo_consecutive` 包含四个视频的五段区间，共 454 帧；同一视频的不同区间以唯一 `group_id` 分开评估。
 
 ## 悠悠球检测
 
 当前生产权重：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt`。
 
 - 权重 SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`；YOLO11s，约 9.4M 参数。
-- 该候选在冻结的 `datasets/1Ayoyo_dataset` test（60 张、52 个正样本）达到 Precision `0.9492`、Recall `0.8846`、mAP50 `0.9431`、mAP50-95 `0.5411`，固定 yoyo recall `0.9038`。相对旧生产权重的 mAP50-95 从 `0.4353` 提升到 `0.5411`。
+- 当前扩展 test（65 张、57 个正样本）重评估为 Precision `0.9522`、Recall `0.8596`、mAP50 `0.9415`、mAP50-95 `0.5425`，固定 yoyo recall `0.8772`；结果位于候选目录的 `test_metrics_external_14e51d6c595f.json`。原生 60 张 test 的 mAP50-95 为 `0.5411`，扩展后保持稳定。
 - Workbench 默认输入尺寸为 `1024`。候选在 1280 的单图推理约 `12.1 ms`，降到 1024 约 `8.9 ms`；1024 test 仍为 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`，仍超过旧生产模型。
-- 1024 常规推理在 334 帧四段连续审核区间上 pooled Recall `0.9901`、F1 `0.9950`、mean IoU `0.8402`；关闭 TTA 的 detector-only 速度为 `5.25 FPS`。启用 TTA 只额外恢复 1 帧，却引入 3 个误检，pooled F1 降至约 `0.992`，因此生产默认 `yoyo_tta_rescue=false`。
+- 1024 常规推理在 454 帧五段连续审核区间上 pooled Precision `1.0`、Recall `0.9905`、F1 `0.9952`、mean IoU `0.8372`；关闭 TTA 的 detector-only 汇总速度约 `5.97 FPS`。旧四段实验中 TTA 只额外恢复 1 帧却引入 3 个误检，因此生产默认 `yoyo_tta_rescue=false`。
 - 训练运行：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/run_manifest.json`；最佳 epoch `16`，训练因 15 epoch 无改善于 epoch `31` 早停。`config.yaml`、`config.py` 和 Workbench 视频测试均已切换到该模型与 1024 输入。
 
 当前 detector-only 连续帧复验（reviewed yoyo box）：
@@ -29,7 +29,8 @@
 | 唐浩翔，100 帧 | 1.0000 | 1.0000 | 0.8350 | 7.42 px | 7.68 |
 | DSCF7145，95 帧 | 1.0000 | 1.0000 | 0.8518 | 9.18 px | 7.83 |
 | 池高宇，67 帧 | 0.9851 | 0.9925 | 0.8473 | 28.21 px | 8.47 |
-| 四组 pooled | **0.9901** | **0.9950** | **0.8402** | - | **5.25** |
+| 池高宇前场，120 帧 | 0.9917 | 0.9958 | 0.8297 | 9.00 px | 9.72 |
+| 五段 pooled | **0.9905** | **0.9952** | **0.8372** | - | **5.97** |
 
 ## 绳线分割
 
@@ -44,17 +45,17 @@
 - 两路概率先转为相对各自阈值原点的 logit，再按主 `0.7`、副 `0.3` 融合，融合候选阈值为 `0.50`。
 - 融合后的概率图继续进入语义中心线、多组件提取和颜色/Hough 几何候选概率门控。双语义模型不使用显式绳色色相标签；颜色/Hough 分支只作为受语义概率约束的补充几何候选。
 
-当前 canonical test 共 60 张，其中 54 张有绳、6 张无绳：
+当前 canonical test 共 65 张，其中 59 张有绳、6 张无绳：
 
 | pipeline | Pixel Dice | tolerant F1, 3 px | presence F1 | 负图平均误检 |
 | --- | ---: | ---: | ---: | ---: |
-| 单 LR-ASPP | 0.5843 | 0.8585 | 0.981818 | 14.2 px |
-| 默认校准双模型融合 | 0.593939 | 0.868082 | **0.981818** | 10.0 px |
-| 弱域主模型 + 原副模型，alpha=0.50 | **0.601069** | **0.873775** | **0.981818** | **6.167 px** |
+| 单 LR-ASPP | 0.583385 | 0.859735 | 0.983333 | 14.167 px |
+| 默认校准双模型融合 | 0.592413 | 0.868790 | **0.983333** | 10.0 px |
+| 弱域主模型 + 原副模型，alpha=0.50 | **0.598920** | **0.873985** | **0.983333** | **6.167 px** |
 
 正式候选 manifest：`runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/run_manifest.json`。
 
-当前冻结 test 重评估：`runs/experiments/semantic_calibrated_ensemble_a30_current_static_baseline/test_semantic_metrics_external_0ff7d829e127.json`。
+当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_current_2b0cfca_adaptive_ensemble_a050/test_semantic_metrics_external_42086e82249d.json`。
 
 弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型，并与原副模型按 `alpha=0.50` 融合。每帧仍只推理一个主模型和一个副模型；代价是第三个 checkpoint 常驻显存。
 
@@ -84,17 +85,18 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 正式连续评估：`runs/experiments/semantic_calibrated_ensemble_a30_temporal_all/summary.json`。
 
-新增池高宇序列后，使用未改动的生产模型与参数重新审核四组连续帧：
+当前五段连续帧使用未改动的生产权重与参数复验；两段池高宇区间均触发弱域门控：
 
 | sequence | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 周博文，72 帧 | 0.468227 | 0.670969 | 0.359576 | 36.2188 | 2.3472 |
 | 唐浩翔，100 帧 | 0.660163 | 0.786047 | 0.569033 | 33.8345 | 3.2400 |
 | DSCF7145，95 帧 | 0.476806 | 0.560270 | 0.414985 | 85.1243 | 3.3368 |
-| 池高宇，67 帧 | 0.212071 | 0.520588 | 0.133158 | 97.0596 | 2.8806 |
-| 四组 pooled | 0.491748 | 0.662165 | 0.391095 | 61.6198 | - |
+| 池高宇，67 帧 | 0.218912 | 0.560074 | 0.136043 | 90.9256 | 2.7015 |
+| 池高宇前场，120 帧 | 0.294326 | 0.531551 | 0.203504 | 49.8047 | 2.2250 |
+| 五段 pooled | 0.456912 | 0.649496 | 0.352416 | 57.5916 | - |
 
-池高宇是当前最弱域：人工目标平均 4.194 个可见组件，生产模型平均输出 2.881 个组件，主要瓶颈是复杂多段绳线召回，而不是误检或颜色补线。当前四组重评估：`runs/experiments/semantic_calibrated_ensemble_a30_current_temporal_all/summary.json`。
+池高宇仍是当前最弱域，主要瓶颈是复杂多段绳线召回。当前五段正式复验：`runs/experiments/semantic_adaptive_current_454_color_reference_hoist/summary.json`。
 
 弱域滑动门控只在池高宇序列触发，其他三段保持原生产路径和指标不变：
 
@@ -105,9 +107,13 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 | DSCF7145，95 帧 | 未触发 | 0.476806 -> 0.476806 | 85.1243 -> 85.1243 | 154.6699 -> 154.6699 |
 | 池高宇，67 帧 | **触发** | **0.212071 -> 0.218912** | **97.0596 -> 90.9256** | **166.4074 -> 130.2796** |
 
-门控末窗可解释性检查：周博文 confidence `0.8858`、距离比 `0.00846`；唐浩翔颜色通过数 `11`；DSCF7145 颜色通过数 `10`；池高宇 confidence `0.6637`、距离比 `0.05954` 且颜色通过数 `0`。四段任意滑动窗口检查也仅池高宇满足联合条件。打包权重正式复验位于 `runs/experiments/semantic_adaptive_candidate_0ff7d829e127_temporal_all/summary.json`，三个权重 SHA 和每组触发状态、F1@8、Chamfer、motion error 均与晋升实验一致。
+门控末窗可解释性检查：周博文 confidence `0.8858`、距离比 `0.00846`；唐浩翔颜色通过数 `11`；DSCF7145 颜色通过数 `10`；池高宇两段分别为 confidence `0.6637/0.7449`、距离比 `0.05954/0.02046`，颜色通过数均为 `0`。两段池高宇满足联合条件，其余三段不触发。
 
 推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
+
+颜色补线的语义参考线重采样已从逐 Hough 候选移到逐帧执行。真实 4K 帧的颜色观测微基准由 `161.6 ms` 降到 `141.8 ms`；454 帧五段评估墙钟时间由 `83.8 s` 降到 `79.4 s`。前三段及池高宇前场的 `frames.jsonl` SHA-256 与优化前一致，先前被同名文件覆盖的 67 帧池高宇区间则验证全部汇总指标对象一致。30 帧无 pose 对照的 JSONL 逐字节一致，跟踪循环由 `17.36 s` 降到 `13.15 s`；证据位于 `runs/experiments/semantic_adaptive_current_454_color_reference_hoist/` 和 `runs/experiments/workbench_color_reference_hoist_smoke/`。
+
+连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。
 
 同一四组 source-video 区间还用于 detector/TTA 的正式 A/B。baseline 与 cascade 除 TTA rescue 外参数完全一致，绳线、pose 和方向模型均关闭；评估直接对齐 reviewed yoyo box。
 
@@ -131,27 +137,21 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 当前生产权重：`runs/candidates/yoyo_unified_582cde69ebb8_orientation_roi_d88241f08b82_best_nyyc36-warm-freeze10-lr1e4-v1/weights/best.pt`。
 
 - 权重 SHA-256：`673786ce7cf1e6a38570f43be5d9db7031705a9f3a3b8f0a47ff6f8a9a705035`。
-- 当前 test：Top1 `0.8000`，macro recall `0.6542`。
-- 各类 recall：horizontal `0.5000`、normal `0.9070`、not_applicable `0.5556`。
-- 当前 canonical 重建 ROI view 的复核结果：`runs/candidates/yoyo_unified_582cde69ebb8_orientation_roi_d88241f08b82_best_nyyc36-warm-freeze10-lr1e4-v1/test_metrics_external_694eeeca30a7.json`。
+- 当前 65 张 test：Top1 `0.8000`，macro recall `0.6562`。
+- 各类 recall：horizontal `0.5000`、normal `0.9130`、not_applicable `0.5556`。
+- 当前 canonical 重建 ROI view 的复核结果：候选目录下 `test_metrics_external_1f1df95b1c46.json`。
 
 ## 默认 Workbench 视频 smoke test
 
 使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以 YOLO11s 1024 默认 detector、关闭 TTA、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
 
-`runs/experiments/workbench_default_smoke_yolo11s_1024/NYPC 嘉宾表演 周博文_20260805T072545Z_37589c5f/`
+`runs/experiments/workbench_color_reference_hoist_full_smoke/NYPC 嘉宾表演 周博文_20260805T173703Z_4c45fd10/`
 
 - MP4、逐帧 JSONL、审核图和 `run.json` 均成功生成。
-- `run.json` 记录新 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、`imgsz=1024`、`yoyo_tta_rescue=false`，以及 `string_model_kind=semantic_adaptive_ensemble`；MP4 和 JSONL 均成功生成。
+- `run.json` 记录 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、pose 权重 SHA-256 `869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0`、`imgsz=1024`、`yoyo_tta_rescue=false`，以及 `string_model_kind=semantic_adaptive_ensemble`。
 - `string_ensemble_alpha=0.3`、融合候选阈值 `0.5`、颜色概率门控、最多 12 帧光流传播和 15 帧最近悠悠球上下文宽限均启用。
-- pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧并输出 `normal` 汇总。
-- TTA 未触发；30 帧完整 pipeline 速度约 `1.91 FPS`。绳线模型执行 30 帧，方向模型按 cadence 执行并输出汇总。
-
-adaptive 候选的 Workbench smoke test：
-
-- 周博文 30 帧：`runs/experiments/workbench_adaptive_smoke_zhou/NYPC 嘉宾表演 周博文_20260805T052129Z_847cb790/`；模型种类为 `semantic_adaptive_ensemble`，三份权重 SHA 与候选 manifest 一致，门控未触发（末窗 confidence `0.8903`、距离比 `0.00718`），完整 pipeline `1.85 FPS`。
-- 池高宇 30 帧：`runs/experiments/workbench_adaptive_smoke_chi/池高宇_20260805T052323Z_db659049/`；门控在观测帧 `4757` 触发，下一帧 `4758` 首次使用 adaptive 主模型，末窗 confidence `0.7061`、距离比 `0.06065`，完整 pipeline `3.45 FPS`。
-- 两次 smoke 均成功生成 MP4、逐帧 JSONL、审核图和 `run.json`；每帧仍为一个主模型加一个副模型推理。
+- pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧。
+- TTA 未触发；30 帧完整默认 pipeline 的跟踪循环为 `15.2388 s`，约 `1.9687 FPS`。
 
 ## 复现命令
 
@@ -173,4 +173,4 @@ adaptive 候选的 Workbench smoke test：
 
 ## 验证状态
 
-`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 130 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。
+`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 133 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练；训练 CLI 也会对控制台编码不支持的字符做转义，不再在 checkpoint 已保存后因 GBK 输出失败。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。

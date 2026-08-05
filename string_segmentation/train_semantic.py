@@ -424,7 +424,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     result = train(parse_args())
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    document = json.dumps(result, ensure_ascii=False, indent=2)
+    encoding = sys.stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 

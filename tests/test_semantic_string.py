@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from string_segmentation.evaluate_semantic import _artifact_suffix, _check_dataset_manifest
+from string_segmentation.evaluate_consecutive import _group_artifact_stem
 from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
     LetterboxMeta,
@@ -32,6 +33,13 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_consecutive_artifact_names_are_unique_per_group(self):
+        first = _group_artifact_stem("performer--run:10-20")
+        second = _group_artifact_stem("performer--run/10-20")
+
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("performer--run-10-20-"))
+
     def test_calibrated_probability_fusion_aligns_model_thresholds(self):
         primary = np.asarray([[0.3985, 0.8]], dtype=np.float32)
         secondary = np.asarray([[0.5, 0.8]], dtype=np.float32)

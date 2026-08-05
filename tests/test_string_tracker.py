@@ -11,6 +11,7 @@ import numpy as np
 
 from video_tracking.string_tracker import (
     _color_line_observation,
+    _resample_polyline,
     estimate_string,
     propagate_optical_flow,
     update_adaptive_string_domain_gate,
@@ -35,6 +36,31 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_color_observation_resamples_temporal_reference_once_per_frame(self):
+        frame = np.zeros((160, 240, 3), dtype=np.uint8)
+        yoyo = {"center": [120.0, 80.0], "bbox": [110.0, 70.0, 130.0, 90.0]}
+        lines = np.asarray(
+            [[[10, 10, 80, 20]], [[20, 30, 100, 40]], [[30, 50, 120, 60]]],
+            dtype=np.int32,
+        )
+
+        with (
+            patch("video_tracking.string_tracker.cv2.HoughLinesP", return_value=lines),
+            patch(
+                "video_tracking.string_tracker._resample_polyline",
+                wraps=_resample_polyline,
+            ) as resample,
+        ):
+            result = _color_line_observation(
+                frame,
+                yoyo,
+                require_yoyo_proximity=False,
+                reference_points=[[100.0, 80.0], [140.0, 80.0]],
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(resample.call_count, 1)
+
     def test_adaptive_domain_gate_rejects_strong_or_near_observations(self):
         for confidence, distance in ((0.90, 100.0), (0.75, 20.0)):
             history = []
