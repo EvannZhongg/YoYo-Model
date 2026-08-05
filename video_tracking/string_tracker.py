@@ -154,9 +154,23 @@ def _color_line_observation(
         edge_penalty = 1.5 * max(0.0, 2.5 * scale - edge_distance)
         temporal_penalty = 0.0
         if reference_pair is not None:
-            observed_pair = np.asarray([far, near], dtype=np.float32)
-            observed_pair = _orient_like(observed_pair, reference_pair)
-            temporal_penalty = 0.45 * float(np.mean(np.linalg.norm(observed_pair - reference_pair, axis=1)))
+            direct_distance = (
+                math.hypot(
+                    far[0] - reference_pair[0, 0], far[1] - reference_pair[0, 1]
+                )
+                + math.hypot(
+                    near[0] - reference_pair[1, 0], near[1] - reference_pair[1, 1]
+                )
+            )
+            reversed_distance = (
+                math.hypot(
+                    far[0] - reference_pair[1, 0], far[1] - reference_pair[1, 1]
+                )
+                + math.hypot(
+                    near[0] - reference_pair[0, 0], near[1] - reference_pair[0, 1]
+                )
+            )
+            temporal_penalty = 0.225 * min(direct_distance, reversed_distance)
         score = length - distance_penalty * near_distance - edge_penalty - temporal_penalty
         confidence = min(0.72, max(0.18, 0.18 + length / max(1.0, diag)))
         candidate = (score, [far, near], confidence, near_distance, edge_distance)
@@ -464,9 +478,10 @@ def estimate_string(
     fusion_distance_px: float = 48.0,
     allow_color_fallback: bool = True,
     allow_unanchored_semantic: bool = False,
+    current_gray: np.ndarray | None = None,
 ) -> dict[str, Any] | None:
     """Estimate a string while preserving uncertainty in the returned record."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = current_gray if current_gray is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     width, height = frame.shape[1], frame.shape[0]
 
     def finalize(result: dict[str, Any]) -> dict[str, Any]:

@@ -1201,6 +1201,7 @@ def track_video(
             and last_seen_frame is not None
             and frame_index - last_seen_frame <= unanchored_semantic_grace_frames
         )
+        current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         string = estimate_string(
             frame,
             yoyo,
@@ -1216,6 +1217,7 @@ def track_video(
             # evidence. Do not replace it with a weaker HSV/Hough proposal.
             allow_color_fallback=string_model is None,
             allow_unanchored_semantic=allow_unanchored_semantic,
+            current_gray=current_gray,
         )
         reacquired_string = _should_reacquire_string(
             scheduled_string_inference,
@@ -1253,6 +1255,7 @@ def track_video(
                 fusion_distance_px=string_fusion_distance_px,
                 allow_color_fallback=False,
                 allow_unanchored_semantic=allow_unanchored_semantic,
+                current_gray=current_gray,
             )
         scheduled_orientation_inference = bool(
             orientation_model is not None and processed_frames % orientation_inference_interval == 0
@@ -1404,7 +1407,7 @@ def track_video(
             )
         )
         previous_center = center
-        previous_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        previous_gray = current_gray
         # A visible string can persist briefly while the yoyo is occluded or
         # outside the frame; its record remains explicitly review-only.
         previous_string = (

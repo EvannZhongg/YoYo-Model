@@ -50,6 +50,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 "video_tracking.string_tracker._resample_polyline",
                 wraps=_resample_polyline,
             ) as resample,
+            patch("video_tracking.string_tracker._orient_like") as orient,
         ):
             result = _color_line_observation(
                 frame,
@@ -60,6 +61,31 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(resample.call_count, 1)
+        self.assertEqual(orient.call_count, 0)
+
+    def test_estimate_string_reuses_precomputed_current_gray(self):
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        current_gray = np.zeros((80, 120), dtype=np.uint8)
+        observation = {
+            "points": [[20.0, 20.0], [80.0, 60.0]],
+            "confidence": 0.8,
+            "method": "semantic_segmentation",
+        }
+
+        with patch("video_tracking.string_tracker.cv2.cvtColor") as convert:
+            result = estimate_string(
+                frame,
+                None,
+                [],
+                None,
+                None,
+                observation=observation,
+                allow_unanchored_semantic=True,
+                current_gray=current_gray,
+            )
+
+        self.assertIsNotNone(result)
+        convert.assert_not_called()
 
     def test_adaptive_domain_gate_rejects_strong_or_near_observations(self):
         for confidence, distance in ((0.90, 100.0), (0.75, 20.0)):

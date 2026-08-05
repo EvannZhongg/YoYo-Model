@@ -113,6 +113,8 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 颜色补线的语义参考线重采样已从逐 Hough 候选移到逐帧执行。真实 4K 帧的颜色观测微基准由 `161.6 ms` 降到 `141.8 ms`；454 帧五段评估墙钟时间由 `83.8 s` 降到 `79.4 s`。前三段及池高宇前场的 `frames.jsonl` SHA-256 与优化前一致，先前被同名文件覆盖的 67 帧池高宇区间则验证全部汇总指标对象一致。30 帧无 pose 对照的 JSONL 逐字节一致，跟踪循环由 `17.36 s` 降到 `13.15 s`；证据位于 `runs/experiments/semantic_adaptive_current_454_color_reference_hoist/` 和 `runs/experiments/workbench_color_reference_hoist_smoke/`。
 
+进一步等价优化移除了 Hough 每个候选的临时端点数组和重复范数计算，四个端点距离只计算一次；同时跟踪器和连续评估复用当前帧灰度图，不再在光流估计后重复转换 4K 帧。真实帧 20 次颜色观测微基准的中位耗时由 `172.2 ms` 降到 `161.4 ms`，输出 SHA-256 一致。同机 30 帧无 pose/方向严格 A/B 为 `11.87 s -> 11.35 s`（约 `4.4%`），JSONL 逐字节一致；454 帧完整评估由 `79.4 s` 降到 `75.8 s`（约 `4.5%`），五个 `frames.jsonl` 全部逐字节一致，五份 metrics 除输出目录路径外无差异。证据位于 `runs/experiments/workbench_scalar_gray_ab_baseline/`、`runs/experiments/workbench_scalar_gray_ab_candidate/` 和 `runs/experiments/semantic_adaptive_scalar_gray_reuse_454/`。
+
 连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。
 
 同一四组 source-video 区间还用于 detector/TTA 的正式 A/B。baseline 与 cascade 除 TTA rescue 外参数完全一致，绳线、pose 和方向模型均关闭；评估直接对齐 reviewed yoyo box。
@@ -145,13 +147,13 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以 YOLO11s 1024 默认 detector、关闭 TTA、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
 
-`runs/experiments/workbench_color_reference_hoist_full_smoke/NYPC 嘉宾表演 周博文_20260805T173703Z_4c45fd10/`
+`runs/experiments/workbench_scalar_gray_full_smoke/NYPC 嘉宾表演 周博文_20260805T180359Z_7e94d4fc/`
 
 - MP4、逐帧 JSONL、审核图和 `run.json` 均成功生成。
 - `run.json` 记录 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、pose 权重 SHA-256 `869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0`、`imgsz=1024`、`yoyo_tta_rescue=false`，以及 `string_model_kind=semantic_adaptive_ensemble`。
 - `string_ensemble_alpha=0.3`、融合候选阈值 `0.5`、颜色概率门控、最多 12 帧光流传播和 15 帧最近悠悠球上下文宽限均启用。
 - pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧。
-- TTA 未触发；30 帧完整默认 pipeline 的跟踪循环为 `15.2388 s`，约 `1.9687 FPS`。
+- TTA 未触发；30 帧完整默认 pipeline 的跟踪循环为 `13.4304 s`，约 `2.2337 FPS`；相对前一等价版本 `15.2388 s` 快约 `11.9%`。悠悠球检测和绳线字段逐帧完全一致；两次独立运行的 pose 浮点输出及其派生方向字段存在非确定性差异，不属于本轮字符串流程改动。
 
 ## 复现命令
 
@@ -173,4 +175,4 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 ## 验证状态
 
-`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 133 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练；训练 CLI 也会对控制台编码不支持的字符做转义，不再在 checkpoint 已保存后因 GBK 输出失败。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。
+`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 134 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练；训练 CLI 也会对控制台编码不支持的字符做转义，不再在 checkpoint 已保存后因 GBK 输出失败。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。
