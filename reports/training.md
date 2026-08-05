@@ -24,12 +24,13 @@
 
 ## 绳线分割
 
-当前生产候选：`runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/`。
+当前生产候选：`runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/`。
 
-该候选为自包含双 LR-ASPP 概率融合：
+该候选为自包含的三权重、双路逐帧 LR-ASPP 概率融合：
 
 - 主权重：`weights/primary.pt`，SHA-256 `72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3`。
 - 副权重：`weights/secondary.pt`，SHA-256 `640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df`。
+- 弱域主权重：`weights/adaptive.pt`，SHA-256 `690f3e653c837fe92afcb814d01d55f5ba77c45fae0c85636a4f837459fd8c70`；由原主权重以 `lr=5e-6` 温启动训练，选择 epoch 15。
 - 主模型验证阈值 `0.3985`，副模型校准阈值 `0.50`。
 - 两路概率先转为相对各自阈值原点的 logit，再按主 `0.7`、副 `0.3` 融合，融合候选阈值为 `0.50`。
 - 融合后的概率图继续进入语义中心线、多组件提取和颜色/Hough 几何候选概率门控。双语义模型不使用显式绳色色相标签；颜色/Hough 分支只作为受语义概率约束的补充几何候选。
@@ -39,13 +40,16 @@
 | pipeline | Pixel Dice | tolerant F1, 3 px | presence F1 | 负图平均误检 |
 | --- | ---: | ---: | ---: | ---: |
 | 单 LR-ASPP | 0.5843 | 0.8585 | 0.981818 | 14.2 px |
-| 校准双模型融合 | **0.593939** | **0.868082** | **0.981818** | **10.0 px** |
+| 默认校准双模型融合 | 0.593939 | 0.868082 | **0.981818** | 10.0 px |
+| 弱域主模型 + 原副模型，alpha=0.50 | **0.601069** | **0.873775** | **0.981818** | **6.167 px** |
 
-正式候选 manifest：`runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/run_manifest.json`。
+正式候选 manifest：`runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/run_manifest.json`。
 
 当前冻结 test 重评估：`runs/experiments/semantic_calibrated_ensemble_a30_current_static_baseline/test_semantic_metrics_external_0ff7d829e127.json`。
 
-Workbench 默认选择该主权重时自动启用配套副权重；手动选择其他绳线模型时自动关闭默认融合，避免混用不匹配的 checkpoint。
+弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型，并与原副模型按 `alpha=0.50` 融合。每帧仍只推理一个主模型和一个副模型；代价是第三个 checkpoint 常驻显存。
+
+Workbench 默认选择该候选主权重时自动启用配套副权重和弱域主权重；手动选择其他绳线模型时两者均关闭，避免混用不匹配 checkpoint。
 
 ## 连续视频追踪
 
@@ -82,6 +86,17 @@ Workbench 默认选择该主权重时自动启用配套副权重；手动选择�
 | 四组 pooled | 0.491748 | 0.662165 | 0.391095 | 61.6198 | - |
 
 池高宇是当前最弱域：人工目标平均 4.194 个可见组件，生产模型平均输出 2.881 个组件，主要瓶颈是复杂多段绳线召回，而不是误检或颜色补线。当前四组重评估：`runs/experiments/semantic_calibrated_ensemble_a30_current_temporal_all/summary.json`。
+
+弱域滑动门控只在池高宇序列触发，其他三段保持原生产路径和指标不变：
+
+| sequence | gate | F1@8 | Chamfer px | motion error px |
+| --- | --- | ---: | ---: | ---: |
+| 周博文，72 帧 | 未触发 | 0.468227 -> 0.468227 | 36.2188 -> 36.2188 | 81.4570 -> 81.4570 |
+| 唐浩翔，100 帧 | 未触发 | 0.660163 -> 0.660163 | 33.8345 -> 33.8345 | 158.4252 -> 158.4252 |
+| DSCF7145，95 帧 | 未触发 | 0.476806 -> 0.476806 | 85.1243 -> 85.1243 | 154.6699 -> 154.6699 |
+| 池高宇，67 帧 | **触发** | **0.212071 -> 0.218912** | **97.0596 -> 90.9256** | **166.4074 -> 130.2796** |
+
+门控末窗可解释性检查：周博文 confidence `0.8858`、距离比 `0.00846`；唐浩翔颜色通过数 `11`；DSCF7145 颜色通过数 `10`；池高宇 confidence `0.6637`、距离比 `0.05954` 且颜色通过数 `0`。四段任意滑动窗口检查也仅池高宇满足联合条件。打包权重正式复验位于 `runs/experiments/semantic_adaptive_candidate_0ff7d829e127_temporal_all/summary.json`，三个权重 SHA 和每组触发状态、F1@8、Chamfer、motion error 均与晋升实验一致。
 
 同一四组 source-video 区间还用于 detector/TTA 的正式 A/B。baseline 与 cascade 除 TTA rescue 外参数完全一致，绳线、pose 和方向模型均关闭；评估直接对齐 reviewed yoyo box。
 
@@ -121,14 +136,20 @@ Workbench 默认选择该主权重时自动启用配套副权重；手动选择�
 - pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧并输出 `normal` 汇总。
 - TTA rescue 触发 8 帧、接受 3 帧；30 帧完整 pipeline 速度约 `2.26 FPS`。
 
+adaptive 候选的 Workbench smoke test：
+
+- 周博文 30 帧：`runs/experiments/workbench_adaptive_smoke_zhou/NYPC 嘉宾表演 周博文_20260805T052129Z_847cb790/`；模型种类为 `semantic_adaptive_ensemble`，三份权重 SHA 与候选 manifest 一致，门控未触发（末窗 confidence `0.8903`、距离比 `0.00718`），完整 pipeline `1.85 FPS`。
+- 池高宇 30 帧：`runs/experiments/workbench_adaptive_smoke_chi/池高宇_20260805T052323Z_db659049/`；门控在观测帧 `4757` 触发，下一帧 `4758` 首次使用 adaptive 主模型，末窗 confidence `0.7061`、距离比 `0.06065`，完整 pipeline `3.45 FPS`。
+- 两次 smoke 均成功生成 MP4、逐帧 JSONL、审核图和 `run.json`；每帧仍为一个主模型加一个副模型推理。
+
 ## 复现命令
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.evaluate runs\candidates\yoyo_unified_6f7a5497c903_detection_soup-a50-v1 --dataset-dir datasets\1Ayoyo_dataset --split test --device 0 --allow-dataset-mismatch
 
-.\.venv\Scripts\python.exe -m cli.training.evaluate_semantic --weights runs\candidates\yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1\weights\primary.pt --ensemble-weights runs\candidates\yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1\weights\secondary.pt --ensemble-alpha 0.30 --ensemble-candidate-threshold 0.50 --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --split test --device cuda --allow-dataset-mismatch --output-dir runs\experiments\semantic_calibrated_ensemble_a30_current_static_baseline
+.\.venv\Scripts\python.exe -m cli.training.evaluate_semantic --weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\adaptive.pt --ensemble-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\secondary.pt --ensemble-alpha 0.50 --ensemble-candidate-threshold 0.50 --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --split test --device cuda --allow-dataset-mismatch --output-dir runs\experiments\semantic_current_domain_warm_lr5e6_static_ensemble_a050
 
-.\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive --weights runs\candidates\yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1\weights\primary.pt --ensemble-weights runs\candidates\yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1\weights\secondary.pt --ensemble-alpha 0.30 --ensemble-candidate-threshold 0.50 --dataset-dir datasets\1Ayoyo_consecutive --output-dir runs\experiments\semantic_calibrated_ensemble_a30_current_temporal_all --color-augment --color-probability-min-mean 0.40 --color-probability-min-fraction 0.50 --temporal --max-propagation-frames 12 --unanchored-semantic-grace-frames 12
+.\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive --weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\primary.pt --ensemble-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\secondary.pt --ensemble-alpha 0.30 --ensemble-candidate-threshold 0.50 --adaptive-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\adaptive.pt --adaptive-ensemble-alpha 0.50 --adaptive-warmup-frames 12 --adaptive-max-color-accepts 0 --adaptive-max-mean-confidence 0.82 --adaptive-min-mean-distance-ratio 0.018 --dataset-dir datasets\1Ayoyo_consecutive --output-dir runs\experiments\semantic_adaptive_candidate_0ff7d829e127_temporal_all --device cuda --color-augment --color-probability-min-mean 0.40 --color-probability-min-fraction 0.50 --temporal --max-propagation-frames 12 --unanchored-semantic-grace-frames 12
 
 .\.venv\Scripts\python.exe -m cli.tracking.track_video "videos\NYPC1A\NYPC 嘉宾表演 周博文.mp4" --output-dir runs\experiments\workbench_default_smoke_tta --device 0 --pose --start-seconds 92.66 --max-frames 30
 
@@ -141,4 +162,4 @@ Workbench 默认选择该主权重时自动启用配套副权重；手动选择�
 
 ## 验证状态
 
-`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 126 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。
+`.\.venv\Scripts\python.exe -m unittest discover -s tests` 共运行 130 项测试，全部通过。语义训练数据加载已改用字节解码，Windows 中文来源组可正常进入训练。Gradio 测试退出时仍会输出未关闭 event loop 的 `ResourceWarning`，不影响测试结果。

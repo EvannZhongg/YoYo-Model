@@ -14,6 +14,45 @@ import cv2
 import numpy as np
 
 
+def update_adaptive_string_domain_gate(
+    history: list[tuple[bool, float, float]],
+    observation: dict[str, Any] | None,
+    frame_width: int,
+    frame_height: int,
+    window_size: int,
+    max_color_accepts: int,
+    max_mean_confidence: float,
+    min_mean_distance_ratio: float,
+) -> tuple[list[tuple[bool, float, float]], bool, dict[str, float | int]]:
+    """Detect a persistent low-confidence, weak-color string domain."""
+    diagonal = max(1.0, math.hypot(float(frame_width), float(frame_height)))
+    value = observation or {}
+    updated = [
+        *history,
+        (
+            str(value.get("method") or "") == "semantic_color_probability_union",
+            float(value.get("confidence") or 0.0),
+            float(value.get("distance_to_yoyo_px") or 0.0) / diagonal,
+        ),
+    ][-max(1, int(window_size)) :]
+    color_accepts = sum(int(item[0]) for item in updated)
+    mean_confidence = float(np.mean([item[1] for item in updated]))
+    mean_distance_ratio = float(np.mean([item[2] for item in updated]))
+    metrics: dict[str, float | int] = {
+        "observations": len(updated),
+        "color_accepts": color_accepts,
+        "mean_confidence": mean_confidence,
+        "mean_distance_ratio": mean_distance_ratio,
+    }
+    triggered = bool(
+        len(updated) == max(1, int(window_size))
+        and color_accepts <= max(0, int(max_color_accepts))
+        and mean_confidence < float(max_mean_confidence)
+        and mean_distance_ratio > float(min_mean_distance_ratio)
+    )
+    return updated, triggered, metrics
+
+
 def _clip_points(points: list[list[float]], width: int, height: int) -> list[list[float]]:
     return [
         [

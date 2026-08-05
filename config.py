@@ -141,14 +141,14 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/primary.pt",
+            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/primary.pt",
         )
     )
     string_ensemble_weights_path: Path = _as_path(
         _env_or_config(
             "TRACKING_STRING_ENSEMBLE_WEIGHTS_PATH",
             "tracking.string_ensemble_weights_path",
-            "runs/candidates/yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/secondary.pt",
+            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/secondary.pt",
         )
     )
     string_ensemble_alpha: float = float(
@@ -159,6 +159,48 @@ class TrackingConfig:
             "TRACKING_STRING_ENSEMBLE_CANDIDATE_THRESHOLD",
             "tracking.string_ensemble_candidate_threshold",
             0.50,
+        )
+    )
+    string_adaptive_weights_path: Path = _as_path(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_WEIGHTS_PATH",
+            "tracking.string_adaptive_weights_path",
+            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/adaptive.pt",
+        )
+    )
+    string_adaptive_ensemble_alpha: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_ENSEMBLE_ALPHA",
+            "tracking.string_adaptive_ensemble_alpha",
+            0.50,
+        )
+    )
+    string_adaptive_window_frames: int = int(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_WINDOW_FRAMES",
+            "tracking.string_adaptive_window_frames",
+            12,
+        )
+    )
+    string_adaptive_max_color_accepts: int = int(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_MAX_COLOR_ACCEPTS",
+            "tracking.string_adaptive_max_color_accepts",
+            0,
+        )
+    )
+    string_adaptive_max_mean_confidence: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_MAX_MEAN_CONFIDENCE",
+            "tracking.string_adaptive_max_mean_confidence",
+            0.82,
+        )
+    )
+    string_adaptive_min_mean_distance_ratio: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_MIN_MEAN_DISTANCE_RATIO",
+            "tracking.string_adaptive_min_mean_distance_ratio",
+            0.018,
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)

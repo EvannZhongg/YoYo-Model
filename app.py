@@ -141,6 +141,22 @@ def run_video_tracking(
             string_ensemble_candidate_threshold=(
                 TRACKING_CONFIG.string_ensemble_candidate_threshold
             ),
+            string_adaptive_weights_path=(
+                TRACKING_CONFIG.string_adaptive_weights_path
+                if use_default_string_ensemble else None
+            ),
+            string_adaptive_ensemble_alpha=(
+                TRACKING_CONFIG.string_adaptive_ensemble_alpha
+                if use_default_string_ensemble else 0.0
+            ),
+            string_adaptive_window_frames=TRACKING_CONFIG.string_adaptive_window_frames,
+            string_adaptive_max_color_accepts=TRACKING_CONFIG.string_adaptive_max_color_accepts,
+            string_adaptive_max_mean_confidence=(
+                TRACKING_CONFIG.string_adaptive_max_mean_confidence
+            ),
+            string_adaptive_min_mean_distance_ratio=(
+                TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio
+            ),
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),

@@ -13,6 +13,7 @@ from video_tracking.string_tracker import (
     _color_line_observation,
     estimate_string,
     propagate_optical_flow,
+    update_adaptive_string_domain_gate,
 )
 from video_tracking.review_sheet import (
     _pose_caption,
@@ -25,6 +26,7 @@ from video_tracking.tracker import (
     _draw_frame,
     _can_seed_previous_string,
     _inference_interval_frames,
+    _load_string_model,
     _predict_string_model,
     _select_pose_person,
     _should_reacquire_string,
@@ -33,6 +35,66 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_adaptive_domain_gate_rejects_strong_or_near_observations(self):
+        for confidence, distance in ((0.90, 100.0), (0.75, 20.0)):
+            history = []
+            for _ in range(12):
+                history, triggered, _ = update_adaptive_string_domain_gate(
+                    history,
+                    {
+                        "method": "semantic_segmentation",
+                        "confidence": confidence,
+                        "distance_to_yoyo_px": distance,
+                    },
+                    3840,
+                    2160,
+                    12,
+                    0,
+                    0.82,
+                    0.018,
+                )
+            self.assertFalse(triggered)
+
+    def test_adaptive_domain_gate_requires_persistent_joint_evidence(self):
+        history = []
+        triggered = False
+        for _ in range(12):
+            history, triggered, metrics = update_adaptive_string_domain_gate(
+                history,
+                {
+                    "method": "semantic_segmentation",
+                    "confidence": 0.75,
+                    "distance_to_yoyo_px": 100.0,
+                },
+                3840,
+                2160,
+                12,
+                0,
+                0.82,
+                0.018,
+            )
+
+        self.assertTrue(triggered)
+        self.assertEqual(metrics["color_accepts"], 0)
+        self.assertLess(metrics["mean_confidence"], 0.82)
+        self.assertGreater(metrics["mean_distance_ratio"], 0.018)
+
+        _, color_triggered, _ = update_adaptive_string_domain_gate(
+            history[:-1],
+            {
+                "method": "semantic_color_probability_union",
+                "confidence": 0.75,
+                "distance_to_yoyo_px": 100.0,
+            },
+            3840,
+            2160,
+            12,
+            0,
+            0.82,
+            0.018,
+        )
+        self.assertFalse(color_triggered)
+
     def test_semantic_ensemble_fuses_probabilities_before_geometry(self):
         meta = SimpleNamespace(
             original_width=16,
@@ -86,6 +148,84 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
         self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
         self.assertEqual(result["semantic_probability_ensemble"]["alpha"], 0.3)
+
+    def test_adaptive_ensemble_selects_primary_and_alpha_from_state(self):
+        meta = SimpleNamespace(
+            original_width=16, original_height=16, target_width=16, target_height=16,
+            resized_width=16, resized_height=16, pad_x=0, pad_y=0, scale=1.0,
+        )
+        primary, adaptive, secondary = object(), object(), object()
+        model = {
+            "kind": "semantic_adaptive_ensemble",
+            "model": primary,
+            "checkpoint": {
+                "threshold": 0.4,
+                "model_config": {"input_width": 16, "input_height": 16},
+            },
+            "adaptive_model": adaptive,
+            "adaptive_checkpoint": {
+                "threshold": 0.45,
+                "model_config": {"input_width": 16, "input_height": 16},
+            },
+            "ensemble_model": secondary,
+            "ensemble_alpha": 0.3,
+            "adaptive_ensemble_alpha": 0.5,
+            "ensemble_candidate_threshold": 0.5,
+            "adaptive_enabled": False,
+            "device": "cpu",
+        }
+        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
+        with (
+            patch("video_tracking.tracker.predict_letterboxed", return_value=(
+                np.full((16, 16), 0.5, dtype=np.float32), meta,
+            )) as predict,
+            patch("video_tracking.tracker.semantic_mask_observation", return_value=observation),
+        ):
+            before = _predict_string_model(
+                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
+            )
+            before_ensemble = deepcopy(before["semantic_probability_ensemble"])
+            model["adaptive_enabled"] = True
+            after = _predict_string_model(
+                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
+            )
+
+        self.assertIs(predict.call_args_list[0].args[0], primary)
+        self.assertIs(predict.call_args_list[1].args[0], secondary)
+        self.assertIs(predict.call_args_list[2].args[0], adaptive)
+        self.assertIs(predict.call_args_list[3].args[0], secondary)
+        self.assertEqual(before_ensemble["alpha"], 0.3)
+        self.assertFalse(before_ensemble["adaptive_primary"])
+        self.assertEqual(after["semantic_probability_ensemble"]["alpha"], 0.5)
+        self.assertTrue(after["semantic_probability_ensemble"]["adaptive_primary"])
+
+    def test_load_string_model_builds_adaptive_ensemble(self):
+        with TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ("primary.pt", "secondary.pt", "adaptive.pt")]
+            for path in paths:
+                path.touch()
+            checkpoints = [
+                {"model_config": {"input_width": 16, "input_height": 16}},
+                {"model_config": {"input_width": 16, "input_height": 16}},
+                {"model_config": {"input_width": 16, "input_height": 16}},
+            ]
+            with (
+                patch("video_tracking.tracker.is_semantic_checkpoint", return_value=True),
+                patch("video_tracking.tracker.load_semantic_checkpoint", side_effect=[
+                    ("primary", checkpoints[0]),
+                    ("secondary", checkpoints[1]),
+                    ("adaptive", checkpoints[2]),
+                ]),
+            ):
+                model, status = _load_string_model(
+                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5,
+                )
+
+        self.assertEqual(model["kind"], "semantic_adaptive_ensemble")
+        self.assertEqual(model["adaptive_model"], "adaptive")
+        self.assertFalse(model["adaptive_enabled"])
+        self.assertEqual(model["adaptive_ensemble_alpha"], 0.5)
+        self.assertTrue(status.startswith("semantic_adaptive_ensemble:"))
 
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)

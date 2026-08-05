@@ -34,7 +34,11 @@ from string_segmentation.semantic_model import (
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
 from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
-from video_tracking.string_tracker import _color_line_observation, estimate_string
+from video_tracking.string_tracker import (
+    _color_line_observation,
+    estimate_string,
+    update_adaptive_string_domain_gate,
+)
 
 
 LOG_FILE = BASE_DIR / "track_video.log"
@@ -79,6 +83,8 @@ def _load_string_model(
     ensemble_weights_path: str | Path | None = None,
     ensemble_alpha: float = 0.0,
     ensemble_candidate_threshold: float = 0.5,
+    adaptive_weights_path: str | Path | None = None,
+    adaptive_ensemble_alpha: float = 0.0,
 ):
     if not enabled:
         return None, "disabled"
@@ -128,8 +134,29 @@ def _load_string_model(
                             "ensemble_alpha": float(ensemble_alpha),
                             "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
                         })
+            adaptive_path = Path(adaptive_weights_path) if adaptive_weights_path else None
+            if adaptive_path is not None:
+                if bundle["kind"] != "semantic_ensemble":
+                    logger.warning("Adaptive semantic weights require a compatible ensemble; ignoring: %s", adaptive_path)
+                elif not adaptive_path.is_file() or not is_semantic_checkpoint(adaptive_path):
+                    logger.warning("Adaptive semantic weights unavailable; ignoring: %s", adaptive_path)
+                else:
+                    adaptive_model, adaptive_checkpoint = load_semantic_checkpoint(adaptive_path, semantic_device)
+                    if adaptive_checkpoint.get("model_config") != checkpoint.get("model_config"):
+                        logger.warning("Adaptive semantic model config differs from primary; ignoring: %s", adaptive_path)
+                    else:
+                        bundle.update({
+                            "kind": "semantic_adaptive_ensemble",
+                            "adaptive_model": adaptive_model,
+                            "adaptive_checkpoint": adaptive_checkpoint,
+                            "adaptive_path": str(adaptive_path),
+                            "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
+                            "adaptive_enabled": False,
+                        })
             status = (
-                f"semantic_ensemble:{path}+{bundle['ensemble_path']}"
+                f"semantic_adaptive_ensemble:{path}+{bundle['ensemble_path']}+{bundle['adaptive_path']}"
+                if bundle["kind"] == "semantic_adaptive_ensemble"
+                else f"semantic_ensemble:{path}+{bundle['ensemble_path']}"
                 if bundle["kind"] == "semantic_ensemble"
                 else f"semantic:{path}"
             )
@@ -276,14 +303,18 @@ def _predict_string_model(
 ) -> dict[str, Any] | None:
     if model is None:
         return None
-    if isinstance(model, dict) and model.get("kind") in {"semantic", "semantic_ensemble"}:
-        checkpoint = model["checkpoint"]
+    if isinstance(model, dict) and model.get("kind") in {
+        "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
+    }:
+        adaptive_enabled = bool(model.get("adaptive_enabled"))
+        checkpoint = model["adaptive_checkpoint"] if adaptive_enabled else model["checkpoint"]
+        primary_model = model["adaptive_model"] if adaptive_enabled else model["model"]
         model_device = model["device"]
         model_config = checkpoint["model_config"]
         scale = float(semantic_inference_scale)
         input_width, input_height, component_area_scale = _semantic_inference_parameters(model_config, scale)
         probability, meta = predict_letterboxed(
-            model["model"],
+            primary_model,
             frame,
             input_width,
             input_height,
@@ -292,7 +323,7 @@ def _predict_string_model(
         primary_threshold = float(checkpoint.get("threshold", 0.5))
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
-        if model.get("kind") == "semantic_ensemble":
+        if model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
             secondary_probability, secondary_meta = predict_letterboxed(
                 model["ensemble_model"],
                 frame,
@@ -306,16 +337,21 @@ def _predict_string_model(
             probability = fuse_calibrated_probabilities(
                 probability,
                 secondary_probability,
-                alpha=float(model["ensemble_alpha"]),
+                alpha=float(
+                    model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
+                ),
                 primary_threshold=primary_threshold,
                 secondary_threshold=secondary_threshold,
             )
             threshold = max(0.5, float(confidence))
             ensemble_metadata = {
-                "alpha": round(float(model["ensemble_alpha"]), 4),
+                "alpha": round(float(
+                    model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
+                ), 4),
                 "primary_threshold": round(primary_threshold, 4),
                 "secondary_threshold": round(secondary_threshold, 4),
                 "fused_threshold": round(threshold, 4),
+                "adaptive_primary": adaptive_enabled,
             }
         observation = semantic_mask_observation(
             probability,
@@ -881,6 +917,12 @@ def track_video(
     string_ensemble_weights_path: str | Path | None = TRACKING_CONFIG.string_ensemble_weights_path,
     string_ensemble_alpha: float = TRACKING_CONFIG.string_ensemble_alpha,
     string_ensemble_candidate_threshold: float = TRACKING_CONFIG.string_ensemble_candidate_threshold,
+    string_adaptive_weights_path: str | Path | None = TRACKING_CONFIG.string_adaptive_weights_path,
+    string_adaptive_ensemble_alpha: float = TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+    string_adaptive_window_frames: int = TRACKING_CONFIG.string_adaptive_window_frames,
+    string_adaptive_max_color_accepts: int = TRACKING_CONFIG.string_adaptive_max_color_accepts,
+    string_adaptive_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_max_mean_confidence,
+    string_adaptive_min_mean_distance_ratio: float = TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
@@ -914,6 +956,14 @@ def track_video(
         raise ValueError("string_ensemble_alpha must be between 0 and 1")
     if not 0.0 < float(string_ensemble_candidate_threshold) < 1.0:
         raise ValueError("string_ensemble_candidate_threshold must be between 0 and 1")
+    if not 0.0 <= float(string_adaptive_ensemble_alpha) <= 1.0:
+        raise ValueError("string_adaptive_ensemble_alpha must be between 0 and 1")
+    if int(string_adaptive_window_frames) < 1 or int(string_adaptive_max_color_accepts) < 0:
+        raise ValueError("adaptive window must be positive and maximum color accepts non-negative")
+    if not 0.0 <= float(string_adaptive_max_mean_confidence) <= 1.0:
+        raise ValueError("adaptive maximum mean confidence must be between 0 and 1")
+    if float(string_adaptive_min_mean_distance_ratio) < 0.0:
+        raise ValueError("adaptive minimum mean distance ratio must be non-negative")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -937,6 +987,8 @@ def track_video(
         string_ensemble_weights_path,
         string_ensemble_alpha,
         string_ensemble_candidate_threshold,
+        string_adaptive_weights_path,
+        string_adaptive_ensemble_alpha,
     )
     resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
@@ -993,6 +1045,11 @@ def track_video(
     frame_index = start_frame
     processed_frames = 0
     string_inference_frames = 0
+    string_adaptive_history: list[tuple[bool, float, float]] = []
+    string_adaptive_metrics: dict[str, float | int] = {}
+    string_adaptive_trigger_frame: int | None = None
+    string_adaptive_activation_frame: int | None = None
+    string_adaptive_pending = False
     orientation_inference_frames = 0
     yoyo_tta_inference_frames = 0
     yoyo_tta_accepted_frames = 0
@@ -1004,6 +1061,10 @@ def track_video(
         ok, frame = capture.read()
         if not ok or (max_frames and processed_frames >= max_frames):
             break
+        if string_adaptive_pending and isinstance(string_model, dict):
+            string_model["adaptive_enabled"] = True
+            string_adaptive_activation_frame = frame_index
+            string_adaptive_pending = False
         kwargs: dict[str, Any] = {
             "source": frame,
             "conf": confidence,
@@ -1119,6 +1180,26 @@ def track_video(
                 string_color_probability_min_fraction,
             )
             string_inference_frames += 1
+            if (
+                isinstance(string_model, dict)
+                and string_model.get("kind") == "semantic_adaptive_ensemble"
+                and not string_model.get("adaptive_enabled")
+            ):
+                string_adaptive_history, triggered, string_adaptive_metrics = (
+                    update_adaptive_string_domain_gate(
+                        string_adaptive_history,
+                        model_string,
+                        frame.shape[1],
+                        frame.shape[0],
+                        string_adaptive_window_frames,
+                        string_adaptive_max_color_accepts,
+                        string_adaptive_max_mean_confidence,
+                        string_adaptive_min_mean_distance_ratio,
+                    )
+                )
+                if triggered:
+                    string_adaptive_trigger_frame = frame_index
+                    string_adaptive_pending = True
         allow_unanchored_semantic = bool(
             yoyo is None
             and last_seen_frame is not None
@@ -1292,6 +1373,9 @@ def track_video(
                     if string_model is not None
                     else "model_unavailable"
                 ),
+                "adaptive_primary": bool(
+                    isinstance(string_model, dict) and string_model.get("adaptive_enabled")
+                ),
             },
             "yoyo_division": yoyo_division,
             "visibility": {
@@ -1391,7 +1475,13 @@ def track_video(
         "string_ensemble_weights_sha256": (
             sha256_file(Path(string_model["ensemble_path"]))
             if isinstance(string_model, dict)
-            and string_model.get("kind") == "semantic_ensemble"
+            and string_model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}
+            else ""
+        ),
+        "string_adaptive_weights_sha256": (
+            sha256_file(Path(string_model["adaptive_path"]))
+            if isinstance(string_model, dict)
+            and string_model.get("kind") == "semantic_adaptive_ensemble"
             else ""
         ),
         "pose_weights_sha256": (
@@ -1431,6 +1521,12 @@ def track_video(
             "string_ensemble_weights": str(string_ensemble_weights_path or ""),
             "string_ensemble_alpha": float(string_ensemble_alpha),
             "string_ensemble_candidate_threshold": float(string_ensemble_candidate_threshold),
+            "string_adaptive_weights": str(string_adaptive_weights_path or ""),
+            "string_adaptive_ensemble_alpha": float(string_adaptive_ensemble_alpha),
+            "string_adaptive_window_frames": int(string_adaptive_window_frames),
+            "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
+            "string_adaptive_max_mean_confidence": float(string_adaptive_max_mean_confidence),
+            "string_adaptive_min_mean_distance_ratio": float(string_adaptive_min_mean_distance_ratio),
             "string_confidence": string_confidence,
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),
@@ -1455,6 +1551,9 @@ def track_video(
         "yoyo_tta_inference_frame_count": yoyo_tta_inference_frames,
         "yoyo_tta_accepted_frame_count": yoyo_tta_accepted_frames,
         "string_inference_frame_count": string_inference_frames,
+        "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
+        "string_adaptive_activation_frame": string_adaptive_activation_frame,
+        "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_summary": _orientation_summary(records),
         "performance": {
@@ -1502,6 +1601,9 @@ def track_video(
         "output_width": output_width,
         "output_height": output_height,
         "string_inference_frame_count": string_inference_frames,
+        "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
+        "string_adaptive_activation_frame": string_adaptive_activation_frame,
+        "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_summary": _orientation_summary(records),
         "tracking_loop_seconds": round(loop_seconds, 4),
@@ -1554,7 +1656,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument(
         "--string-ensemble-weights",
-        default=str(TRACKING_CONFIG.string_ensemble_weights_path),
+        default="",
+        help="Secondary semantic checkpoint; the configured default is used with the default primary.",
     )
     parser.add_argument(
         "--string-ensemble-alpha",
@@ -1565,6 +1668,36 @@ def parse_args() -> argparse.Namespace:
         "--string-ensemble-candidate-threshold",
         type=float,
         default=TRACKING_CONFIG.string_ensemble_candidate_threshold,
+    )
+    parser.add_argument(
+        "--string-adaptive-weights",
+        default="",
+        help="Weak-domain primary checkpoint; the configured default is used with the default primary.",
+    )
+    parser.add_argument(
+        "--string-adaptive-ensemble-alpha",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+    )
+    parser.add_argument(
+        "--string-adaptive-window-frames",
+        type=int,
+        default=TRACKING_CONFIG.string_adaptive_window_frames,
+    )
+    parser.add_argument(
+        "--string-adaptive-max-color-accepts",
+        type=int,
+        default=TRACKING_CONFIG.string_adaptive_max_color_accepts,
+    )
+    parser.add_argument(
+        "--string-adaptive-max-mean-confidence",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_max_mean_confidence,
+    )
+    parser.add_argument(
+        "--string-adaptive-min-mean-distance-ratio",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
     )
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
@@ -1621,6 +1754,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    use_default_string_bundle = (
+        Path(args.string_weights).resolve() == TRACKING_CONFIG.string_weights_path.resolve()
+    )
+    string_ensemble_weights = (
+        args.string_ensemble_weights.strip()
+        or (str(TRACKING_CONFIG.string_ensemble_weights_path) if use_default_string_bundle else "")
+    )
+    string_adaptive_weights = (
+        args.string_adaptive_weights.strip()
+        or (str(TRACKING_CONFIG.string_adaptive_weights_path) if use_default_string_bundle else "")
+    )
     result = track_video(
         source_video_path=args.video,
         weights_path=args.weights,
@@ -1637,9 +1781,15 @@ def main() -> int:
         enable_pose=args.pose,
         auto_download_pose=args.auto_download_pose,
         string_weights_path=args.string_weights,
-        string_ensemble_weights_path=args.string_ensemble_weights,
+        string_ensemble_weights_path=string_ensemble_weights or None,
         string_ensemble_alpha=args.string_ensemble_alpha,
         string_ensemble_candidate_threshold=args.string_ensemble_candidate_threshold,
+        string_adaptive_weights_path=string_adaptive_weights or None,
+        string_adaptive_ensemble_alpha=args.string_adaptive_ensemble_alpha,
+        string_adaptive_window_frames=args.string_adaptive_window_frames,
+        string_adaptive_max_color_accepts=args.string_adaptive_max_color_accepts,
+        string_adaptive_max_mean_confidence=args.string_adaptive_max_mean_confidence,
+        string_adaptive_min_mean_distance_ratio=args.string_adaptive_min_mean_distance_ratio,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
         string_inference_scale=args.string_inference_scale,

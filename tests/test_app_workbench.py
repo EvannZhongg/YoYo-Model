@@ -383,6 +383,8 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             TRACKING_CONFIG.yoyo_tta_min_confidence,
         )
         self.assertEqual(kwargs["string_ensemble_alpha"], 0.0)
+        self.assertIsNone(kwargs["string_adaptive_weights_path"])
+        self.assertEqual(kwargs["string_adaptive_ensemble_alpha"], 0.0)
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
 
@@ -397,6 +399,14 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(
             default_kwargs["string_ensemble_weights_path"],
             TRACKING_CONFIG.string_ensemble_weights_path,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_weights_path"],
+            TRACKING_CONFIG.string_adaptive_weights_path,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_ensemble_alpha"],
+            TRACKING_CONFIG.string_adaptive_ensemble_alpha,
         )
 
     def test_tracking_without_video_returns_current_output_shape(self):

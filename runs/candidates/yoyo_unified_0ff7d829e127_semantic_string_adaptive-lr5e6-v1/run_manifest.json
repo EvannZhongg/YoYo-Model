@@ -1,0 +1,124 @@
+{
+  "schema_version": "yoyo_semantic_adaptive_candidate_v1",
+  "task": "semantic_string_segmentation_and_consecutive_tracking",
+  "created_at_utc": "2026-08-05T05:20:00Z",
+  "candidate_id": "yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1",
+  "dataset_manifest_sha256": "0ff7d829e1274ef5a49a3a0b225299128ae0df275adb04d1c29ac732886f0167",
+  "models": {
+    "default_primary": {
+      "path": "weights/primary.pt",
+      "sha256": "72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3",
+      "lineage": "yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/primary.pt"
+    },
+    "secondary": {
+      "path": "weights/secondary.pt",
+      "sha256": "640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df",
+      "lineage": "yoyo_unified_b38cc33f7406_semantic_string_calibrated_ensemble-a30-v1/weights/secondary.pt"
+    },
+    "adaptive_primary": {
+      "path": "weights/adaptive.pt",
+      "sha256": "690f3e653c837fe92afcb814d01d55f5ba77c45fae0c85636a4f837459fd8c70",
+      "lineage": {
+        "training_run": "runs/experiments/semantic_current_domain_warm_lr5e6",
+        "initial_weights_sha256": "72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3",
+        "mode": "warm_start",
+        "learning_rate": 0.000005,
+        "requested_epochs": 16,
+        "selected_epoch": 15,
+        "seed": 20260805
+      }
+    }
+  },
+  "runtime_policy": {
+    "default_ensemble_alpha": 0.3,
+    "adaptive_ensemble_alpha": 0.5,
+    "secondary_candidate_threshold": 0.5,
+    "gate": {
+      "window_semantic_observations": 12,
+      "maximum_color_accepts": 0,
+      "maximum_mean_semantic_confidence": 0.82,
+      "minimum_mean_distance_to_yoyo_over_frame_diagonal": 0.018,
+      "transition": "one_way_after_joint_condition",
+      "activation": "next_frame_after_trigger_observation"
+    },
+    "inference_models_per_frame": 2,
+    "resident_models": 3,
+    "note": "The gate changes which primary is paired with the fixed secondary; it does not add a third per-frame inference."
+  },
+  "canonical_test": {
+    "split": "test",
+    "sample_count": 60,
+    "positive_images": 54,
+    "negative_images": 6,
+    "baseline_default_ensemble": {
+      "dice": 0.593939,
+      "tolerant_f1_at_3px": 0.868082,
+      "presence_f1": 0.981818,
+      "negative_mean_false_positive_pixels": 10.0
+    },
+    "adaptive_primary_with_secondary_alpha_0_50": {
+      "dice": 0.601069,
+      "tolerant_f1_at_3px": 0.873775,
+      "presence_f1": 0.981818,
+      "negative_mean_false_positive_pixels": 6.167
+    },
+    "evaluation": "runs/experiments/semantic_current_domain_warm_lr5e6_static_ensemble_a050/test_semantic_metrics.json"
+  },
+  "consecutive_evaluation": {
+    "dataset": "datasets/1Ayoyo_consecutive",
+    "frame_count": 334,
+    "baseline_evaluation": "runs/experiments/semantic_calibrated_ensemble_a30_current_temporal_all/summary.json",
+    "adaptive_evaluation": "runs/experiments/semantic_adaptive_candidate_0ff7d829e127_temporal_all/summary.json",
+    "groups": [
+      {
+        "source_group": "NYPC-\u5609\u5bbe\u8868\u6f14-\u5468\u535a\u6587-c01fad75f6",
+        "adaptive_triggered": false,
+        "baseline_f1_at_8px": 0.468227,
+        "adaptive_f1_at_8px": 0.468227,
+        "baseline_chamfer_mean_px": 36.2188,
+        "adaptive_chamfer_mean_px": 36.2188,
+        "baseline_motion_error_px": 81.457,
+        "adaptive_motion_error_px": 81.457
+      },
+      {
+        "source_group": "NYPC-1A\u51b3\u8d5b3rd-\u5510\u6d69\u7fd4-dcd382a70e",
+        "adaptive_triggered": false,
+        "baseline_f1_at_8px": 0.660163,
+        "adaptive_f1_at_8px": 0.660163,
+        "baseline_chamfer_mean_px": 33.8345,
+        "adaptive_chamfer_mean_px": 33.8345,
+        "baseline_motion_error_px": 158.4252,
+        "adaptive_motion_error_px": 158.4252
+      },
+      {
+        "source_group": "DSCF7145-e237bbfb5d",
+        "adaptive_triggered": false,
+        "baseline_f1_at_8px": 0.476806,
+        "adaptive_f1_at_8px": 0.476806,
+        "baseline_chamfer_mean_px": 85.1243,
+        "adaptive_chamfer_mean_px": 85.1243,
+        "baseline_motion_error_px": 154.6699,
+        "adaptive_motion_error_px": 154.6699
+      },
+      {
+        "source_group": "\u6c60\u9ad8\u5b87-fef6c7bcb0",
+        "adaptive_triggered": true,
+        "baseline_f1_at_8px": 0.212071,
+        "adaptive_f1_at_8px": 0.218912,
+        "baseline_chamfer_mean_px": 97.0596,
+        "adaptive_chamfer_mean_px": 90.9256,
+        "baseline_motion_error_px": 166.4074,
+        "adaptive_motion_error_px": 130.2796
+      }
+    ]
+  },
+  "promotion": {
+    "status": "promoted",
+    "rule": "Promote because the weak-domain sequence improves F1@8, Chamfer, and motion error while all three non-triggered sequences remain bit-for-bit equivalent at the metric level."
+  },
+  "limitations": [
+    "The adaptive model increases resident GPU memory because three semantic checkpoints are loaded.",
+    "The gate was validated on four reviewed source-video intervals and must be revalidated as new domains are added.",
+    "Semantic output remains review assistance and never overwrites annotation truth."
+  ]
+}
