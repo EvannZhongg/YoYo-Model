@@ -99,11 +99,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[视频帧<br/>保留源分辨率] --> B[YOLO 悠悠球常规检测<br/>imgsz 1280 / augment=false]
-    B --> C{检测缺失或置信度 < 0.50?}
-    C -->|否| E[常规检测候选]
-    C -->|是| D[YOLO 低置信度 TTA rescue<br/>augment=true / 候选置信度 >= 0.40]
-    D --> E
+    A[视频帧<br/>保留源分辨率] --> B[YOLO11s 悠悠球常规检测<br/>imgsz 1024 / augment=false]
+    B --> E[常规检测候选]
     E --> F[可信上一帧框 + 置信度联合选择<br/>多悠悠球时优先时间连续性]
     F --> G[ByteTrack 稳定 track id]
 
@@ -158,7 +155,7 @@ flowchart TD
 
 默认关键配置：
 
-- 悠悠球检测：`confidence=0.15`、`iou=0.70`、`imgsz=1280`；普通推理显式关闭增强，只有缺失或低置信度时触发 TTA rescue。
+- 悠悠球检测：YOLO11s，`confidence=0.15`、`iou=0.70`、`imgsz=1024`；普通推理显式关闭增强。新模型在四段审核序列上的常规预测已经优于旧模型，默认关闭可选 TTA 以避免额外开销和误检。
 - 绳线模型：默认主/副语义模型按校准后的概率 logit 融合，`alpha=0.30`；连续 12 次观测同时满足无颜色候选通过、平均 confidence `<0.82`、平均距离比 `>0.018` 时，从下一帧单向切换弱域主模型并使用 `alpha=0.50`。
 - 每帧只运行当前主模型和固定副模型两次语义推理；三个 checkpoint 常驻显存。`string_inference_fps=0` 表示每帧重建绳线观测，门控也只在实际语义推理帧更新。
 - 颜色/Hough 仅在语义概率支持满足 `mean >= 0.40` 且 `fraction_at_0_10 >= 0.50` 时加入组件；加载语义模型但没有组件时不会退回弱颜色候选。

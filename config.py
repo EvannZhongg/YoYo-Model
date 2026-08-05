@@ -102,16 +102,16 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_unified_6f7a5497c903_detection_soup-a50-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
     confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.15))
     iou: float = float(_env_or_config("TRACKING_IOU", "tracking.iou", 0.7))
-    imgsz: int = int(_env_or_config("TRACKING_IMGSZ", "tracking.imgsz", 1280))
+    imgsz: int = int(_env_or_config("TRACKING_IMGSZ", "tracking.imgsz", 1024))
     yoyo_tta_rescue: bool = _as_bool(
-        _env_or_config("TRACKING_YOYO_TTA_RESCUE", "tracking.yoyo_tta_rescue", True),
-        True,
+        _env_or_config("TRACKING_YOYO_TTA_RESCUE", "tracking.yoyo_tta_rescue", False),
+        False,
     )
     yoyo_tta_trigger_confidence: float = float(
         _env_or_config(

@@ -13,14 +13,23 @@
 
 ## 悠悠球检测
 
-当前生产权重：`runs/candidates/yoyo_unified_6f7a5497c903_detection_soup-a50-v1/weights/best.pt`。
+当前生产权重：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt`。
 
-- 权重 SHA-256：`4208971180eed36f17ad13ddc92f87fe7ba9e7e2b8f20fd0315bde28a698377c`。
-- 当前 60 张 test：Precision `0.9627`，Recall `0.7692`，mAP50 `0.8148`，mAP50-95 `0.4353`，固定 yoyo recall `0.8462`。
-- 全量 TTA 静态评估为 mAP50 `0.8270`、mAP50-95 `0.4426`，Recall 不变；单次推理约 `24.0 ms`，高于普通推理的 `7.0 ms`，因此不在每帧启用。
-- 追踪默认参数保持 `confidence=0.15`、输入尺寸 `1280`，并启用低置信度 TTA rescue：普通结果缺失或 confidence `<0.50` 时触发，TTA 候选 confidence `>=0.40` 才可替换。
-- 多个 TTA 候选使用可信上一帧 box 的归一化中心距离与 confidence 联合评分。普通推理显式传入 `augment=False`，避免 Ultralytics predictor 在一次 `augment=True` 后将参数状态带入后续帧。
-- `config.yaml`、`config.py` 和 Workbench 视频测试均使用该模型。
+- 权重 SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`；YOLO11s，约 9.4M 参数。
+- 该候选在冻结的 `datasets/1Ayoyo_dataset` test（60 张、52 个正样本）达到 Precision `0.9492`、Recall `0.8846`、mAP50 `0.9431`、mAP50-95 `0.5411`，固定 yoyo recall `0.9038`。相对旧生产权重的 mAP50-95 从 `0.4353` 提升到 `0.5411`。
+- Workbench 默认输入尺寸为 `1024`。候选在 1280 的单图推理约 `12.1 ms`，降到 1024 约 `8.9 ms`；1024 test 仍为 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`，仍超过旧生产模型。
+- 1024 常规推理在 334 帧四段连续审核区间上 pooled Recall `0.9901`、F1 `0.9950`、mean IoU `0.8402`；关闭 TTA 的 detector-only 速度为 `5.25 FPS`。启用 TTA 只额外恢复 1 帧，却引入 3 个误检，pooled F1 降至约 `0.992`，因此生产默认 `yoyo_tta_rescue=false`。
+- 训练运行：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/run_manifest.json`；最佳 epoch `16`，训练因 15 epoch 无改善于 epoch `31` 早停。`config.yaml`、`config.py` 和 Workbench 视频测试均已切换到该模型与 1024 输入。
+
+当前 detector-only 连续帧复验（reviewed yoyo box）：
+
+| sequence | Recall | F1 | mean IoU | p95 center error | FPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 周博文，72 帧 | 0.9722 | 0.9859 | 0.8303 | 9.75 px | 2.35 |
+| 唐浩翔，100 帧 | 1.0000 | 1.0000 | 0.8350 | 7.42 px | 7.68 |
+| DSCF7145，95 帧 | 1.0000 | 1.0000 | 0.8518 | 9.18 px | 7.83 |
+| 池高宇，67 帧 | 0.9851 | 0.9925 | 0.8473 | 28.21 px | 8.47 |
+| 四组 pooled | **0.9901** | **0.9950** | **0.8402** | - | **5.25** |
 
 ## 绳线分割
 
@@ -113,7 +122,7 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 四组 pooled：presence precision 保持 `1.0`，recall `0.904290 -> 0.966997`，F1 `0.949740 -> 0.983221`，mean IoU `0.786472 -> 0.802675`，IoU50 rate `0.941606 -> 0.959044`，p95 center error `35.7026 -> 25.4175 px`，最长缺失 `14 -> 4` 帧。ID switch 总数 `1 -> 2`，来自 DSCF 新恢复区间；同时有效 track-id 帧数 `237 -> 274`。周博文新增一个较低 IoU 的有效匹配，单序列 IoU50 rate `0.926471 -> 0.913043`，但 recall、mean IoU 和 p95 center error 均改善，不构成实质回退。
 
-334 帧共触发 TTA `99` 次、接受 `50` 次；加权追踪速度 `6.7426 -> 6.4087 FPS`，保留 baseline 的 `95.05%`。正式证据：`runs/experiments/detector_cascade_formal_fixed/formal_comparison.json`。
+以上旧 detector/TTA cascade 是上一代模型的历史证据；当前 YOLO11s 晋升的同口径常规 detector-only 复验见上方检测节，正式产物位于 `runs/experiments/det_s_candidate_1024_*`。旧证据保留用于说明 TTA 策略为何被新模型移除。
 
 ## 三分类方向识别
 
@@ -126,15 +135,15 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 ## 默认 Workbench 视频 smoke test
 
-使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以当前默认 detector、低置信度 TTA rescue、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
+使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以 YOLO11s 1024 默认 detector、关闭 TTA、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
 
-`runs/experiments/workbench_default_smoke_tta/NYPC 嘉宾表演 周博文_20260804T202708Z_fff76476/`
+`runs/experiments/workbench_default_smoke_yolo11s_1024/NYPC 嘉宾表演 周博文_20260805T072545Z_37589c5f/`
 
 - MP4、逐帧 JSONL、审核图和 `run.json` 均成功生成。
-- `run.json` 记录 `string_model_kind=semantic_ensemble`，两个权重 SHA-256 与候选 manifest 一致。
+- `run.json` 记录新 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、`imgsz=1024`、`yoyo_tta_rescue=false`，以及 `string_model_kind=semantic_adaptive_ensemble`；MP4 和 JSONL 均成功生成。
 - `string_ensemble_alpha=0.3`、融合候选阈值 `0.5`、颜色概率门控、最多 12 帧光流传播和 15 帧最近悠悠球上下文宽限均启用。
 - pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧并输出 `normal` 汇总。
-- TTA rescue 触发 8 帧、接受 3 帧；30 帧完整 pipeline 速度约 `2.26 FPS`。
+- TTA 未触发；30 帧完整 pipeline 速度约 `1.91 FPS`。绳线模型执行 30 帧，方向模型按 cadence 执行并输出汇总。
 
 adaptive 候选的 Workbench smoke test：
 
@@ -145,13 +154,13 @@ adaptive 候选的 Workbench smoke test：
 ## 复现命令
 
 ```powershell
-.\.venv\Scripts\python.exe -m cli.training.evaluate runs\candidates\yoyo_unified_6f7a5497c903_detection_soup-a50-v1 --dataset-dir datasets\1Ayoyo_dataset --split test --device 0 --allow-dataset-mismatch
+.\.venv\Scripts\python.exe -m cli.training.evaluate runs\candidates\yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60 --dataset-dir datasets\1Ayoyo_dataset --split test --device 0
 
 .\.venv\Scripts\python.exe -m cli.training.evaluate_semantic --weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\adaptive.pt --ensemble-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\secondary.pt --ensemble-alpha 0.50 --ensemble-candidate-threshold 0.50 --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --split test --device cuda --allow-dataset-mismatch --output-dir runs\experiments\semantic_current_domain_warm_lr5e6_static_ensemble_a050
 
 .\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive --weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\primary.pt --ensemble-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\secondary.pt --ensemble-alpha 0.30 --ensemble-candidate-threshold 0.50 --adaptive-weights runs\candidates\yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1\weights\adaptive.pt --adaptive-ensemble-alpha 0.50 --adaptive-warmup-frames 12 --adaptive-max-color-accepts 0 --adaptive-max-mean-confidence 0.82 --adaptive-min-mean-distance-ratio 0.018 --dataset-dir datasets\1Ayoyo_consecutive --output-dir runs\experiments\semantic_adaptive_candidate_0ff7d829e127_temporal_all --device cuda --color-augment --color-probability-min-mean 0.40 --color-probability-min-fraction 0.50 --temporal --max-propagation-frames 12 --unanchored-semantic-grace-frames 12
 
-.\.venv\Scripts\python.exe -m cli.tracking.track_video "videos\NYPC1A\NYPC 嘉宾表演 周博文.mp4" --output-dir runs\experiments\workbench_default_smoke_tta --device 0 --pose --start-seconds 92.66 --max-frames 30
+.\.venv\Scripts\python.exe -m cli.tracking.track_video "videos\NYPC1A\NYPC 嘉宾表演 周博文.mp4" --output-dir runs\experiments\workbench_default_smoke_yolo11s_1024 --device 0 --pose --start-seconds 92.66 --max-frames 30
 
 .\.venv\Scripts\python.exe -m cli.dataset.prepare_orientation_view --dataset-dir datasets\1Ayoyo_dataset --clear
 
