@@ -103,6 +103,8 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 在上述按需光流基础上，进一步延迟 4K 灰度转换：有新鲜语义/颜色观测的帧不再执行无用的 `cvtColor`，只在需要缺帧传播时从当前帧和上一帧原图生成灰度。六组 552 帧严格 A/B 的六个 `frames.jsonl` SHA-256 全部逐字节一致；同一设备、同一参数墙钟由 `61.8628 s` 降至 `59.5663 s`（约 `3.71%`），六组 F1@8、Recall@8、Chamfer 和组件数均不变。默认 Workbench 30 帧 smoke 的 JSONL 也与优化前逐字节一致，tracking loop 为 `6.5039 s`（`4.6126 FPS`），完整产物生成成功。证据位于 `runs/experiments/semantic_lazy_gray_ab_baseline/`、`runs/experiments/semantic_lazy_gray_ab_candidate_timed/` 和 `runs/experiments/lazy_gray_default_smoke/`。
 
+双 LR-ASPP 的阈值校准融合现保留在模型设备上执行，只将最终一张融合概率图传回 CPU；原路径会先传回两张概率图，再以 NumPy 逐像素执行 `clip + logit + sigmoid`。65 张 canonical test 的 `p>=0.50`、`p>=0.10` 二值图均零像素变化，全部静态指标一致。六组 552 帧完整 metrics 全部一致，JSONL 仅两处审核浮点值变化（最大绝对差 `1e-4`），没有几何、组件、方法或自适应门控差异；同机墙钟由 `59.4119 s` 降至 `51.3375 s`（约 `13.59%`）。默认 Workbench 30 帧 JSONL 逐字节一致，tracking loop `6.5039 -> 5.8240 s`（`4.6126 -> 5.1511 FPS`）。证据位于 `runs/experiments/semantic_gpu_fusion_ab_baseline/`、`runs/experiments/semantic_gpu_fusion_ab_candidate/` 和 `runs/experiments/gpu_fusion_default_smoke/`。
+
 颜色/Hough 现先由语义支持邻域裁掉无关饱和舞台线，再进行候选搜索和原有沿线概率门控。同机 552 帧 A/B 的每组 F1@8、Recall@8 均上升、Chamfer 均下降，pooled F1 `0.461017 -> 0.490075`、Recall `0.356170 -> 0.386274`、帧均 Chamfer `50.5553 -> 45.2064 px`；presence 六组不变。墙钟由 `80.5 s` 降至 `64.2 s`（约 `20.25%`）。默认 Workbench 30 帧真实视频中，悠悠球与方向逐帧一致、bad-case 计数一致，tracking loop `14.7743 -> 7.6644 s`（`2.0306 -> 3.9142 FPS`）。证据位于 `runs/experiments/semantic_color_prefilter_d31_ab_baseline_552/`、`runs/experiments/semantic_color_prefilter_d31_552/`、`runs/experiments/color_semantic_prefilter_workbench_ab_baseline/` 和 `runs/experiments/color_semantic_prefilter_workbench_ab_candidate/`。
 
 连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。

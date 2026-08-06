@@ -238,11 +238,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 return_value=(object(), meta),
             ) as prepare,
             patch(
-                "video_tracking.tracker.predict_prepared_probability",
-                side_effect=[
-                    np.full((16, 16), 0.4, dtype=np.float32),
-                    np.full((16, 16), 0.5, dtype=np.float32),
-                ],
+                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
+                return_value=np.full((16, 16), 0.5, dtype=np.float32),
             ) as predict,
             patch(
                 "video_tracking.tracker.semantic_mask_observation",
@@ -260,7 +257,10 @@ class StringTrackerTemporalTests(unittest.TestCase):
             )
 
         self.assertEqual(prepare.call_count, 1)
-        self.assertEqual(predict.call_count, 2)
+        self.assertEqual(predict.call_count, 1)
+        self.assertIs(predict.call_args.args[0], model["model"])
+        self.assertIs(predict.call_args.args[1], model["ensemble_model"])
+        self.assertEqual(predict.call_args.args[3:], (0.3, 0.4, 0.5))
         self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
         self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
         self.assertEqual(result["semantic_probability_ensemble"]["alpha"], 0.3)
@@ -297,7 +297,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 return_value=(object(), meta),
             ) as prepare,
             patch(
-                "video_tracking.tracker.predict_prepared_probability",
+                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
                 return_value=np.full((16, 16), 0.5, dtype=np.float32),
             ) as predict,
             patch("video_tracking.tracker.semantic_mask_observation", return_value=observation),
@@ -313,9 +313,11 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertEqual(prepare.call_count, 2)
         self.assertIs(predict.call_args_list[0].args[0], primary)
-        self.assertIs(predict.call_args_list[1].args[0], secondary)
-        self.assertIs(predict.call_args_list[2].args[0], adaptive)
-        self.assertIs(predict.call_args_list[3].args[0], secondary)
+        self.assertIs(predict.call_args_list[0].args[1], secondary)
+        self.assertEqual(predict.call_args_list[0].args[3:], (0.3, 0.4, 0.5))
+        self.assertIs(predict.call_args_list[1].args[0], adaptive)
+        self.assertIs(predict.call_args_list[1].args[1], secondary)
+        self.assertEqual(predict.call_args_list[1].args[3:], (0.5, 0.45, 0.5))
         self.assertEqual(before_ensemble["alpha"], 0.3)
         self.assertFalse(before_ensemble["adaptive_primary"])
         self.assertEqual(after["semantic_probability_ensemble"]["alpha"], 0.5)

@@ -381,6 +381,41 @@ def predict_prepared_probability(
 
 
 @torch.inference_mode()
+def predict_prepared_calibrated_ensemble(
+    primary_model: nn.Module,
+    secondary_model: nn.Module,
+    tensor: torch.Tensor,
+    alpha: float,
+    primary_threshold: float,
+    secondary_threshold: float,
+) -> np.ndarray:
+    """Fuse compatible model outputs on-device before one CPU transfer."""
+    weight = float(alpha)
+    thresholds = (float(primary_threshold), float(secondary_threshold))
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError("semantic ensemble alpha must be between 0 and 1")
+    if not all(0.0 < value < 1.0 for value in thresholds):
+        raise ValueError("semantic calibration thresholds must be between 0 and 1")
+
+    epsilon = 1e-5
+    primary_probability = torch.sigmoid(primary_model(tensor))[0, 0].clamp(
+        epsilon, 1.0 - epsilon,
+    )
+    secondary_probability = torch.sigmoid(secondary_model(tensor))[0, 0].clamp(
+        epsilon, 1.0 - epsilon,
+    )
+    if primary_probability.shape != secondary_probability.shape:
+        raise ValueError("semantic probability maps must have matching shapes")
+    primary_threshold_logit = math.log(thresholds[0] / (1.0 - thresholds[0]))
+    secondary_threshold_logit = math.log(thresholds[1] / (1.0 - thresholds[1]))
+    fused_logit = (
+        (1.0 - weight) * (torch.logit(primary_probability) - primary_threshold_logit)
+        + weight * (torch.logit(secondary_probability) - secondary_threshold_logit)
+    )
+    return torch.sigmoid(fused_logit).detach().cpu().numpy()
+
+
+@torch.inference_mode()
 def predict_letterboxed(
     model: nn.Module,
     frame_bgr: np.ndarray,

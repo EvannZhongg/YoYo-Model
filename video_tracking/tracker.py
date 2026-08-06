@@ -25,10 +25,10 @@ import numpy as np
 from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
-    fuse_calibrated_probabilities,
     is_semantic_checkpoint,
     load_checkpoint as load_semantic_checkpoint,
     polyline_probability_support,
+    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     semantic_mask_observation,
@@ -343,35 +343,32 @@ def _predict_string_model(
             input_height,
             model_device,
         )
-        probability = predict_prepared_probability(primary_model, tensor)
         primary_threshold = float(checkpoint.get("threshold", 0.5))
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
         if model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
-            secondary_probability = predict_prepared_probability(
-                model["ensemble_model"],
-                tensor,
+            active_alpha = float(
+                model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
             )
             secondary_threshold = float(model["ensemble_candidate_threshold"])
-            probability = fuse_calibrated_probabilities(
-                probability,
-                secondary_probability,
-                alpha=float(
-                    model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
-                ),
-                primary_threshold=primary_threshold,
-                secondary_threshold=secondary_threshold,
+            probability = predict_prepared_calibrated_ensemble(
+                primary_model,
+                model["ensemble_model"],
+                tensor,
+                active_alpha,
+                primary_threshold,
+                secondary_threshold,
             )
             threshold = max(0.5, float(confidence))
             ensemble_metadata = {
-                "alpha": round(float(
-                    model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
-                ), 4),
+                "alpha": round(active_alpha, 4),
                 "primary_threshold": round(primary_threshold, 4),
                 "secondary_threshold": round(secondary_threshold, 4),
                 "fused_threshold": round(threshold, 4),
                 "adaptive_primary": adaptive_enabled,
             }
+        else:
+            probability = predict_prepared_probability(primary_model, tensor)
         observation = semantic_mask_observation(
             probability,
             meta,

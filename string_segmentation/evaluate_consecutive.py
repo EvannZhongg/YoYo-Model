@@ -16,9 +16,9 @@ from common.files import sha256_file
 from config import TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
-    fuse_calibrated_probabilities,
     load_checkpoint,
     polyline_probability_support,
+    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     semantic_mask_observation,
@@ -163,18 +163,17 @@ def evaluate_consecutive_checkpoint(
             tensor, meta = prepare_letterboxed_input(
                 image, input_width, input_height, device,
             )
-            probability = predict_prepared_probability(active_model, tensor)
             if ensemble_model is not None:
-                secondary_probability = predict_prepared_probability(
-                    ensemble_model, tensor,
+                probability = predict_prepared_calibrated_ensemble(
+                    active_model,
+                    ensemble_model,
+                    tensor,
+                    active_ensemble_alpha,
+                    active_primary_threshold,
+                    float(ensemble_candidate_threshold),
                 )
-                probability = fuse_calibrated_probabilities(
-                    probability,
-                    secondary_probability,
-                    alpha=active_ensemble_alpha,
-                    primary_threshold=active_primary_threshold,
-                    secondary_threshold=float(ensemble_candidate_threshold),
-                )
+            else:
+                probability = predict_prepared_probability(active_model, tensor)
             yoyo = _yoyo(annotation)
             observation = semantic_mask_observation(
                 probability, meta, selected_threshold, yoyo=yoyo,

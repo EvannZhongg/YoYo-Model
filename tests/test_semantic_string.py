@@ -21,6 +21,7 @@ from string_segmentation.semantic_model import (
     load_checkpoint,
     normalize_image,
     normalize_image_for_inference,
+    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     polyline_probability_support,
@@ -54,6 +55,31 @@ class SemanticStringTests(unittest.TestCase):
 
         self.assertAlmostEqual(float(fused[0, 0]), 0.5, places=5)
         self.assertGreater(float(fused[0, 1]), 0.8)
+
+    def test_prepared_ensemble_matches_numpy_calibrated_fusion(self):
+        class FixedLogits(torch.nn.Module):
+            def __init__(self, values):
+                super().__init__()
+                self.register_buffer("values", torch.tensor(values, dtype=torch.float32))
+
+            def forward(self, _):
+                return self.values
+
+        primary = FixedLogits([[[[-2.0, -0.4], [0.5, 4.0]]]])
+        secondary = FixedLogits([[[[-1.5, 0.2], [1.0, 3.0]]]])
+        tensor = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
+        actual = predict_prepared_calibrated_ensemble(
+            primary, secondary, tensor, 0.3, 0.3985, 0.5,
+        )
+        expected = fuse_calibrated_probabilities(
+            torch.sigmoid(primary.values)[0, 0].numpy(),
+            torch.sigmoid(secondary.values)[0, 0].numpy(),
+            0.3,
+            0.3985,
+            0.5,
+        )
+
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2e-7)
 
     def test_calibrated_probability_fusion_rejects_invalid_inputs(self):
         probability = np.full((2, 2), 0.5, dtype=np.float32)
