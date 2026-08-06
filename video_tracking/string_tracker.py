@@ -15,6 +15,10 @@ import numpy as np
 
 
 _COLOR_SEMANTIC_SUPPORT_KERNEL = np.ones((31, 31), dtype=np.uint8)
+_COLOR_MASK_KERNEL = np.ones((3, 3), dtype=np.uint8)
+_COLOR_HSV_LOWER = np.asarray([35, 70, 55], dtype=np.uint8)
+_COLOR_HSV_UPPER = np.asarray([179, 255, 255], dtype=np.uint8)
+_COLOR_MASK_DEPENDENCY_RADIUS = 4
 
 
 def update_adaptive_string_domain_gate(
@@ -88,6 +92,48 @@ def _resample_polyline(points: list[list[float]], count: int) -> np.ndarray:
     ).astype(np.float32)
 
 
+def _saturated_line_mask(
+    roi: np.ndarray,
+    semantic_support: np.ndarray | None = None,
+) -> np.ndarray:
+    """Build the color mask, cropping only work that semantic support removes."""
+    crop_x1 = crop_y1 = 0
+    crop_x2, crop_y2 = roi.shape[1], roi.shape[0]
+    if semantic_support is not None:
+        if semantic_support.shape != roi.shape[:2]:
+            raise ValueError("semantic support must match the color ROI")
+        support_x, support_y, support_width, support_height = cv2.boundingRect(
+            semantic_support,
+        )
+        if support_width <= 0 or support_height <= 0:
+            return np.zeros(roi.shape[:2], dtype=np.uint8)
+        radius = _COLOR_MASK_DEPENDENCY_RADIUS
+        crop_x1 = max(0, support_x - radius)
+        crop_y1 = max(0, support_y - radius)
+        crop_x2 = min(roi.shape[1], support_x + support_width + radius)
+        crop_y2 = min(roi.shape[0], support_y + support_height + radius)
+
+    color_roi = roi[crop_y1:crop_y2, crop_x1:crop_x2]
+    hsv = cv2.cvtColor(color_roi, cv2.COLOR_BGR2HSV)
+    color_mask = cv2.inRange(hsv, _COLOR_HSV_LOWER, _COLOR_HSV_UPPER)
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_OPEN, _COLOR_MASK_KERNEL, iterations=1,
+    )
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
+    )
+    if semantic_support is None:
+        return color_mask
+
+    color_mask = cv2.bitwise_and(
+        color_mask,
+        semantic_support[crop_y1:crop_y2, crop_x1:crop_x2],
+    )
+    result = np.zeros(roi.shape[:2], dtype=np.uint8)
+    result[crop_y1:crop_y2, crop_x1:crop_x2] = color_mask
+    return result
+
+
 def _color_line_observation(
     frame: np.ndarray,
     yoyo: dict[str, Any],
@@ -111,13 +157,7 @@ def _color_line_observation(
     roi = frame[ry1:ry2, rx1:rx2]
     if roi.size == 0:
         return None
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    # Strings are commonly saturated and brighter than the black stage. This
-    # intentionally errs on the side of missing a line rather than inventing it.
-    mask = cv2.inRange(hsv, np.array([35, 70, 55], dtype=np.uint8), np.array([179, 255, 255], dtype=np.uint8))
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    support = None
     if semantic_probability is not None and semantic_meta is not None:
         probability = np.asarray(semantic_probability, dtype=np.float32)
         px1 = max(0, int(math.floor(rx1 * semantic_meta.scale + semantic_meta.pad_x)))
@@ -141,7 +181,9 @@ def _color_line_observation(
         # A 15 px source-space radius retains weak string edges while removing
         # unrelated saturated stage lines before the expensive Hough search.
         support = cv2.dilate(support, _COLOR_SEMANTIC_SUPPORT_KERNEL, iterations=1)
-        mask = cv2.bitwise_and(mask, support)
+    # Strings are commonly saturated and brighter than the black stage. This
+    # intentionally errs on the side of missing a line rather than inventing it.
+    mask = _saturated_line_mask(roi, support)
     diag = math.hypot(roi.shape[1], roi.shape[0])
     lines = cv2.HoughLinesP(
         mask,

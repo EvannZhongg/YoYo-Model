@@ -12,6 +12,7 @@ import numpy as np
 from video_tracking.string_tracker import (
     _color_line_observation,
     _resample_polyline,
+    _saturated_line_mask,
     estimate_string,
     propagate_optical_flow,
     update_adaptive_string_domain_gate,
@@ -81,6 +82,36 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 semantic_meta=meta,
             )
         )
+
+    def test_semantic_color_mask_crop_matches_full_roi_processing(self):
+        rng = np.random.default_rng(42)
+        roi = rng.integers(0, 256, size=(96, 128, 3), dtype=np.uint8)
+        supports = []
+        for bounds in ((24, 20, 70, 60), (0, 0, 35, 28), (90, 65, 128, 96)):
+            support = np.zeros(roi.shape[:2], dtype=np.uint8)
+            x1, y1, x2, y2 = bounds
+            support[y1:y2, x1:x2] = 1
+            supports.append(support)
+        disjoint = np.zeros(roi.shape[:2], dtype=np.uint8)
+        disjoint[15:25, 10:30] = 1
+        disjoint[70:85, 100:120] = 1
+        supports.append(disjoint)
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        full = cv2.inRange(
+            hsv,
+            np.asarray([35, 70, 55], dtype=np.uint8),
+            np.asarray([179, 255, 255], dtype=np.uint8),
+        )
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        full = cv2.morphologyEx(full, cv2.MORPH_OPEN, kernel, iterations=1)
+        full = cv2.morphologyEx(full, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        for support in supports:
+            np.testing.assert_array_equal(
+                _saturated_line_mask(roi, support),
+                cv2.bitwise_and(full, support),
+            )
 
     def test_estimate_string_reuses_precomputed_current_gray(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
