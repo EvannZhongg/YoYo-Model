@@ -16,6 +16,7 @@ from video_tracking.tracker import _predict_pose, parse_args
 
 class TrainingV3Tests(unittest.TestCase):
     def test_tracking_cli_pose_defaults_to_config_and_supports_explicit_disable(self):
+        self.assertFalse(TRACKING_CONFIG.enable_pose)
         self.assertEqual(parse_args(["input.mp4"]).pose, TRACKING_CONFIG.enable_pose)
         self.assertTrue(parse_args(["input.mp4", "--pose"]).pose)
         self.assertFalse(parse_args(["input.mp4", "--no-pose"]).pose)

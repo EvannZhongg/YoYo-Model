@@ -153,7 +153,7 @@ flowchart TD
     AD --> AE[tracked.mp4<br/>frames.jsonl<br/>审核图 / run.json]
 ```
 
-## 2026-08-06 版本4（当前默认 Pipeline）
+## 2026-08-06 版本4
 
 ```mermaid
 flowchart TD
@@ -175,4 +175,30 @@ flowchart TD
     H --> K
     J --> K
     K --> L[tracked.mp4 / frames.jsonl / run.json]
+```
+
+## 2026-08-07 版本5（当前默认 Pipeline）
+
+RTMPose-m WholeBody 保留为 Workbench 和 CLI 可选审核分支，默认关闭。当前悠悠球检测、
+绳线追踪和仅悠悠球 ROI 的方向分类均不依赖姿态输出。
+
+```mermaid
+flowchart TD
+    A[视频帧] --> B[YOLO11s 悠悠球检测]
+    B --> C[ByteTrack ID 跟踪]
+
+    A --> D[双路 LR-ASPP 绳线分割]
+    D --> E[概率校准、颜色候选门控与中心线提取]
+    E --> F[观测优先时序与光流短时补全]
+
+    C --> G[仅悠悠球方形 ROI]
+    G --> H[三分类方向模型]
+
+    A -. 显式开启 .-> I[RTMPose-m WholeBody]
+    I -. 人体与手部审核元数据 .-> J
+
+    C --> J[逐帧结果]
+    F --> J
+    H --> J
+    J --> K[tracked.mp4 / frames.jsonl / run.json]
 ```

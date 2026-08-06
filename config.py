@@ -130,7 +130,7 @@ class TrackingConfig:
             "models/rtmpose/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx",
         )
     )
-    enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", True), True)
+    enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", False), False)
     string_weights_path: Path = _as_path(
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",

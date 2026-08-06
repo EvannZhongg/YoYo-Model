@@ -163,6 +163,10 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 
 切换最终方向权重并统一运行时裁剪后，又执行了 30 帧完整 smoke：pose 30/30 帧成功、双手 30/30 帧完整、方向模型按 cadence 推理 3 次，所有方向记录均使用 `yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct`。本次完整 pipeline 为 1.5526 FPS，产物位于 `runs/experiments/rtmpose_yoyo_only_orientation_final_smoke`。
 
+由于当前方向模型只读取悠悠球 ROI，绳线几何也不使用手部硬门控，RTMPose 不再参与本报告四项主任务的预测。当前代码在同一 30 帧片段上的严格开关 A/B 中，关闭 RTMPose 后悠悠球、绳线、方向以及排除 pose-only 标记后的 bad-case 输出逐帧完全一致；tracking loop 从 `0.9989 FPS` 提升至 `1.6117 FPS`（`+61.35%`，`30.0327 s -> 18.6136 s`）。证据位于 `runs/experiments/pose_default_ab_on/` 和 `runs/experiments/pose_default_ab_off/`。
+
+因此 Workbench 和 CLI 继续完整保留 RTMPose 选项与 `--pose/--no-pose` 开关，但默认配置改为关闭，避免为不参与当前主任务输出的审核元数据支付每帧推理成本。需要人体和手部关键点时可在 Workbench 中显式勾选。不传姿态开关的 30 帧默认 smoke manifest 已确认 `pose_enabled=false`，全部视频、JSONL 和审核产物成功生成；其悠悠球、绳线与方向逐帧哈希均与显式 `--no-pose` 运行一致，证据位于 `runs/experiments/pose_default_off_smoke/`。
+
 ## 验证状态
 
 - `compileall` 通过。

@@ -52,7 +52,9 @@ tracking:
   visualization_max_width: 1920
   pose_weights_path: "models/rtmpose/rtmpose-m-wholebody-256x192.onnx"
   pose_detector_path: "models/rtmpose/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx"
-  enable_pose: true
+  # WholeBody pose is optional review metadata. The current yoyo, string, and
+  # orientation paths do not consume it, so keep it off unless explicitly needed.
+  enable_pose: false
   # Validation-calibrated LR-ASPP model soup. Predictions remain review-only
   # and never become label truth.
   string_weights_path: "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/primary.pt"
