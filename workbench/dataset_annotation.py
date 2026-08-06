@@ -23,7 +23,11 @@ VALID_YOYO_VISIBILITY = {
 VALID_TRICK_ORIENTATIONS = {"normal", "horizontal", "not_applicable"}
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
 VALID_REVIEW_STATUS = {"approved", "reviewed", "unresolved", "needs_review"}
-ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
+ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
+SUPPORTED_ANNOTATION_SCHEMA_VERSIONS = {
+    "agent_yoyo_string_annotation_v4",
+    ANNOTATION_SCHEMA_VERSION,
+}
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
 REVIEW_MAP_FILENAME = "dataset_review_status.json"
 REVIEW_MAP_PATH = BASE_DIR / "workbench_state" / REVIEW_MAP_FILENAME
@@ -88,7 +92,7 @@ def _read_document(path: Path) -> dict[str, Any]:
         raise ValueError(f"invalid annotation JSON: {path}") from exc
     if not isinstance(document, dict):
         raise ValueError(f"annotation must be a JSON object: {path}")
-    if document.get("schema_version") != ANNOTATION_SCHEMA_VERSION:
+    if document.get("schema_version") not in SUPPORTED_ANNOTATION_SCHEMA_VERSIONS:
         raise ValueError(f"unsupported annotation schema: {document.get('schema_version')!r}")
     return document
 
@@ -187,7 +191,7 @@ def list_annotation_datasets(*, include_consecutive: bool = False) -> list[dict[
         if first_label is None:
             continue
         try:
-            if json.loads(first_label.read_text(encoding="utf-8")).get("schema_version") != ANNOTATION_SCHEMA_VERSION:
+            if json.loads(first_label.read_text(encoding="utf-8")).get("schema_version") not in SUPPORTED_ANNOTATION_SCHEMA_VERSIONS:
                 continue
         except (OSError, json.JSONDecodeError):
             continue
@@ -298,6 +302,66 @@ def set_annotation_sample_reviewed(
         payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
         atomic_write_text(REVIEW_MAP_PATH, payload)
     return {"key": key, **_review_summary(label_path, _dataset_reviews(document, path).get(key))}
+
+
+def set_all_annotation_samples_reviewed(
+    dataset_path: str,
+    reviewer: str = "workbench-reviewer",
+) -> dict[str, Any]:
+    """Bind manual verification to every current label using one atomic map write."""
+    path = _managed_dataset_path(dataset_path)
+    _, labels_root, _ = _annotation_roots(path)
+    label_paths = sorted(labels_root.rglob("*.json"))
+    if not label_paths:
+        raise ValueError(f"no JSON labels found in {labels_root}")
+    reviewer_name = str(reviewer or "workbench-reviewer").strip() or "workbench-reviewer"
+    confirmed_at = _utc_now()
+    with _STORAGE_LOCK:
+        document = _read_review_map()
+        dataset_key = _review_dataset_key(path)
+        dataset = document["datasets"].get(dataset_key)
+        if dataset is None:
+            dataset = {"samples": {}}
+            document["datasets"][dataset_key] = dataset
+        elif not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
+            raise ValueError(f"review status dataset entry is invalid: {REVIEW_MAP_PATH}")
+        samples = dataset["samples"]
+        current_keys = {label_path.relative_to(labels_root).as_posix() for label_path in label_paths}
+        removed_orphan_count = sum(key not in current_keys for key in samples)
+        for key in list(samples):
+            if key not in current_keys:
+                samples.pop(key)
+        updated_count = 0
+        for label_path in label_paths:
+            key = label_path.relative_to(labels_root).as_posix()
+            label_sha256 = _file_sha256(label_path)
+            existing = samples.get(key)
+            if (
+                isinstance(existing, dict)
+                and existing.get("confirmed") is True
+                and existing.get("label_sha256") == label_sha256
+                and existing.get("reviewer") == reviewer_name
+            ):
+                continue
+            samples[key] = {
+                "confirmed": True,
+                "confirmed_at_utc": confirmed_at,
+                "reviewer": reviewer_name,
+                "label_sha256": label_sha256,
+            }
+            updated_count += 1
+        if updated_count or removed_orphan_count:
+            document["updated_at_utc"] = confirmed_at
+            payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+            atomic_write_text(REVIEW_MAP_PATH, payload)
+    return {
+        "dataset": dataset_key,
+        "label_count": len(label_paths),
+        "reviewed_count": len(samples),
+        "updated_count": updated_count,
+        "removed_orphan_count": removed_orphan_count,
+        "reviewer": reviewer_name,
+    }
 
 
 def _point(value: Any, width: int, height: int) -> list[float]:

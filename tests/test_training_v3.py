@@ -8,12 +8,18 @@ from pathlib import Path
 import numpy as np
 
 from training_v3.orientation_view import _crop_box
-from training_v3.strip_pose_annotations import _digest_without_pose, strip_pose_fields
+from training_v3.strip_pose_annotations import _content_digest, _digest_without_pose, strip_pose_fields
 from video_tracking.rtmpose_backend import WholebodyPrediction, _rtmlib_device, hand_landmarks
-from video_tracking.tracker import _predict_pose
+from config import TRACKING_CONFIG
+from video_tracking.tracker import _predict_pose, parse_args
 
 
 class TrainingV3Tests(unittest.TestCase):
+    def test_tracking_cli_pose_defaults_to_config_and_supports_explicit_disable(self):
+        self.assertEqual(parse_args(["input.mp4"]).pose, TRACKING_CONFIG.enable_pose)
+        self.assertTrue(parse_args(["input.mp4", "--pose"]).pose)
+        self.assertFalse(parse_args(["input.mp4", "--no-pose"]).pose)
+
     def test_orientation_crop_ignores_hands_and_string_geometry(self):
         base = {"yoyo_bbox_pixel": [400, 300, 440, 340]}
         with_legacy_context = {
@@ -54,6 +60,8 @@ class TrainingV3Tests(unittest.TestCase):
         wrists, pose, metadata = _predict_pose(FakeModel(), np.zeros((200, 200, 3), dtype=np.uint8))
         self.assertEqual(metadata["status"], "ok")
         self.assertEqual(metadata["wholebody_keypoint_count"], 133)
+        self.assertIsNone(metadata["box_confidence"])
+        self.assertFalse(metadata["box_confidence_available"])
         self.assertEqual(len(pose), 17)
         self.assertEqual(len(wrists), 2)
         self.assertEqual(len(wrists[0]["landmarks"]), 21)
@@ -76,6 +84,76 @@ class TrainingV3Tests(unittest.TestCase):
             self.assertNotIn("pose", current)
             self.assertEqual(current["yoyo_bbox_pixel"], [1, 2, 3, 4])
             self.assertEqual(current["string_visibility"], "visible")
+
+    def test_pose_cleanup_recurses_through_history_and_migrates_digests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "labels" / "group" / "sample.json"
+            target.parent.mkdir(parents=True)
+            previous = {
+                "image_sha256": "a" * 64,
+                "image_size": [1920, 1080],
+                "source_group": "group",
+                "visibility": "visible",
+                "yoyo_bbox_pixel": [800, 700, 850, 750],
+                "string_visibility": "visible",
+                "string_polylines_pixel": [[[100, 200], [400, 500], [820, 710]]],
+                "string_mask_polygons_pixel": None,
+                "hands_pixel": {"left": [100, 200], "right": None},
+                "yoyo_division": "1A",
+                "scene_label": "trick",
+                "trick_orientation": "normal",
+                "string_path": {
+                    "topology": "open",
+                    "reconstruction_status": "complete",
+                    "paths": [{
+                        "path_id": "rope",
+                        "start_anchor": "left_hand",
+                        "end_anchor": "yoyo",
+                        "points_pixel": [[100, 200], [400, 500], [820, 710]],
+                        "edges": [],
+                    }],
+                    "unresolved_gaps": [],
+                },
+                "bad_case": [],
+                "notes": "string remains unchanged",
+            }
+            current = json.loads(json.dumps(previous))
+            current["hands_2d"] = {"left": [52, 185], "right": None}
+            current["string_path"]["paths"][0]["start_anchor"] = "right_hand"
+            before_digest = _content_digest(previous)
+            current_digest = _content_digest(current)
+            current.update({
+                "schema_version": "agent_yoyo_string_annotation_v4",
+                "quality": {
+                    "history": [{
+                        "before_sha256": before_digest,
+                        "after_sha256": current_digest,
+                        "previous_content": previous,
+                    }],
+                    "reviews": [{"decision": "approve", "content_sha256": current_digest}],
+                },
+            })
+            target.write_text(json.dumps(current), encoding="utf-8")
+
+            result = strip_pose_fields(root / "labels")
+            cleaned = json.loads(target.read_text(encoding="utf-8"))
+            historical = cleaned["quality"]["history"][0]["previous_content"]
+            path = cleaned["string_path"]["paths"][0]
+
+            self.assertNotIn("hands_pixel", historical)
+            self.assertNotIn("hands_2d", cleaned)
+            self.assertEqual(historical["string_path"]["paths"][0]["start_anchor"], "unknown")
+            self.assertEqual(path["start_anchor"], "unknown")
+            self.assertEqual(path["end_anchor"], "yoyo")
+            self.assertEqual(cleaned["yoyo_bbox_pixel"], [800, 700, 850, 750])
+            self.assertEqual(cleaned["string_polylines_pixel"], [[[100, 200], [400, 500], [820, 710]]])
+            self.assertEqual(path["points_pixel"], [[100, 200], [400, 500], [820, 710]])
+            self.assertEqual(cleaned["quality"]["reviews"][0]["content_sha256"], _content_digest(cleaned))
+            self.assertEqual(cleaned["quality"]["history"][0]["after_sha256"], _content_digest(cleaned))
+            self.assertEqual(result["removed_field_counts"]["hands_pixel"], 2)
+            self.assertEqual(result["removed_field_counts"]["hands_2d"], 1)
+            self.assertEqual(result["replaced_anchor_counts"], {"left_hand": 1, "right_hand": 1})
 
 
 if __name__ == "__main__":

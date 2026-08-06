@@ -19,7 +19,7 @@ from typing import Any, Iterable
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
-SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
+SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}

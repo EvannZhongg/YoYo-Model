@@ -124,7 +124,6 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "crop_policy": identity["crop_policy"],
         "input_dependencies": {
             "yoyo_bbox_pixel": True,
-            "hands_pixel": False,
             "string_geometry": False,
             "no_yoyo_policy": "deterministic_center_crop",
         },

@@ -32,6 +32,11 @@ Required top-level fields:
 The schema has no `split` field. Downstream partitioning must keep whole
 `source_group` values together.
 
+The schema also has no hand or body-pose fields. Do not store `hands_pixel`,
+`hands_2d`, hand landmarks, pose landmarks, or hand attachment anchors. A
+visible route ending at a hand occlusion uses an `unknown` anchor and records
+the unsupported continuation in `string_path.unresolved_gaps`.
+
 ## Visible Geometry
 
 `string_polylines_pixel` contains only visible current-frame pixels. Any

@@ -25,7 +25,7 @@ from PIL import Image
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
+ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 DATASET_SCHEMA_VERSION = "yoyo_blank_annotation_dataset_v1"
 HASH_CACHE_SCHEMA_VERSION = "agent_video_sha256_cache_v1"

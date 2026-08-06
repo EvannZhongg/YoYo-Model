@@ -9,6 +9,11 @@ Run weak-VLM triage once, promote only bounded coarse fields, and give the
 visual agent a sorted handoff containing all remaining work. Never let the weak
 VLM create geometry or approve a label.
 
+Write `agent_yoyo_string_annotation_v5` labels. Never add hand coordinates,
+hand pose, body pose, `hands_pixel`, `hands_2d`, or hand path anchors. Path
+anchors are limited to `yoyo` and `unknown`; preserve visible string geometry
+through hand occlusions as split strokes with unresolved-gap metadata.
+
 ## Load References
 
 - Read `references/data-contract.md` before initialization or export.

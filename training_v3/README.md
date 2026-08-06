@@ -16,5 +16,5 @@ Run every command through the project virtual environment:
 
 The model downloader writes only to `models/rtmpose`. No RTMLib user-cache
 path is used. Detection and string training do not contain hand fields. The v3
-orientation view records `hands_pixel: false` and `string_geometry: false` in
-its manifest so the independence claim is mechanically auditable.
+orientation view records `string_geometry: false` in its manifest so the
+independence claim is mechanically auditable.

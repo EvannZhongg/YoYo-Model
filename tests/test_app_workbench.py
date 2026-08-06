@@ -356,7 +356,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
 
         outputs = run_video_tracking(
             "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
-            False, "pose.pt", True, "string.pt", 0.2, 2.0, 10.0,
+            False, "rtmpose.onnx", True, "string.pt", 0.2, 2.0, 10.0,
             "1A", True, "orientation.pt", 5.0, 1920,
         )
 
@@ -381,7 +381,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         track_video.reset_mock()
         run_video_tracking(
             "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
-            False, "pose.pt", True, str(TRACKING_CONFIG.string_weights_path), 0.2, 2.0, 10.0,
+            False, "rtmpose.onnx", True, str(TRACKING_CONFIG.string_weights_path), 0.2, 2.0, 10.0,
             "1A", True, "orientation.pt", 5.0, 1920,
         )
         default_kwargs = track_video.call_args.kwargs

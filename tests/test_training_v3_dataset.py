@@ -115,7 +115,7 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(orientation["train_balance"]["repeated_image_count"], 0)
             self.assertEqual(len(list((output / "orientation").rglob("*.jpg"))), 18)
             roi = build_orientation_view(output)
-            self.assertFalse(roi["input_dependencies"]["hands_pixel"])
+            self.assertNotIn("hands_pixel", roi["input_dependencies"])
             self.assertFalse(roi["input_dependencies"]["string_geometry"])
             self.assertEqual(roi["counts"]["test"]["total"], first["counts"]["test"]["samples"])
             self.assertTrue(all(Path(record["image"]).is_file() for record in roi["records"]))

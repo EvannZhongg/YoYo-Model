@@ -336,8 +336,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         confidence[1, :] = 0.8
         boxes = np.asarray([[0, 400, 300, 700], [300, 50, 700, 700]], dtype=np.float32)
         selection = _select_pose_person(
-            points, confidence, boxes, np.asarray([0.95, 0.80]),
-            {"center": [500.0, 320.0]}, 1280, 720,
+            points, confidence, boxes, {"center": [500.0, 320.0]}, 1280, 720,
         )
 
         self.assertIsNotNone(selection)
@@ -361,7 +360,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
             points,
             confidence,
             boxes,
-            np.asarray([0.99, 0.75]),
             None,
             1280,
             720,
@@ -390,7 +388,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
             points,
             confidence,
             boxes,
-            np.asarray([0.9, 0.85]),
             {"center": [600.0, 320.0]},
             1920,
             1080,

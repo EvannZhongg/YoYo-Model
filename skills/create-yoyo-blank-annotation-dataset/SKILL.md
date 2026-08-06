@@ -1,6 +1,6 @@
 ---
 name: create-yoyo-blank-annotation-dataset
-description: Create or incrementally extend deduplicated blank agent_yoyo_string_annotation_v4 datasets from yoyo video frames for the Workbench data-annotation page while preserving every existing label edit and SHA-bound human verification record. Use when preparing or supplementing a manual yoyo/string annotation queue without VLM classification, agent geometry, model fine-tuning, or model-review approval.
+description: Create or incrementally extend deduplicated blank agent_yoyo_string_annotation_v5 datasets from yoyo video frames for the Workbench data-annotation page while preserving every existing label edit and SHA-bound human verification record. Use when preparing or supplementing a manual yoyo/string annotation queue without VLM classification, agent geometry, model fine-tuning, or model-review approval.
 ---
 
 # Create Yoyo Blank Annotation Dataset

@@ -2,8 +2,12 @@
 
 ## Schema Version
 
-Use `agent_yoyo_string_annotation_v4`. The schema stores original-image pixel
+Use `agent_yoyo_string_annotation_v5`. The schema stores original-image pixel
 geometry and generated 0-999 mirrors.
+
+The schema contains no hand or body-pose annotation fields. Never write
+`hands_pixel`, `hands_2d`, `hands`, pose landmarks, or `left_hand`/`right_hand`
+path anchors. Use only `yoyo` or `unknown` for path endpoints.
 
 ## Coordinate Frames
 

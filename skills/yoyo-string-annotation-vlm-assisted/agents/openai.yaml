@@ -1,4 +1,4 @@
 interface:
-  display_name: "Yoyo String Annotation VLM Assisted"
-  short_description: "VLM triage with agent-reviewed string geometry"
-  default_prompt: "Use $yoyo-string-annotation-vlm-assisted to triage sampled yoyo frames and complete review-gated string annotations."
+  display_name: "Yoyo String Annotation v5"
+  short_description: "VLM triage and hand-free string geometry"
+  default_prompt: "Use $yoyo-string-annotation-vlm-assisted to create review-gated agent_yoyo_string_annotation_v5 labels without hand or pose fields."

@@ -14,6 +14,7 @@ from workbench.dataset_annotation import (
     load_annotation_sample,
     open_annotation_dataset,
     save_annotation_sample,
+    set_all_annotation_samples_reviewed,
     set_annotation_sample_reviewed,
 )
 
@@ -187,6 +188,27 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 opened = open_annotation_dataset(str(dataset))
 
             self.assertFalse(opened["samples"][0]["reviewed"])
+
+    def test_bulk_review_rebinds_current_label_hash_without_changing_label(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = make_annotation_dataset(root)
+            review_path = root / REVIEW_MAP_FILENAME
+            label_path = dataset / "canonical" / "labels" / key
+            label_before = label_path.read_bytes()
+            with (
+                patch("workbench.dataset_annotation.DATASETS_DIR", root),
+                patch("workbench.dataset_annotation.REVIEW_MAP_PATH", review_path),
+            ):
+                first = set_all_annotation_samples_reviewed(str(dataset), "bulk-reviewer")
+                second = set_all_annotation_samples_reviewed(str(dataset), "bulk-reviewer")
+                opened = open_annotation_dataset(str(dataset))
+
+            self.assertEqual(first["updated_count"], 1)
+            self.assertEqual(second["updated_count"], 0)
+            self.assertEqual(first["reviewed_count"], 1)
+            self.assertEqual(opened["reviewed_count"], 1)
+            self.assertEqual(label_path.read_bytes(), label_before)
 
     def test_saving_annotation_removes_prior_review_mapping(self):
         with TemporaryDirectory() as directory:

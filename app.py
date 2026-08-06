@@ -125,7 +125,6 @@ def run_video_tracking(
             enable_pose=bool(enable_pose),
             pose_weights_path=pose_weights_path.strip() or None,
             pose_detector_path=TRACKING_CONFIG.pose_detector_path,
-            auto_download_pose=TRACKING_CONFIG.auto_download_pose,
             enable_string_model=bool(enable_string_model),
             string_weights_path=string_weights_path.strip() or None,
             string_ensemble_weights_path=(
@@ -251,7 +250,7 @@ def create_demo():
                             file_count="single",
                             height=280,
                         )
-                        tracking_weights = gr.Textbox(label="YOLO Weights", value=str(TRACKING_CONFIG.weights_path))
+                        tracking_weights = gr.Textbox(label="Yoyo Detection Weights", value=str(TRACKING_CONFIG.weights_path))
                         tracking_output_dir = gr.Textbox(label="Output Directory", value=str(TRACKING_CONFIG.output_dir))
                         tracking_preview_width = gr.Number(
                             label="Tracked Preview Maximum Width (0 = source)",
@@ -264,8 +263,8 @@ def create_demo():
                             tracking_iou = gr.Slider(label="IoU", minimum=0.1, maximum=0.95, value=TRACKING_CONFIG.iou, step=0.01)
                             tracking_imgsz = gr.Number(label="Image Size", value=TRACKING_CONFIG.imgsz, precision=0)
                             tracking_device = gr.Textbox(label="Device", value=TRACKING_CONFIG.device)
-                        tracking_pose = gr.Checkbox(label="Pose / hand landmarks", value=TRACKING_CONFIG.enable_pose)
-                        tracking_pose_weights = gr.Textbox(label="Pose Weights", value=str(TRACKING_CONFIG.pose_weights_path))
+                        tracking_pose = gr.Checkbox(label="RTMPose body / hand landmarks", value=TRACKING_CONFIG.enable_pose)
+                        tracking_pose_weights = gr.Textbox(label="RTMPose Weights", value=str(TRACKING_CONFIG.pose_weights_path))
                         tracking_string_model = gr.Checkbox(label="String segmentation model", value=TRACKING_CONFIG.enable_string_model)
                         tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(TRACKING_CONFIG.string_weights_path))
                         with gr.Row():

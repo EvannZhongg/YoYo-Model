@@ -71,9 +71,8 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _load_pose_model(
+def _load_rtmpose_model(
     weights_path: str | Path | None,
-    auto_download: bool,
     device: str = "",
     detector_path: str | Path | None = None,
 ):
@@ -82,8 +81,11 @@ def _load_pose_model(
     try:
         model = RTMPoseWholebody(requested, detector, device)
     except Exception as exc:
-        suffix = " Automatic downloads are disabled; use the project download command." if auto_download else ""
-        logger.warning("RTMPose model unavailable (%s): %s%s", requested, exc, suffix)
+        logger.warning(
+            "RTMPose model unavailable (%s): %s. Use the project RTMPose download command.",
+            requested,
+            exc,
+        )
         return None, str(exc)
     return model, str(requested)
 
@@ -440,7 +442,6 @@ def _select_pose_person(
     points: np.ndarray,
     confidence: np.ndarray,
     boxes: np.ndarray,
-    box_confidence: np.ndarray,
     yoyo: dict[str, Any] | None,
     width: int,
     height: int,
@@ -574,9 +575,8 @@ def _predict_pose(
         boxes = result.boxes
         if not len(all_points):
             return [], [], {"status": "no_person"}
-        box_confidence = np.zeros(len(all_points), dtype=np.float32)
         selection = _select_pose_person(
-            all_points, all_confidence, boxes, box_confidence, yoyo,
+            all_points, all_confidence, boxes, yoyo,
             frame.shape[1], frame.shape[0], previous_person_bbox,
         )
         if selection is None:
@@ -607,7 +607,10 @@ def _predict_pose(
             pose.append({"index": index, "x": float(point[0]), "y": float(point[1]), "confidence": conf})
         metadata.update({
             "status": "ok",
-            "box_confidence": round(float(box_confidence[selected]), 4),
+            # RTMLib's detector returns coordinates only; do not fabricate a
+            # zero score that downstream consumers could treat as evidence.
+            "box_confidence": None,
+            "box_confidence_available": False,
             "backend": model.backend_name,
             "keypoint_schema": model.keypoint_schema,
             "wholebody_keypoint_count": int(len(points)),
@@ -915,8 +918,7 @@ def track_video(
     visualization_max_width: int = TRACKING_CONFIG.visualization_max_width,
     pose_weights_path: str | Path | None = None,
     pose_detector_path: str | Path | None = None,
-    enable_pose: bool = False,
-    auto_download_pose: bool = False,
+    enable_pose: bool = TRACKING_CONFIG.enable_pose,
     string_weights_path: str | Path | None = None,
     string_ensemble_weights_path: str | Path | None = TRACKING_CONFIG.string_ensemble_weights_path,
     string_ensemble_alpha: float = TRACKING_CONFIG.string_ensemble_alpha,
@@ -980,7 +982,7 @@ def track_video(
     model = YOLO(str(weights_path))
     class_names = {int(key): str(value) for key, value in dict(getattr(model, "names", {}) or {}).items()}
     pose_model, pose_error = (
-        _load_pose_model(pose_weights_path, auto_download_pose, device, pose_detector_path)
+        _load_rtmpose_model(pose_weights_path, device, pose_detector_path)
         if enable_pose else (None, None)
     )
     string_model, string_model_status = _load_string_model(
@@ -1589,7 +1591,7 @@ def track_video(
     }
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Track yoyo objects and export reviewable frame metadata.")
     parser.add_argument("video", help="Input video path.")
     parser.add_argument("--weights", default=str(TRACKING_CONFIG.weights_path))
@@ -1606,8 +1608,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
     parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))
-    parser.add_argument("--pose", action="store_true", help="Run RTMPose-m WholeBody inference for hand/body landmarks.")
-    parser.add_argument("--auto-download-pose", action="store_true")
+    parser.add_argument(
+        "--pose",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.enable_pose,
+        help="Run RTMPose-m WholeBody inference; defaults to tracking.enable_pose.",
+    )
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument(
         "--string-ensemble-weights",
@@ -1704,7 +1710,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-json", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--start-seconds", type=float, default=0.0)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def main() -> int:
@@ -1732,7 +1738,6 @@ def main() -> int:
         pose_weights_path=args.pose_weights or None,
         pose_detector_path=args.pose_detector or None,
         enable_pose=args.pose,
-        auto_download_pose=args.auto_download_pose,
         string_weights_path=args.string_weights,
         string_ensemble_weights_path=string_ensemble_weights or None,
         string_ensemble_alpha=args.string_ensemble_alpha,

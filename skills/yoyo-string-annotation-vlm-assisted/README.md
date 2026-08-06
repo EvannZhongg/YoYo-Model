@@ -74,7 +74,7 @@ triage:
 
 ### 4. 采样并初始化标注
 
-先从视频抽取 anchor 与相邻上下文帧，再初始化 `agent_yoyo_string_annotation_v4` 标注：
+先从视频抽取 anchor 与相邻上下文帧，再初始化 `agent_yoyo_string_annotation_v5` 标注：
 
 ```powershell
 & .\.venv\Scripts\python.exe `
@@ -116,7 +116,7 @@ VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `
 
 ## 当前标注字段
 
-当前标注 schema 为 `agent_yoyo_string_annotation_v4`。所有 `*_pixel` 坐标以原始图像像素为准；自动生成的 `*_2d` 字段是 0–999 归一化镜像，不是标注真值。
+当前标注 schema 为 `agent_yoyo_string_annotation_v5`。所有 `*_pixel` 坐标以原始图像像素为准；自动生成的绳线与悠悠球 `*_2d` 字段是 0–999 归一化镜像，不是标注真值。schema 不保存手部或人体姿态字段，路径锚点只能是 `yoyo` 或 `unknown`。
 
 ### 身份与视频溯源
 

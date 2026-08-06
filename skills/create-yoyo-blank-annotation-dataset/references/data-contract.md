@@ -12,7 +12,7 @@ directory name. Never append into `datasets/1Ayoyo_dataset`.
 
 ## Label State
 
-Every label uses `agent_yoyo_string_annotation_v4` and preserves the provenance
+Every label uses `agent_yoyo_string_annotation_v5` and preserves the provenance
 fields produced by `yoyo-string-annotation-vlm-assisted`: source video hash,
 source group, frame index, timestamp, sequence, image hash and size, and sampling
 manifest hash.

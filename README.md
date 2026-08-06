@@ -109,7 +109,9 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 .\.venv\Scripts\python.exe -m cli.tracking.track_video path\to\input.mp4
 ```
 
-默认追踪配置在 `config.yaml` 的 `tracking` 区块。每次运行输出：
+默认追踪配置在 `config.yaml` 的 `tracking` 区块。`tracking.enable_pose=true`
+会默认启用 RTMPose；仅在本次运行禁用时传入 `--no-pose`。姿态推理只使用
+RTMPose WholeBody 及其 YOLOX 人体检测器。每次运行输出：
 
 - 完整追踪视频
 - 逐帧 JSONL

@@ -131,7 +131,6 @@ class TrackingConfig:
         )
     )
     enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", True), True)
-    auto_download_pose: bool = _as_bool(_env_or_config("TRACKING_AUTO_DOWNLOAD_POSE", "tracking.auto_download_pose", False), False)
     string_weights_path: Path = _as_path(
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
