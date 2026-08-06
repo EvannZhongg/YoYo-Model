@@ -25,6 +25,7 @@ import numpy as np
 from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
+    PreparedCalibratedEnsemblePredictor,
     is_semantic_checkpoint,
     load_checkpoint as load_semantic_checkpoint,
     polyline_probability_support,
@@ -173,6 +174,22 @@ def _load_string_model(
                             "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
                             "adaptive_enabled": False,
                         })
+            if bundle["kind"] in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
+                bundle["ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
+                    bundle["model"],
+                    bundle["ensemble_model"],
+                    bundle["ensemble_alpha"],
+                    float(bundle["checkpoint"].get("threshold", 0.5)),
+                    bundle["ensemble_candidate_threshold"],
+                )
+                if bundle["kind"] == "semantic_adaptive_ensemble":
+                    bundle["adaptive_ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
+                        bundle["adaptive_model"],
+                        bundle["ensemble_model"],
+                        bundle["adaptive_ensemble_alpha"],
+                        float(bundle["adaptive_checkpoint"].get("threshold", 0.5)),
+                        bundle["ensemble_candidate_threshold"],
+                    )
             status = (
                 f"semantic_adaptive_ensemble:{path}+{bundle['ensemble_path']}+{bundle['adaptive_path']}"
                 if bundle["kind"] == "semantic_adaptive_ensemble"
@@ -351,13 +368,20 @@ def _predict_string_model(
                 model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
             )
             secondary_threshold = float(model["ensemble_candidate_threshold"])
-            probability = predict_prepared_calibrated_ensemble(
-                primary_model,
-                model["ensemble_model"],
-                tensor,
-                active_alpha,
-                primary_threshold,
-                secondary_threshold,
+            predictor = model.get(
+                "adaptive_ensemble_predictor" if adaptive_enabled else "ensemble_predictor"
+            )
+            probability = (
+                predictor.predict(tensor)
+                if predictor is not None
+                else predict_prepared_calibrated_ensemble(
+                    primary_model,
+                    model["ensemble_model"],
+                    tensor,
+                    active_alpha,
+                    primary_threshold,
+                    secondary_threshold,
+                )
             )
             threshold = max(0.5, float(confidence))
             ensemble_metadata = {
@@ -1571,6 +1595,20 @@ def track_video(
             "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
             "string_adaptive_max_mean_confidence": float(string_adaptive_max_mean_confidence),
             "string_adaptive_min_mean_distance_ratio": float(string_adaptive_min_mean_distance_ratio),
+            "string_cuda_graph": {
+                "primary": bool(
+                    isinstance(string_model, dict)
+                    and getattr(string_model.get("ensemble_predictor"), "uses_cuda_graph", False)
+                ),
+                "adaptive": bool(
+                    isinstance(string_model, dict)
+                    and getattr(
+                        string_model.get("adaptive_ensemble_predictor"),
+                        "uses_cuda_graph",
+                        False,
+                    )
+                ),
+            },
             "string_confidence": string_confidence,
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),

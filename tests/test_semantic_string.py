@@ -12,6 +12,7 @@ from string_segmentation.evaluate_consecutive import _group_artifact_stem
 from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
     LetterboxMeta,
+    PreparedCalibratedEnsemblePredictor,
     ReviewedStringDataset,
     TinyUNet,
     build_string_model,
@@ -80,6 +81,30 @@ class SemanticStringTests(unittest.TestCase):
         )
 
         np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2e-7)
+
+    def test_prepared_ensemble_predictor_falls_back_on_cpu(self):
+        class FixedLogits(torch.nn.Module):
+            def __init__(self, values):
+                super().__init__()
+                self.register_buffer("values", torch.tensor(values, dtype=torch.float32))
+
+            def forward(self, _):
+                return self.values
+
+        primary = FixedLogits([[[[-2.0, -0.4], [0.5, 4.0]]]])
+        secondary = FixedLogits([[[[-1.5, 0.2], [1.0, 3.0]]]])
+        tensor = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
+        predictor = PreparedCalibratedEnsemblePredictor(
+            primary, secondary, 0.3, 0.3985, 0.5,
+        )
+
+        actual = predictor.predict(tensor)
+        expected = predict_prepared_calibrated_ensemble(
+            primary, secondary, tensor, 0.3, 0.3985, 0.5,
+        )
+
+        np.testing.assert_array_equal(actual, expected)
+        self.assertFalse(predictor.uses_cuda_graph)
 
     def test_calibrated_probability_fusion_rejects_invalid_inputs(self):
         probability = np.full((2, 2), 0.5, dtype=np.float32)

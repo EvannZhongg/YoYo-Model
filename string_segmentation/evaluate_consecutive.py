@@ -16,6 +16,7 @@ from common.files import sha256_file
 from config import TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
+    PreparedCalibratedEnsemblePredictor,
     load_checkpoint,
     polyline_probability_support,
     predict_prepared_calibrated_ensemble,
@@ -85,6 +86,7 @@ def evaluate_consecutive_checkpoint(
     adaptive_max_color_accepts: int = 0,
     adaptive_max_mean_confidence: float = 1.0,
     adaptive_min_mean_distance_ratio: float = 0.0,
+    cuda_graph: bool = True,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -128,6 +130,32 @@ def evaluate_consecutive_checkpoint(
         adaptive_model, adaptive_checkpoint = load_checkpoint(adaptive_weights, device)
         if adaptive_checkpoint.get("model_config") != checkpoint.get("model_config"):
             raise ValueError("Adaptive semantic checkpoint uses an incompatible model configuration")
+    ensemble_predictor = (
+        PreparedCalibratedEnsemblePredictor(
+            model,
+            ensemble_model,
+            float(ensemble_alpha),
+            float(checkpoint.get("threshold", 0.5)),
+            float(ensemble_candidate_threshold),
+            cuda_graph,
+        )
+        if ensemble_model is not None
+        else None
+    )
+    adaptive_ensemble_predictor = (
+        PreparedCalibratedEnsemblePredictor(
+            adaptive_model,
+            ensemble_model,
+            float(adaptive_ensemble_alpha),
+            float(adaptive_checkpoint.get("threshold", 0.5)),
+            float(ensemble_candidate_threshold),
+            cuda_graph,
+        )
+        if adaptive_model is not None
+        and adaptive_checkpoint is not None
+        and ensemble_model is not None
+        else None
+    )
     document = json.loads((dataset_dir / "consecutive_groups.json").read_text(encoding="utf-8"))
     selected = set(groups or [])
     results: list[dict[str, Any]] = []
@@ -164,13 +192,20 @@ def evaluate_consecutive_checkpoint(
                 image, input_width, input_height, device,
             )
             if ensemble_model is not None:
-                probability = predict_prepared_calibrated_ensemble(
-                    active_model,
-                    ensemble_model,
-                    tensor,
-                    active_ensemble_alpha,
-                    active_primary_threshold,
-                    float(ensemble_candidate_threshold),
+                active_predictor = (
+                    adaptive_ensemble_predictor if adaptive_enabled else ensemble_predictor
+                )
+                probability = (
+                    active_predictor.predict(tensor)
+                    if active_predictor is not None
+                    else predict_prepared_calibrated_ensemble(
+                        active_model,
+                        ensemble_model,
+                        tensor,
+                        active_ensemble_alpha,
+                        active_primary_threshold,
+                        float(ensemble_candidate_threshold),
+                    )
                 )
             else:
                 probability = predict_prepared_probability(active_model, tensor)
@@ -340,6 +375,14 @@ def evaluate_consecutive_checkpoint(
         "adaptive_max_color_accepts": int(adaptive_max_color_accepts),
         "adaptive_max_mean_confidence": float(adaptive_max_mean_confidence),
         "adaptive_min_mean_distance_ratio": float(adaptive_min_mean_distance_ratio),
+        "cuda_graph_requested": bool(cuda_graph),
+        "cuda_graph_primary": bool(
+            ensemble_predictor is not None and ensemble_predictor.uses_cuda_graph
+        ),
+        "cuda_graph_adaptive": bool(
+            adaptive_ensemble_predictor is not None
+            and adaptive_ensemble_predictor.uses_cuda_graph
+        ),
         "groups": results,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -383,6 +426,12 @@ def main() -> int:
     parser.add_argument("--adaptive-max-color-accepts", type=int, default=0)
     parser.add_argument("--adaptive-max-mean-confidence", type=float, default=1.0)
     parser.add_argument("--adaptive-min-mean-distance-ratio", type=float, default=0.0)
+    parser.add_argument(
+        "--cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Capture fixed-shape CUDA ensemble inference; CPU always uses eager inference.",
+    )
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(
         weights=Path(args.weights),
@@ -408,6 +457,7 @@ def main() -> int:
         adaptive_max_color_accepts=args.adaptive_max_color_accepts,
         adaptive_max_mean_confidence=args.adaptive_max_mean_confidence,
         adaptive_min_mean_distance_ratio=args.adaptive_min_mean_distance_ratio,
+        cuda_graph=args.cuda_graph,
     )
     compact = [{
         "source_group": item["source_group"],

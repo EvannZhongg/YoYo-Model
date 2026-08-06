@@ -381,15 +381,15 @@ def predict_prepared_probability(
 
 
 @torch.inference_mode()
-def predict_prepared_calibrated_ensemble(
+def predict_prepared_calibrated_ensemble_tensor(
     primary_model: nn.Module,
     secondary_model: nn.Module,
     tensor: torch.Tensor,
     alpha: float,
     primary_threshold: float,
     secondary_threshold: float,
-) -> np.ndarray:
-    """Fuse compatible model outputs on-device before one CPU transfer."""
+) -> torch.Tensor:
+    """Fuse compatible model outputs on-device and retain the result there."""
     weight = float(alpha)
     thresholds = (float(primary_threshold), float(secondary_threshold))
     if not 0.0 <= weight <= 1.0:
@@ -412,7 +412,121 @@ def predict_prepared_calibrated_ensemble(
         (1.0 - weight) * (torch.logit(primary_probability) - primary_threshold_logit)
         + weight * (torch.logit(secondary_probability) - secondary_threshold_logit)
     )
-    return torch.sigmoid(fused_logit).detach().cpu().numpy()
+    return torch.sigmoid(fused_logit)
+
+
+@torch.inference_mode()
+def predict_prepared_calibrated_ensemble(
+    primary_model: nn.Module,
+    secondary_model: nn.Module,
+    tensor: torch.Tensor,
+    alpha: float,
+    primary_threshold: float,
+    secondary_threshold: float,
+) -> np.ndarray:
+    """Fuse compatible model outputs on-device before one CPU transfer."""
+    return predict_prepared_calibrated_ensemble_tensor(
+        primary_model,
+        secondary_model,
+        tensor,
+        alpha,
+        primary_threshold,
+        secondary_threshold,
+    ).detach().cpu().numpy()
+
+
+class PreparedCalibratedEnsemblePredictor:
+    """Reuse a CUDA graph for fixed-shape calibrated ensemble inference."""
+
+    def __init__(
+        self,
+        primary_model: nn.Module,
+        secondary_model: nn.Module,
+        alpha: float,
+        primary_threshold: float,
+        secondary_threshold: float,
+        enable_cuda_graph: bool = True,
+    ) -> None:
+        self.primary_model = primary_model
+        self.secondary_model = secondary_model
+        self.alpha = float(alpha)
+        self.primary_threshold = float(primary_threshold)
+        self.secondary_threshold = float(secondary_threshold)
+        self.enable_cuda_graph = bool(enable_cuda_graph)
+        self._signature: tuple[Any, ...] | None = None
+        self._graph: torch.cuda.CUDAGraph | None = None
+        self._static_input: torch.Tensor | None = None
+        self._static_output: torch.Tensor | None = None
+
+    @property
+    def uses_cuda_graph(self) -> bool:
+        return self._graph is not None
+
+    def _capture(self, tensor: torch.Tensor) -> None:
+        self._static_input = tensor.detach().clone()
+        warmup_stream = torch.cuda.Stream(device=tensor.device)
+        warmup_stream.wait_stream(torch.cuda.current_stream(tensor.device))
+        with torch.cuda.stream(warmup_stream):
+            for _ in range(3):
+                predict_prepared_calibrated_ensemble_tensor(
+                    self.primary_model,
+                    self.secondary_model,
+                    self._static_input,
+                    self.alpha,
+                    self.primary_threshold,
+                    self.secondary_threshold,
+                )
+        torch.cuda.current_stream(tensor.device).wait_stream(warmup_stream)
+        torch.cuda.synchronize(tensor.device)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            static_output = predict_prepared_calibrated_ensemble_tensor(
+                self.primary_model,
+                self.secondary_model,
+                self._static_input,
+                self.alpha,
+                self.primary_threshold,
+                self.secondary_threshold,
+            )
+        self._graph = graph
+        self._static_output = static_output
+        self._signature = (
+            tensor.device.type,
+            tensor.device.index,
+            tensor.dtype,
+            tuple(tensor.shape),
+            tuple(tensor.stride()),
+        )
+
+    def predict(self, tensor: torch.Tensor) -> np.ndarray:
+        if (
+            not self.enable_cuda_graph
+            or tensor.device.type != "cuda"
+            or tensor.shape[0] != 1
+        ):
+            return predict_prepared_calibrated_ensemble(
+                self.primary_model,
+                self.secondary_model,
+                tensor,
+                self.alpha,
+                self.primary_threshold,
+                self.secondary_threshold,
+            )
+        signature = (
+            tensor.device.type,
+            tensor.device.index,
+            tensor.dtype,
+            tuple(tensor.shape),
+            tuple(tensor.stride()),
+        )
+        if self._graph is None or signature != self._signature:
+            self._capture(tensor)
+        assert self._static_input is not None
+        assert self._static_output is not None
+        assert self._graph is not None
+        self._static_input.copy_(tensor)
+        self._graph.replay()
+        return self._static_output.detach().cpu().numpy()
 
 
 @torch.inference_mode()

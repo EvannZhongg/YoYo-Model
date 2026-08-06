@@ -9,6 +9,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
+from string_segmentation.semantic_model import PreparedCalibratedEnsemblePredictor
 from video_tracking.string_tracker import (
     _color_line_observation,
     _resample_polyline,
@@ -380,6 +381,12 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(model["adaptive_model"], "adaptive")
         self.assertFalse(model["adaptive_enabled"])
         self.assertEqual(model["adaptive_ensemble_alpha"], 0.5)
+        self.assertIsInstance(
+            model["ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
+        )
+        self.assertIsInstance(
+            model["adaptive_ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
+        )
         self.assertTrue(status.startswith("semantic_adaptive_ensemble:"))
 
     def test_semantic_probability_gate_controls_color_augmentation(self):
