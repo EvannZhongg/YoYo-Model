@@ -101,5 +101,16 @@ tracking:
   orientation_weights_path: "runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt"
   enable_orientation_model: true
   orientation_imgsz: 320
+  # Stable cadence is 5 FPS. Ambiguous observations temporarily burst to 25 FPS.
   orientation_inference_fps: 5.0
+  orientation_adaptive_inference: true
+  orientation_burst_inference_fps: 25.0
+  orientation_adaptive_min_confidence: 0.5
+  orientation_adaptive_stable_observations: 4
+  orientation_temporal_filter: true
+  orientation_ema_alpha: 0.4
+  orientation_switch_margin: 0.05
+  orientation_switch_confirmations: 3
+  orientation_strong_switch_confidence: 0.9
+  orientation_strong_switch_margin: 0.2
   export_json: true

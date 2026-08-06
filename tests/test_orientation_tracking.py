@@ -1,8 +1,18 @@
 import unittest
+import tempfile
+from pathlib import Path
 
+import cv2
 import numpy as np
 
-from video_tracking.orientation import carry_orientation, orientation_crop_box, predict_orientation
+from cli.tracking.evaluate_orientation import _read_image, _replay
+from video_tracking.orientation import (
+    OrientationTemporalFilter,
+    carry_orientation,
+    orientation_observation_is_unstable,
+    orientation_crop_box,
+    predict_orientation,
+)
 
 
 class _Scalar:
@@ -25,6 +35,22 @@ class _Vector(_Scalar):
 
 
 class OrientationTrackingTests(unittest.TestCase):
+    @staticmethod
+    def _prediction(horizontal: float, normal: float, not_applicable: float) -> dict:
+        probabilities = {
+            "horizontal": horizontal,
+            "normal": normal,
+            "not_applicable": not_applicable,
+        }
+        label = max(probabilities, key=probabilities.get)
+        return {
+            "label": label,
+            "confidence": probabilities[label],
+            "probabilities": probabilities,
+            "inference_status": "ran",
+            "age_frames": 0,
+        }
+
     def test_crop_matches_yoyo_only_training_policy(self):
         crop = orientation_crop_box(
             1000,
@@ -32,6 +58,48 @@ class OrientationTrackingTests(unittest.TestCase):
             {"bbox": [450, 250, 550, 350]},
         )
         self.assertEqual(crop, (350, 150, 650, 450))
+
+    def test_evaluation_image_reader_supports_unicode_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "方向样本.jpg"
+            expected = np.full((8, 10, 3), 127, dtype=np.uint8)
+            encoded_ok, encoded = cv2.imencode(".jpg", expected)
+            self.assertTrue(encoded_ok)
+            encoded.tofile(path)
+            actual = _read_image(path)
+        self.assertEqual(actual.shape, expected.shape)
+
+    def test_adaptive_replay_returns_to_stable_cadence(self):
+        records = [
+            {
+                "group_id": "group-a",
+                "frame_index": index,
+                "timestamp_s": index / 50.0,
+                "target": "normal",
+                "predicted": "normal",
+                "confidence": 0.9,
+                "probabilities": {
+                    "horizontal": 0.05,
+                    "normal": 0.9,
+                    "not_applicable": 0.05,
+                },
+            }
+            for index in range(10)
+        ]
+        replay = _replay(
+            records,
+            inference_fps=5.0,
+            filter_kwargs={},
+            adaptive_kwargs={
+                "burst_inference_fps": 25.0,
+                "min_confidence": 0.5,
+                "stable_observations": 4,
+            },
+        )
+
+        self.assertEqual(replay["inference_count"], 5)
+        self.assertEqual(replay["burst_inference_count"], 4)
+        self.assertEqual(set(replay["predictions"].values()), {"normal"})
 
     def test_crop_uses_deterministic_center_negative_without_yoyo(self):
         self.assertEqual(orientation_crop_box(640, 360, None), (270, 130, 370, 230))
@@ -65,6 +133,31 @@ class OrientationTrackingTests(unittest.TestCase):
         self.assertEqual(carried["inference_status"], "carried")
         self.assertEqual(carried["age_frames"], 2)
         self.assertEqual(prediction["inference_status"], "ran")
+
+    def test_temporal_filter_rejects_an_isolated_flip(self):
+        temporal_filter = OrientationTemporalFilter()
+        first = temporal_filter.update(self._prediction(0.05, 0.9, 0.05))
+        spike = temporal_filter.update(self._prediction(0.8, 0.15, 0.05))
+        recovered = temporal_filter.update(self._prediction(0.05, 0.9, 0.05))
+
+        self.assertEqual(first["label"], "normal")
+        self.assertEqual(spike["label"], "normal")
+        self.assertEqual(spike["raw_label"], "horizontal")
+        self.assertEqual(recovered["label"], "normal")
+        self.assertTrue(orientation_observation_is_unstable(spike, 0.5))
+        self.assertFalse(orientation_observation_is_unstable(recovered, 0.5))
+
+    def test_temporal_filter_switches_after_sustained_evidence(self):
+        temporal_filter = OrientationTemporalFilter(strong_switch_confidence=1.0)
+        temporal_filter.update(self._prediction(0.05, 0.9, 0.05))
+        outputs = [
+            temporal_filter.update(self._prediction(0.8, 0.15, 0.05))
+            for _ in range(4)
+        ]
+
+        self.assertEqual([item["label"] for item in outputs[:3]], ["normal"] * 3)
+        self.assertEqual(outputs[3]["label"], "horizontal")
+        self.assertEqual(outputs[3]["temporal_filter"]["status"], "confirmed_switched")
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,7 @@ class SequenceMetricsTests(unittest.TestCase):
                 "string_visibility": "partial",
                 "string_review_status": "reviewed",
                 "string_polylines_pixel": [[[5 + index, 30], [25 + index, 30]]],
+                "trick_orientation": "normal" if index < 2 else "horizontal",
             }
             (label_root / f"frame-{index:03d}.json").write_text(json.dumps(label), encoding="utf-8")
             frames.append({
@@ -74,6 +75,10 @@ class SequenceMetricsTests(unittest.TestCase):
                     "propagation_age_frames": 1 if index == 1 else 0,
                 },
                 "bad_case": [],
+                "trick_orientation": {
+                    "label": "normal" if index < 2 else "horizontal",
+                    "confidence": 0.9,
+                },
             })
         predictions.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
         return dataset, predictions
@@ -92,6 +97,9 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["yoyo"]["temporal"]["track_id_switch_count"], 0)
         self.assertEqual(result["string"]["temporal"]["matched_motion_pairs"], 3)
         self.assertEqual(result["string"]["temporal"]["mean_centroid_motion_error_px"], 0.0)
+        self.assertEqual(result["orientation"]["accuracy"], 1.0)
+        self.assertEqual(result["orientation"]["temporal"]["target_switch_count"], 1)
+        self.assertEqual(result["orientation"]["temporal"]["predicted_switch_count"], 1)
 
     def test_temporal_metrics_count_switch_and_recovery_latency(self):
         with tempfile.TemporaryDirectory() as directory:

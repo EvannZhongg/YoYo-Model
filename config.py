@@ -254,6 +254,38 @@ class TrackingConfig:
     orientation_inference_fps: float = float(
         _env_or_config("TRACKING_ORIENTATION_INFERENCE_FPS", "tracking.orientation_inference_fps", 5.0)
     )
+    orientation_adaptive_inference: bool = _as_bool(
+        _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_INFERENCE", "tracking.orientation_adaptive_inference", True),
+        True,
+    )
+    orientation_burst_inference_fps: float = float(
+        _env_or_config("TRACKING_ORIENTATION_BURST_INFERENCE_FPS", "tracking.orientation_burst_inference_fps", 25.0)
+    )
+    orientation_adaptive_min_confidence: float = float(
+        _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_MIN_CONFIDENCE", "tracking.orientation_adaptive_min_confidence", 0.5)
+    )
+    orientation_adaptive_stable_observations: int = int(
+        _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_STABLE_OBSERVATIONS", "tracking.orientation_adaptive_stable_observations", 4)
+    )
+    orientation_temporal_filter: bool = _as_bool(
+        _env_or_config("TRACKING_ORIENTATION_TEMPORAL_FILTER", "tracking.orientation_temporal_filter", True),
+        True,
+    )
+    orientation_ema_alpha: float = float(
+        _env_or_config("TRACKING_ORIENTATION_EMA_ALPHA", "tracking.orientation_ema_alpha", 0.4)
+    )
+    orientation_switch_margin: float = float(
+        _env_or_config("TRACKING_ORIENTATION_SWITCH_MARGIN", "tracking.orientation_switch_margin", 0.05)
+    )
+    orientation_switch_confirmations: int = int(
+        _env_or_config("TRACKING_ORIENTATION_SWITCH_CONFIRMATIONS", "tracking.orientation_switch_confirmations", 3)
+    )
+    orientation_strong_switch_confidence: float = float(
+        _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_CONFIDENCE", "tracking.orientation_strong_switch_confidence", 0.9)
+    )
+    orientation_strong_switch_margin: float = float(
+        _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_MARGIN", "tracking.orientation_strong_switch_margin", 0.2)
+    )
     export_json: bool = _as_bool(_env_or_config("TRACKING_EXPORT_JSON", "tracking.export_json", True), True)
 
 

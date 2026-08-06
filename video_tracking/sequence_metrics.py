@@ -17,6 +17,7 @@ import numpy as np
 
 
 KNOWN_REVIEW_STATES = {"reviewed", "approved", "confirmed"}
+ORIENTATION_CLASSES = ("horizontal", "normal", "not_applicable")
 
 
 def _load_json(path: Path) -> Any:
@@ -475,6 +476,76 @@ def _known_targets(annotation: dict[str, Any]) -> tuple[bool, list[float] | None
     return yoyo_known, bbox, string_known, lines
 
 
+def _orientation_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    known = [row for row in rows if row.get("target_orientation") in ORIENTATION_CLASSES]
+    recalls: dict[str, float | None] = {}
+    confusion: dict[str, dict[str, int]] = {}
+    for target in ORIENTATION_CLASSES:
+        class_rows = [row for row in known if row["target_orientation"] == target]
+        recalls[target] = (
+            round(
+                sum(row.get("predicted_orientation") == target for row in class_rows) / len(class_rows),
+                6,
+            )
+            if class_rows else None
+        )
+        confusion[target] = dict(sorted(Counter(
+            str(row.get("predicted_orientation") or "unknown") for row in class_rows
+        ).items()))
+
+    predicted_switches = target_switches = isolated_flips = 0
+    transition_latencies: list[int] = []
+    by_group: dict[str, list[dict[str, Any]]] = {}
+    for row in known:
+        by_group.setdefault(str(row.get("source_group") or "default"), []).append(row)
+    for group_rows in by_group.values():
+        group_rows.sort(key=lambda row: int(row["frame_index"]))
+        targets = [str(row["target_orientation"]) for row in group_rows]
+        predictions = [str(row.get("predicted_orientation") or "unknown") for row in group_rows]
+        target_switches += sum(left != right for left, right in zip(targets, targets[1:]))
+        predicted_switches += sum(left != right for left, right in zip(predictions, predictions[1:]))
+        isolated_flips += sum(
+            predictions[index - 1] == predictions[index + 1] != predictions[index]
+            and targets[index - 1] == targets[index] == targets[index + 1]
+            for index in range(1, len(group_rows) - 1)
+        )
+        transition_indices = [
+            index for index in range(1, len(group_rows)) if targets[index] != targets[index - 1]
+        ]
+        for transition_number, start in enumerate(transition_indices):
+            end = transition_indices[transition_number + 1] if transition_number + 1 < len(transition_indices) else len(group_rows)
+            recovered = next(
+                (index for index in range(start, end) if predictions[index] == targets[start]),
+                None,
+            )
+            if recovered is not None:
+                transition_latencies.append(
+                    int(group_rows[recovered]["frame_index"]) - int(group_rows[start]["frame_index"])
+                )
+
+    valid_recalls = [value for value in recalls.values() if value is not None]
+    correct = sum(row.get("predicted_orientation") == row["target_orientation"] for row in known)
+    return {
+        "known_frames": len(known),
+        "accuracy": round(correct / len(known), 6) if known else None,
+        "macro_recall": round(float(np.mean(valid_recalls)), 6) if valid_recalls else None,
+        "per_class_recall": recalls,
+        "confusion_predicted_by_target": confusion,
+        "unknown_prediction_frames": sum(not row.get("predicted_orientation") for row in known),
+        "temporal": {
+            "target_switch_count": target_switches,
+            "predicted_switch_count": predicted_switches,
+            "excess_switch_count": max(0, predicted_switches - target_switches),
+            "isolated_flip_count": isolated_flips,
+            "matched_transition_count": len(transition_latencies),
+            "mean_transition_latency_frames": (
+                round(float(np.mean(transition_latencies)), 4) if transition_latencies else None
+            ),
+            "max_transition_latency_frames": max(transition_latencies) if transition_latencies else None,
+        },
+    }
+
+
 def evaluate_sequence(
     dataset_dir: str | Path,
     predictions_path: str | Path,
@@ -554,6 +625,8 @@ def evaluate_sequence(
             ),
             "string_propagation_age_frames": int((prediction.get("string") or {}).get("propagation_age_frames") or 0),
             "bad_case": sorted(str(value) for value in (prediction.get("bad_case") or [])),
+            "target_orientation": annotation.get("trick_orientation"),
+            "predicted_orientation": (prediction.get("trick_orientation") or {}).get("label"),
         }
         if yoyo_known:
             row["yoyo_present_target"] = target_bbox is not None
@@ -599,7 +672,7 @@ def evaluate_sequence(
             "prediction_samples": prediction_samples,
         }
     result: dict[str, Any] = {
-        "schema_version": "yoyo_consecutive_tracking_metrics_v1",
+        "schema_version": "yoyo_consecutive_tracking_metrics_v2",
         "task": "consecutive_tracking_evaluation",
         "dataset_dir": str(dataset_dir),
         "ground_truth_snapshot": str(snapshot_path) if snapshot_path is not None else None,
@@ -613,6 +686,7 @@ def evaluate_sequence(
         "excluded_unknown": {
             "yoyo": len(rows) - len(yoyo_rows),
             "string": len(rows) - len(string_rows),
+            "orientation": sum(row.get("target_orientation") not in ORIENTATION_CLASSES for row in rows),
         },
         "yoyo": {
             "presence": _presence_summary(
@@ -672,6 +746,7 @@ def evaluate_sequence(
             "temporal_fusion_frames": sum(row["prediction_method"] == "temporal_fusion" for row in rows),
             "low_confidence_rescue_frames": sum(row["string_low_confidence_rescue"] for row in rows),
         },
+        "orientation": _orientation_metrics(rows),
         "experiments": {
             "yoyo_low_confidence_rescue_frames": sum(row["yoyo_low_confidence_rescue"] for row in rows),
             "string_low_confidence_rescue_frames": sum(row["string_low_confidence_rescue"] for row in rows),

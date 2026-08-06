@@ -34,7 +34,13 @@ from string_segmentation.semantic_model import (
     semantic_mask_observation,
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
-from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
+from video_tracking.orientation import (
+    OrientationTemporalFilter,
+    carry_orientation,
+    load_orientation_model,
+    orientation_observation_is_unstable,
+    predict_orientation,
+)
 from video_tracking.rtmpose_backend import (
     COCO_BODY_KEYPOINT_COUNT,
     DEFAULT_DETECTOR_PATH,
@@ -893,10 +899,15 @@ def _orientation_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     counts = Counter(str(value.get("label", "unknown")) for value in predictions)
     label = counts.most_common(1)[0][0]
     selected = [value for value in predictions if value.get("label") == label]
+    labels = [str(value.get("label", "unknown")) for value in predictions]
+    raw_labels = [str(value.get("raw_label", value.get("label", "unknown"))) for value in predictions]
     return {
         "label": label,
         "observed_frames": len(predictions),
         "label_counts": dict(sorted(counts.items())),
+        "switch_count": sum(left != right for left, right in zip(labels, labels[1:])),
+        "raw_switch_count": sum(left != right for left, right in zip(raw_labels, raw_labels[1:])),
+        "temporal_filter_enabled": any("temporal_filter" in value for value in predictions),
         "mean_confidence": round(
             sum(float(value.get("confidence", 0.0)) for value in selected) / max(1, len(selected)),
             6,
@@ -944,6 +955,16 @@ def track_video(
     enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
     orientation_imgsz: int = TRACKING_CONFIG.orientation_imgsz,
     orientation_inference_fps: float = TRACKING_CONFIG.orientation_inference_fps,
+    orientation_adaptive_inference: bool = TRACKING_CONFIG.orientation_adaptive_inference,
+    orientation_burst_inference_fps: float = TRACKING_CONFIG.orientation_burst_inference_fps,
+    orientation_adaptive_min_confidence: float = TRACKING_CONFIG.orientation_adaptive_min_confidence,
+    orientation_adaptive_stable_observations: int = TRACKING_CONFIG.orientation_adaptive_stable_observations,
+    orientation_temporal_filter: bool = TRACKING_CONFIG.orientation_temporal_filter,
+    orientation_ema_alpha: float = TRACKING_CONFIG.orientation_ema_alpha,
+    orientation_switch_margin: float = TRACKING_CONFIG.orientation_switch_margin,
+    orientation_switch_confirmations: int = TRACKING_CONFIG.orientation_switch_confirmations,
+    orientation_strong_switch_confidence: float = TRACKING_CONFIG.orientation_strong_switch_confidence,
+    orientation_strong_switch_margin: float = TRACKING_CONFIG.orientation_strong_switch_margin,
     export_json: bool = True,
     start_seconds: float = 0.0,
     max_frames: int = 0,
@@ -972,6 +993,12 @@ def track_video(
         raise ValueError("string_color_probability_min_fraction must be between 0 and 1")
     if float(orientation_inference_fps) < 0.0:
         raise ValueError("orientation_inference_fps must be non-negative")
+    if float(orientation_burst_inference_fps) < 0.0:
+        raise ValueError("orientation_burst_inference_fps must be non-negative")
+    if not 0.0 <= float(orientation_adaptive_min_confidence) <= 1.0:
+        raise ValueError("orientation_adaptive_min_confidence must be between 0 and 1")
+    if int(orientation_adaptive_stable_observations) < 1:
+        raise ValueError("orientation_adaptive_stable_observations must be positive")
     source_video_path, weights_path, output_dir = Path(source_video_path), Path(weights_path), Path(output_dir)
     if not source_video_path.exists():
         raise FileNotFoundError(f"Video file not found: {source_video_path}")
@@ -1000,6 +1027,17 @@ def track_video(
         resolved_orientation_weights,
         enable_orientation_model,
     )
+    orientation_filter_state = (
+        OrientationTemporalFilter(
+            ema_alpha=orientation_ema_alpha,
+            switch_margin=orientation_switch_margin,
+            switch_confirmations=orientation_switch_confirmations,
+            strong_switch_confidence=orientation_strong_switch_confidence,
+            strong_switch_margin=orientation_strong_switch_margin,
+        )
+        if orientation_model is not None and orientation_temporal_filter
+        else None
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     run_dir = output_dir / f"{source_video_path.stem}_{run_id}"
@@ -1013,6 +1051,7 @@ def track_video(
     string_inference_interval = _inference_interval_frames(fps, string_inference_fps)
     unanchored_semantic_grace_frames = max(2, int(round(fps * 0.25)))
     orientation_inference_interval = _inference_interval_frames(fps, orientation_inference_fps)
+    orientation_burst_interval = _inference_interval_frames(fps, orientation_burst_inference_fps)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     output_width, output_height = _visualization_size(width, height, visualization_max_width)
@@ -1058,6 +1097,10 @@ def track_video(
     orientation_inference_frames = 0
     last_orientation: dict[str, Any] | None = None
     last_orientation_frame: int | None = None
+    next_orientation_processed_frame = 0
+    orientation_stable_observation_count = 0
+    orientation_current_interval = orientation_burst_interval
+    orientation_burst_inference_frames = 0
     metadata_file = open(json_path, "w", encoding="utf-8") if export_json else None
     loop_started = time.perf_counter()
     while True:
@@ -1235,17 +1278,22 @@ def track_video(
                 current_gray=current_gray,
             )
         scheduled_orientation_inference = bool(
-            orientation_model is not None and processed_frames % orientation_inference_interval == 0
+            orientation_model is not None and processed_frames >= next_orientation_processed_frame
         )
         orientation_inference_error = None
         if scheduled_orientation_inference:
             try:
-                trick_orientation = predict_orientation(
+                raw_orientation = predict_orientation(
                     orientation_model,
                     frame,
                     yoyo,
                     orientation_imgsz,
                     device,
+                )
+                trick_orientation = (
+                    orientation_filter_state.update(raw_orientation)
+                    if raw_orientation is not None and orientation_filter_state is not None
+                    else raw_orientation
                 )
             except Exception as exc:
                 logger.warning("Orientation inference failed at frame %s: %s", frame_index, exc)
@@ -1253,6 +1301,25 @@ def track_video(
                 age = frame_index - last_orientation_frame if last_orientation_frame is not None else 0
                 trick_orientation = carry_orientation(last_orientation, age)
             orientation_inference_frames += 1
+            adaptive_unstable = orientation_observation_is_unstable(
+                trick_orientation,
+                orientation_adaptive_min_confidence,
+                inference_error=orientation_inference_error is not None,
+            )
+            if orientation_adaptive_inference:
+                orientation_stable_observation_count = (
+                    0 if adaptive_unstable else orientation_stable_observation_count + 1
+                )
+                use_burst = orientation_stable_observation_count < int(
+                    orientation_adaptive_stable_observations
+                )
+                orientation_current_interval = (
+                    orientation_burst_interval if use_burst else orientation_inference_interval
+                )
+                orientation_burst_inference_frames += int(use_burst)
+            else:
+                orientation_current_interval = orientation_inference_interval
+            next_orientation_processed_frame = processed_frames + orientation_current_interval
             if trick_orientation is not None:
                 last_orientation = trick_orientation
                 last_orientation_frame = frame_index
@@ -1318,7 +1385,14 @@ def track_video(
                     else "disabled_or_unavailable"
                 ),
                 "target_fps": float(orientation_inference_fps),
-                "interval_frames": int(orientation_inference_interval),
+                "burst_fps": float(orientation_burst_inference_fps),
+                "adaptive": bool(orientation_adaptive_inference),
+                "adaptive_burst": bool(
+                    orientation_adaptive_inference
+                    and orientation_current_interval == orientation_burst_interval
+                ),
+                "interval_frames": int(orientation_current_interval),
+                "stable_observation_count": int(orientation_stable_observation_count),
                 "error_type": orientation_inference_error,
             },
             "yoyo_model_inference": {
@@ -1515,6 +1589,17 @@ def track_video(
             "orientation_imgsz": int(orientation_imgsz),
             "orientation_inference_fps": float(orientation_inference_fps),
             "orientation_inference_interval_frames": int(orientation_inference_interval),
+            "orientation_adaptive_inference": bool(orientation_adaptive_inference),
+            "orientation_burst_inference_fps": float(orientation_burst_inference_fps),
+            "orientation_burst_inference_interval_frames": int(orientation_burst_interval),
+            "orientation_adaptive_min_confidence": float(orientation_adaptive_min_confidence),
+            "orientation_adaptive_stable_observations": int(orientation_adaptive_stable_observations),
+            "orientation_temporal_filter": bool(orientation_temporal_filter),
+            "orientation_ema_alpha": float(orientation_ema_alpha),
+            "orientation_switch_margin": float(orientation_switch_margin),
+            "orientation_switch_confirmations": int(orientation_switch_confirmations),
+            "orientation_strong_switch_confidence": float(orientation_strong_switch_confidence),
+            "orientation_strong_switch_margin": float(orientation_strong_switch_margin),
             "start_seconds": start_seconds,
             "max_frames": max_frames,
         },
@@ -1524,6 +1609,7 @@ def track_video(
         "string_adaptive_activation_frame": string_adaptive_activation_frame,
         "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
+        "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
         "orientation_summary": _orientation_summary(records),
         "performance": {
             "tracking_loop_seconds": round(loop_seconds, 4),
@@ -1580,6 +1666,7 @@ def track_video(
         "string_adaptive_activation_frame": string_adaptive_activation_frame,
         "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
+        "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
         "orientation_summary": _orientation_summary(records),
         "tracking_loop_seconds": round(loop_seconds, 4),
         "tracking_loop_fps": round(loop_fps, 4),
@@ -1707,6 +1794,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.orientation_inference_fps,
         help="Target coarse-orientation classifier cadence; 0 runs it on every frame.",
     )
+    parser.add_argument("--no-orientation-adaptive-inference", action="store_true")
+    parser.add_argument(
+        "--orientation-burst-inference-fps",
+        type=float,
+        default=TRACKING_CONFIG.orientation_burst_inference_fps,
+    )
+    parser.add_argument(
+        "--orientation-adaptive-min-confidence",
+        type=float,
+        default=TRACKING_CONFIG.orientation_adaptive_min_confidence,
+    )
+    parser.add_argument(
+        "--orientation-adaptive-stable-observations",
+        type=int,
+        default=TRACKING_CONFIG.orientation_adaptive_stable_observations,
+    )
+    parser.add_argument("--no-orientation-temporal-filter", action="store_true")
+    parser.add_argument("--orientation-ema-alpha", type=float, default=TRACKING_CONFIG.orientation_ema_alpha)
+    parser.add_argument("--orientation-switch-margin", type=float, default=TRACKING_CONFIG.orientation_switch_margin)
+    parser.add_argument(
+        "--orientation-switch-confirmations",
+        type=int,
+        default=TRACKING_CONFIG.orientation_switch_confirmations,
+    )
+    parser.add_argument(
+        "--orientation-strong-switch-confidence",
+        type=float,
+        default=TRACKING_CONFIG.orientation_strong_switch_confidence,
+    )
+    parser.add_argument(
+        "--orientation-strong-switch-margin",
+        type=float,
+        default=TRACKING_CONFIG.orientation_strong_switch_margin,
+    )
     parser.add_argument("--no-json", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--start-seconds", type=float, default=0.0)
@@ -1763,6 +1884,16 @@ def main() -> int:
         enable_orientation_model=not args.no_orientation_model,
         orientation_imgsz=args.orientation_imgsz,
         orientation_inference_fps=args.orientation_inference_fps,
+        orientation_adaptive_inference=not args.no_orientation_adaptive_inference,
+        orientation_burst_inference_fps=args.orientation_burst_inference_fps,
+        orientation_adaptive_min_confidence=args.orientation_adaptive_min_confidence,
+        orientation_adaptive_stable_observations=args.orientation_adaptive_stable_observations,
+        orientation_temporal_filter=not args.no_orientation_temporal_filter,
+        orientation_ema_alpha=args.orientation_ema_alpha,
+        orientation_switch_margin=args.orientation_switch_margin,
+        orientation_switch_confirmations=args.orientation_switch_confirmations,
+        orientation_strong_switch_confidence=args.orientation_strong_switch_confidence,
+        orientation_strong_switch_margin=args.orientation_strong_switch_margin,
         export_json=not args.no_json,
         start_seconds=args.start_seconds,
         max_frames=args.max_frames,

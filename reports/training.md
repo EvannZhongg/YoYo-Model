@@ -1,4 +1,4 @@
-# 悠悠球模型与追踪报告：2026-08-06
+# 悠悠球模型与追踪报告：2026-08-07
 
 本报告只覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。所有训练、评估和测试均在 `.venv` 中执行；`runs/` 中保留 checkpoint、manifest 和评估 JSON，模型文件使用 SHA-256 标识。
 
@@ -125,6 +125,32 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 权重 SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。正式 test 结果位于同一 run 的 `test_metrics.json`，数据集 manifest 与 checkpoint 完全匹配。
 
+### 连续帧方向稳定化
+
+单帧权重和 ROI 保持不变；本轮只优化连续视频中的因果时序推理。评估直接使用 `datasets/1Ayoyo_consecutive` 的 6 组 reviewed 标注、552 帧和 reviewed yoyo box，避免 detector 框误差污染方向策略比较。晋升门槛要求 pooled accuracy、Macro recall、每组 accuracy 均不下降，并且预测切换数不增加。
+
+| 运行路径 | 方向推理次数 | Accuracy | Macro recall | 预测切换 | 超额切换 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 旧默认：固定 5 FPS、直接 carry | 57 | 0.882246 | 0.850290 | 13 | 9 |
+| 消融：固定 25 FPS、无滤波 | 277 | 0.894928 | 0.860006 | 37 | 33 |
+| **当前默认：5/25 FPS 自适应 + EMA/滞回** | **117** | **0.942029** | **0.922041** | **5** | **1** |
+
+固定提高采样率虽然略增准确率，却把切换数放大到 37，因此没有保留为候选。当前默认使用以下因果策略：
+
+- 三类概率 EMA `alpha=0.4`；候选类相对当前类至少领先 `0.05`，连续 3 次确认后切换。
+- 当候选类置信度至少 `0.9` 且相对当前类领先 `0.2` 时允许快速切换。
+- 稳定状态保持 5 FPS；初始化、低于 `0.5` 置信度、原始/稳定标签冲突、待确认或刚切换时升到 25 FPS，连续 4 次稳定后回到 5 FPS。
+- 六组序列 accuracy 逐组均未下降；pooled recall 从 horizontal/normal/not_applicable `0.710059/0.965812/0.875000` 提升为 `0.834320/0.994302/0.937500`。
+
+真实 detector 框 A/B 使用 DSCF7145 的 95 帧双边界片段。旧路径方向推理 10 次，当前自适应路径 21 次，其中 14 次处于 burst：
+
+| 路径 | Accuracy | Macro recall | 平均/最大边界延迟 | 输出切换 | tracking loop FPS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 旧 5 FPS | 0.947368 | 0.935988 | 2.5 / 3 帧 | 2 | 6.9078 |
+| **自适应 EMA/滞回** | **0.968421** | **0.968246** | **1.5 / 2 帧** | **2** | 6.8767 |
+
+两次运行的悠悠球 presence、定位和运动指标完全一致；在关闭 pose 和语义绳模型的同配置 tracking loop 中，自适应方向的吞吐差为 `0.45%`。正式离线证据位于 `runs/experiments/orientation_temporal_adaptive_repro_20260807/metrics.json`，真实视频证据位于 `runs/experiments/orientation_runtime_ab/`。Workbench 默认继续使用上述最新方向权重，并自动启用自适应滤波。
+
 ## RTMPose 运行时评估
 
 30 帧连续视频 smoke test 使用项目内 RTMPose-m WholeBody 与 YOLOX-m ONNX 模型：
@@ -141,7 +167,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 ## 验证状态
 
 - `compileall` 通过。
-- `pytest -q`：140 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
+- `pytest -q`：147 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
 - 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令
@@ -151,5 +177,6 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 .\.venv\Scripts\python.exe -m training_v3.strip_pose_annotations
 .\.venv\Scripts\python.exe -m training_v3.orientation_view --dataset-dir datasets\1Ayoyo_dataset --clear
 .\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1 --device 0
+.\.venv\Scripts\python.exe -m cli.tracking.evaluate_orientation --output-dir runs\experiments\orientation_temporal_adaptive_20260807 --device 0
 .\.venv\Scripts\python.exe -m pytest -q
 ```
