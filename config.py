@@ -233,9 +233,6 @@ class TrackingConfig:
     string_flow_fb_max_error: float = float(
         _env_or_config("TRACKING_STRING_FLOW_FB_MAX_ERROR", "tracking.string_flow_fb_max_error", 4.0)
     )
-    string_fusion_distance_px: float = float(
-        _env_or_config("TRACKING_STRING_FUSION_DISTANCE_PX", "tracking.string_fusion_distance_px", 48.0)
-    )
     yoyo_division: str = str(
         _env_or_config("TRACKING_YOYO_DIVISION", "tracking.yoyo_division", "1A")
     )

@@ -55,7 +55,7 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 ## 连续视频追踪
 
-连续帧评估使用 reviewed yoyo box 隔离绳线几何，不混入 detector 定位误差。当前 Pipeline 为：双模型校准融合、概率门控颜色/Hough 补线、观测优先时序、Lucas-Kanade 缺帧传播和最近悠悠球上下文宽限。
+连续帧评估使用 reviewed yoyo box 隔离绳线几何，不混入 detector 定位误差。当前 Pipeline 为：双模型校准融合、概率门控颜色/Hough 补线、观测优先时序、仅在无新鲜观测时执行的 Lucas-Kanade 缺帧传播，以及最近悠悠球上下文宽限。
 
 | sequence | pipeline | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -106,6 +106,8 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 颜色补线的语义参考线重采样已从逐 Hough 候选移到逐帧执行。真实 4K 帧的颜色观测微基准由 `161.6 ms` 降到 `141.8 ms`；454 帧五段评估墙钟时间由 `83.8 s` 降到 `79.4 s`。前三段及池高宇前场的 `frames.jsonl` SHA-256 与优化前一致，先前被同名文件覆盖的 67 帧池高宇区间则验证全部汇总指标对象一致。30 帧无 pose 对照的 JSONL 逐字节一致，跟踪循环由 `17.36 s` 降到 `13.15 s`；证据位于 `runs/experiments/semantic_adaptive_current_454_color_reference_hoist/` 和 `runs/experiments/workbench_color_reference_hoist_smoke/`。
 
 进一步等价优化移除了 Hough 每个候选的临时端点数组和重复范数计算，四个端点距离只计算一次；同时跟踪器和连续评估复用当前帧灰度图，不再在光流估计后重复转换 4K 帧。真实帧 20 次颜色观测微基准的中位耗时由 `172.2 ms` 降到 `161.4 ms`，输出 SHA-256 一致。同机 30 帧无 pose/方向严格 A/B 为 `11.87 s -> 11.35 s`（约 `4.4%`），JSONL 逐字节一致；454 帧完整评估由 `79.4 s` 降到 `75.8 s`（约 `4.5%`），五个 `frames.jsonl` 全部逐字节一致，五份 metrics 除输出目录路径外无差异。证据位于 `runs/experiments/workbench_scalar_gray_ab_baseline/`、`runs/experiments/workbench_scalar_gray_ab_candidate/` 和 `runs/experiments/semantic_adaptive_scalar_gray_reuse_454/`。
+
+最新流程将 Lucas-Kanade 从“每帧先计算、仅在缺观测时采用”改为真正的按需缺帧传播：有新鲜语义/颜色观测时直接保留观测，无观测时才执行前后向光流。扩展后的 6 组 552 帧严格 A/B 中，六组完整指标对象和逐帧绳线几何字段全部一致，墙钟时间由 `108.6057 s` 降至 `85.9556 s`（约 `20.86%`）。仅移除了 88 帧不参与几何输出的观测/光流分歧审核字段；对应的无作用 `fusion_distance` 配置、CLI 参数和 bad-case 分支也已删除。默认 30 帧视频 smoke 的悠悠球、绳线几何和方向输出同样逐帧一致，tracking loop 为 `24.2451 s -> 14.6973 s`（`1.2374 -> 2.0412 FPS`），且所有 MP4/JSONL/审核产物成功生成。证据位于 `runs/experiments/semantic_flow_defer_ab_baseline/`、`runs/experiments/semantic_flow_defer_ab_candidate/` 和 `runs/experiments/flow_defer_default_smoke/`。
 
 连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。
 

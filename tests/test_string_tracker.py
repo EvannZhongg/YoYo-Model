@@ -50,7 +50,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 "video_tracking.string_tracker._resample_polyline",
                 wraps=_resample_polyline,
             ) as resample,
-            patch("video_tracking.string_tracker._orient_like") as orient,
         ):
             result = _color_line_observation(
                 frame,
@@ -61,7 +60,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(resample.call_count, 1)
-        self.assertEqual(orient.call_count, 0)
 
     def test_estimate_string_reuses_precomputed_current_gray(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -72,13 +70,21 @@ class StringTrackerTemporalTests(unittest.TestCase):
             "method": "semantic_segmentation",
         }
 
-        with patch("video_tracking.string_tracker.cv2.cvtColor") as convert:
+        previous_string = {
+            "points": [[18.0, 20.0], [78.0, 60.0]],
+            "confidence": 0.7,
+            "method": "semantic_segmentation",
+        }
+        with (
+            patch("video_tracking.string_tracker.cv2.cvtColor") as convert,
+            patch("video_tracking.string_tracker._propagate_string_geometry") as propagate,
+        ):
             result = estimate_string(
                 frame,
                 None,
                 [],
-                None,
-                None,
+                current_gray,
+                previous_string,
                 observation=observation,
                 allow_unanchored_semantic=True,
                 current_gray=current_gray,
@@ -86,6 +92,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         convert.assert_not_called()
+        propagate.assert_not_called()
 
     def test_adaptive_domain_gate_rejects_strong_or_near_observations(self):
         for confidence, distance in ((0.90, 100.0), (0.75, 20.0)):
@@ -665,7 +672,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["method"], "yolo_segmentation")
         self.assertEqual(result["propagation_age_frames"], 0)
-        self.assertTrue(result["temporal_consistent"])
+        self.assertNotIn("temporal_consistent", result)
         self.assertEqual(result["points"], [[41, 90], [151, 90]])
 
     def test_string_can_persist_without_yoyo_as_review_case(self):

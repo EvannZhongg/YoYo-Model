@@ -949,7 +949,6 @@ def track_video(
     string_color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
-    string_fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
     yoyo_division: str = TRACKING_CONFIG.yoyo_division,
     orientation_weights_path: str | Path | None = None,
     enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
@@ -1232,7 +1231,6 @@ def track_video(
             observation=model_string,
             max_propagation_frames=string_max_propagation_frames,
             max_forward_backward_error=string_flow_fb_max_error,
-            fusion_distance_px=string_fusion_distance_px,
             # A loaded segmentation model returning no component is negative
             # evidence. Do not replace it with a weaker HSV/Hough proposal.
             allow_color_fallback=string_model is None,
@@ -1272,7 +1270,6 @@ def track_video(
                 observation=model_string,
                 max_propagation_frames=string_max_propagation_frames,
                 max_forward_backward_error=string_flow_fb_max_error,
-                fusion_distance_px=string_fusion_distance_px,
                 allow_color_fallback=False,
                 allow_unanchored_semantic=allow_unanchored_semantic,
                 current_gray=current_gray,
@@ -1342,8 +1339,6 @@ def track_video(
                 flags.append("string_low_confidence")
             if not yoyo:
                 flags.append("string_without_yoyo")
-            if string.get("temporal_conflict"):
-                flags.append("string_temporal_conflict")
             if string.get("spatially_ambiguous"):
                 flags.append("string_spatially_ambiguous")
             if string.get("hand_anchor_mismatch"):
@@ -1581,7 +1576,6 @@ def track_video(
             "string_color_probability_min_fraction": float(string_color_probability_min_fraction),
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
-            "string_fusion_distance_px": float(string_fusion_distance_px),
             "string_unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
             "yoyo_division": yoyo_division,
             "orientation_model_enabled": bool(enable_orientation_model),
@@ -1779,7 +1773,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--string-max-propagation-frames", type=int, default=TRACKING_CONFIG.string_max_propagation_frames)
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
-    parser.add_argument("--string-fusion-distance-px", type=float, default=TRACKING_CONFIG.string_fusion_distance_px)
     parser.add_argument(
         "--yoyo-division",
         choices=["1A", "2A", "3A", "4A", "5A"],
@@ -1878,7 +1871,6 @@ def main() -> int:
         string_color_probability_min_fraction=args.string_color_probability_min_fraction,
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
-        string_fusion_distance_px=args.string_fusion_distance_px,
         yoyo_division=args.yoyo_division,
         orientation_weights_path=args.orientation_weights,
         enable_orientation_model=not args.no_orientation_model,

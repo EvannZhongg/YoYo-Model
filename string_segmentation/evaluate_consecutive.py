@@ -74,7 +74,6 @@ def evaluate_consecutive_checkpoint(
     temporal: bool = False,
     max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
-    fusion_distance_px: float = TRACKING_CONFIG.string_fusion_distance_px,
     unanchored_semantic_grace_frames: int = 12,
     ensemble_weights: Path | None = None,
     ensemble_alpha: float = 0.0,
@@ -257,7 +256,6 @@ def evaluate_consecutive_checkpoint(
                     observation=final_string,
                     max_propagation_frames=max(0, int(max_propagation_frames)),
                     max_forward_backward_error=max_forward_backward_error,
-                    fusion_distance_px=fusion_distance_px,
                     allow_color_fallback=False,
                     allow_unanchored_semantic=allow_unanchored_semantic,
                     current_gray=current_gray,
@@ -326,7 +324,6 @@ def evaluate_consecutive_checkpoint(
         "temporal": bool(temporal),
         "max_propagation_frames": int(max_propagation_frames),
         "max_forward_backward_error": float(max_forward_backward_error),
-        "fusion_distance_px": float(fusion_distance_px),
         "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
         "ensemble_weights": str(ensemble_weights) if ensemble_weights is not None else "",
         "ensemble_weights_sha256": (
@@ -369,11 +366,6 @@ def main() -> int:
         type=float,
         default=TRACKING_CONFIG.string_flow_fb_max_error,
     )
-    parser.add_argument(
-        "--fusion-distance-px",
-        type=float,
-        default=TRACKING_CONFIG.string_fusion_distance_px,
-    )
     parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
     parser.add_argument("--ensemble-weights", default="")
     parser.add_argument("--ensemble-alpha", type=float, default=0.0)
@@ -398,7 +390,6 @@ def main() -> int:
         temporal=args.temporal,
         max_propagation_frames=args.max_propagation_frames,
         max_forward_backward_error=args.max_forward_backward_error,
-        fusion_distance_px=args.fusion_distance_px,
         unanchored_semantic_grace_frames=args.unanchored_semantic_grace_frames,
         ensemble_weights=Path(args.ensemble_weights) if str(args.ensemble_weights).strip() else None,
         ensemble_alpha=args.ensemble_alpha,

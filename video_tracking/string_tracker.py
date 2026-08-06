@@ -85,15 +85,6 @@ def _resample_polyline(points: list[list[float]], count: int) -> np.ndarray:
     ).astype(np.float32)
 
 
-def _orient_like(points: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    """Resolve the endpoint ordering ambiguity before fusing two polylines."""
-    if len(points) != len(reference) or len(points) == 0:
-        return points
-    direct = float(np.linalg.norm(points[0] - reference[0]) + np.linalg.norm(points[-1] - reference[-1]))
-    reversed_distance = float(np.linalg.norm(points[0] - reference[-1]) + np.linalg.norm(points[-1] - reference[0]))
-    return points[::-1].copy() if reversed_distance < direct else points
-
-
 def _color_line_observation(
     frame: np.ndarray,
     yoyo: dict[str, Any],
@@ -451,20 +442,6 @@ def _annotate_hand_anchor(
     return result
 
 
-def _temporal_disagreement(
-    observation: dict[str, Any],
-    propagated: dict[str, Any],
-) -> float | None:
-    observation_points = observation.get("points") or []
-    propagated_points = propagated.get("points") or []
-    if len(observation_points) < 2 or len(propagated_points) < 2:
-        return None
-    count = max(2, min(16, max(len(observation_points), len(propagated_points))))
-    observed = _resample_polyline(observation_points, count)
-    flow = _orient_like(_resample_polyline(propagated_points, count), observed)
-    return float(np.mean(np.linalg.norm(observed - flow, axis=1)))
-
-
 def estimate_string(
     frame: np.ndarray,
     yoyo: dict[str, Any] | None,
@@ -475,7 +452,6 @@ def estimate_string(
     observation: dict[str, Any] | None = None,
     max_propagation_frames: int = 12,
     max_forward_backward_error: float = 4.0,
-    fusion_distance_px: float = 48.0,
     allow_color_fallback: bool = True,
     allow_unanchored_semantic: bool = False,
     current_gray: np.ndarray | None = None,
@@ -487,8 +463,11 @@ def estimate_string(
     def finalize(result: dict[str, Any]) -> dict[str, Any]:
         return _annotate_hand_anchor(result, wrists, yoyo_division, width, height)
 
+    observed = _annotate_observation(observation) if observation is not None else None
     propagated = None
-    if previous_string and previous_string.get("points"):
+    # Fresh model/color geometry is authoritative. Optical flow is only useful
+    # when the current frame has no observation to carry across the gap.
+    if observed is None and previous_string and previous_string.get("points"):
         previous_age = int(previous_string.get("propagation_age_frames", 0))
         if previous_age < max(0, int(max_propagation_frames)):
             propagated = _propagate_string_geometry(
@@ -502,9 +481,6 @@ def estimate_string(
             )
             if propagated is not None:
                 propagated = _annotate_observation(propagated, previous_age + 1)
-    observed = None
-    if observation is not None:
-        observed = _annotate_observation(observation)
     if observed is None and yoyo is not None and allow_color_fallback:
         color_observation = _color_line_observation(
             frame,
@@ -528,16 +504,6 @@ def estimate_string(
         and str(observed.get("method", "")) == "semantic_segmentation"
     ):
         observed = None
-    if observed is not None and propagated is not None:
-        disagreement = _temporal_disagreement(observed, propagated)
-        observed = dict(observed)
-        if disagreement is not None:
-            observed["fusion_disagreement_px"] = round(disagreement, 3)
-            observed["temporal_consistent"] = disagreement <= max(1.0, float(fusion_distance_px))
-            observed["temporal_conflict"] = not observed["temporal_consistent"]
-            observed["flow_forward_backward_error"] = propagated.get("flow_forward_backward_error")
-            observed["temporal_reference_method"] = propagated.get("method")
-        return finalize(observed)
     if observed is not None:
         return finalize(observed)
     if propagated is not None:

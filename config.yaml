@@ -90,9 +90,6 @@ tracking:
   # gap and reject optical-flow drift with forward/backward consistency.
   string_max_propagation_frames: 12
   string_flow_fb_max_error: 4.0
-  # Legacy key name: now used as the observation-vs-flow consistency limit;
-  # fresh semantic geometry is not averaged with optical flow.
-  string_fusion_distance_px: 48.0
   # Competition division metadata; it does not force a hand/yoyo connection.
   # Consecutive annotations contain multiple visible centerline components and
   # do not assert that every component touches the yoyo or a visible wrist.

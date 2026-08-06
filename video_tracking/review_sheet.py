@@ -13,7 +13,6 @@ import numpy as np
 
 PRIORITY_BAD_CASES = (
     "string_hand_anchor_mismatch",
-    "string_temporal_conflict",
     "string_tracking_lost",
     "pose_identity_needs_review",
 )
