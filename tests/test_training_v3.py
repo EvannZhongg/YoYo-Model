@@ -11,10 +11,23 @@ from training_v3.orientation_view import _crop_box
 from training_v3.strip_pose_annotations import _content_digest, _digest_without_pose, strip_pose_fields
 from video_tracking.rtmpose_backend import WholebodyPrediction, _rtmlib_device, hand_landmarks
 from config import TRACKING_CONFIG
-from video_tracking.tracker import _predict_pose, parse_args
+from video_tracking.tracker import _hash_run_inputs, _predict_pose, parse_args
 
 
 class TrainingV3Tests(unittest.TestCase):
+    def test_run_input_hashing_preserves_empty_optional_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.bin"
+            path.write_bytes(b"abc")
+
+            result = _hash_run_inputs({"present": path, "disabled": None})
+
+        self.assertEqual(
+            result["present"],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        )
+        self.assertEqual(result["disabled"], "")
+
     def test_tracking_cli_pose_defaults_to_config_and_supports_explicit_disable(self):
         self.assertFalse(TRACKING_CONFIG.enable_pose)
         self.assertEqual(parse_args(["input.mp4"]).pose, TRACKING_CONFIG.enable_pose)
@@ -25,6 +38,11 @@ class TrainingV3Tests(unittest.TestCase):
         self.assertFalse(
             parse_args(["input.mp4", "--no-string-color-semantic-prefilter"])
             .string_color_semantic_prefilter
+        )
+        self.assertTrue(parse_args(["input.mp4"]).parallel_run_input_hashing)
+        self.assertFalse(
+            parse_args(["input.mp4", "--no-parallel-run-input-hashing"])
+            .parallel_run_input_hashing
         )
 
     def test_orientation_crop_ignores_hands_and_string_geometry(self):
