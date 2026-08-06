@@ -40,14 +40,9 @@ tracking:
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7
-  # YOLO11s was selected on the frozen test and four-sequence A/B. 1024 px
+  # YOLO11s was selected on the frozen test and five-sequence evaluation. 1024 px
   # retains the small-target gain while reducing inference cost versus 1280.
   imgsz: 1024
-  # The stronger YOLO11s regular prediction made TTA unnecessary: on 334
-  # reviewed frames TTA added false positives and reduced F1.
-  yoyo_tta_rescue: false
-  yoyo_tta_trigger_confidence: 0.50
-  yoyo_tta_min_confidence: 0.40
   device: ""
   trace_length: 30
   line_thickness: 2

@@ -18,7 +18,8 @@
 - 权重 SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`；YOLO11s，约 9.4M 参数。
 - 当前扩展 test（65 张、57 个正样本）重评估为 Precision `0.9522`、Recall `0.8596`、mAP50 `0.9415`、mAP50-95 `0.5425`，固定 yoyo recall `0.8772`；结果位于候选目录的 `test_metrics_external_14e51d6c595f.json`。原生 60 张 test 的 mAP50-95 为 `0.5411`，扩展后保持稳定。
 - Workbench 默认输入尺寸为 `1024`。候选在 1280 的单图推理约 `12.1 ms`，降到 1024 约 `8.9 ms`；1024 test 仍为 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`，仍超过旧生产模型。
-- 1024 常规推理在 454 帧五段连续审核区间上 pooled Precision `1.0`、Recall `0.9905`、F1 `0.9952`、mean IoU `0.8372`；关闭 TTA 的 detector-only 汇总速度约 `5.97 FPS`。旧四段实验中 TTA 只额外恢复 1 帧却引入 3 个误检，因此生产默认 `yoyo_tta_rescue=false`。
+- 1024 常规推理在 454 帧五段连续审核区间上 pooled Precision `1.0`、Recall `0.990544`、F1 `0.995249`、mean IoU `0.837197`，detector-only 汇总速度约 `5.9737 FPS`。
+- 当前 YOLO11s 的五段严格 A/B 中，低置信度 TTA 共尝试 41 帧、接受 9 帧，只净增 1 个 TP，却引入 3 个 FP；pooled Precision/Recall/F1 均为 `0.992908`，速度降到 `5.7466 FPS`。其 F1 和速度均低于常规推理，运行时 TTA 组件、配置、CLI 和元数据字段已全部移除。
 - 训练运行：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/run_manifest.json`；最佳 epoch `16`，训练因 15 epoch 无改善于 epoch `31` 早停。`config.yaml`、`config.py` 和 Workbench 视频测试均已切换到该模型与 1024 输入。
 
 当前 detector-only 连续帧复验（reviewed yoyo box）：
@@ -117,23 +118,6 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。
 
-同一四组 source-video 区间还用于 detector/TTA 的正式 A/B。baseline 与 cascade 除 TTA rescue 外参数完全一致，绳线、pose 和方向模型均关闭；评估直接对齐 reviewed yoyo box。
-
-| sequence | mode | presence recall | mean IoU | p95 center error | longest miss | ID switches |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 周博文，72 帧 | baseline | 0.944444 | 0.763842 | 94.3947 px | 2 | 1 |
-| 周博文，72 帧 | cascade | **0.958333** | **0.767245** | **89.7593 px** | 2 | 1 |
-| 唐浩翔，100 帧 | baseline | 1.000000 | 0.822435 | 7.5581 px | 0 | 0 |
-| 唐浩翔，100 帧 | cascade | 1.000000 | 0.822435 | 7.5581 px | 0 | 0 |
-| DSCF7145，95 帧 | baseline | 0.609375 | 0.785900 | 52.9159 px | 14 | 0 |
-| DSCF7145，95 帧 | cascade | **0.890625** | **0.841259** | **11.2817 px** | **4** | 1 |
-| 池高宇，67 帧 | baseline | 1.000000 | 0.756096 | 46.8398 px | 0 | 0 |
-| 池高宇，67 帧 | cascade | 1.000000 | **0.776846** | **40.0224 px** | 0 | 0 |
-
-四组 pooled：presence precision 保持 `1.0`，recall `0.904290 -> 0.966997`，F1 `0.949740 -> 0.983221`，mean IoU `0.786472 -> 0.802675`，IoU50 rate `0.941606 -> 0.959044`，p95 center error `35.7026 -> 25.4175 px`，最长缺失 `14 -> 4` 帧。ID switch 总数 `1 -> 2`，来自 DSCF 新恢复区间；同时有效 track-id 帧数 `237 -> 274`。周博文新增一个较低 IoU 的有效匹配，单序列 IoU50 rate `0.926471 -> 0.913043`，但 recall、mean IoU 和 p95 center error 均改善，不构成实质回退。
-
-以上旧 detector/TTA cascade 是上一代模型的历史证据；当前 YOLO11s 晋升的同口径常规 detector-only 复验见上方检测节，正式产物位于 `runs/experiments/det_s_candidate_1024_*`。旧证据保留用于说明 TTA 策略为何被新模型移除。
-
 ## 三分类方向识别
 
 当前生产权重：`runs/candidates/yoyo_unified_582cde69ebb8_orientation_roi_d88241f08b82_best_nyyc36-warm-freeze10-lr1e4-v1/weights/best.pt`。
@@ -145,15 +129,15 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 ## 默认 Workbench 视频 smoke test
 
-使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以 YOLO11s 1024 默认 detector、关闭 TTA、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
+使用 `videos/NYPC1A/NYPC 嘉宾表演 周博文.mp4` 的连续审核区间，以 YOLO11s 1024 默认 detector、双绳模型、pose、概率门控补线和方向模型运行 30 帧。产物位于：
 
-`runs/experiments/workbench_scalar_gray_full_smoke/NYPC 嘉宾表演 周博文_20260805T180359Z_7e94d4fc/`
+`runs/experiments/workbench_no_tta_component_full_smoke/NYPC 嘉宾表演 周博文_20260806T034532Z_032d605c/`
 
 - MP4、逐帧 JSONL、审核图和 `run.json` 均成功生成。
-- `run.json` 记录 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、pose 权重 SHA-256 `869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0`、`imgsz=1024`、`yoyo_tta_rescue=false`，以及 `string_model_kind=semantic_adaptive_ensemble`。
+- `run.json` 记录 detector 权重 SHA-256 `ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`、pose 权重 SHA-256 `869e83fcdffdc7371fa4e34cd8e51c838cc729571d1635e5141e3075e9319dc0`、`imgsz=1024`，以及 `string_model_kind=semantic_adaptive_ensemble`；运行 manifest 和逐帧记录均不再包含 TTA 字段。
 - `string_ensemble_alpha=0.3`、融合候选阈值 `0.5`、颜色概率门控、最多 12 帧光流传播和 15 帧最近悠悠球上下文宽限均启用。
 - pose 成功启用；绳线模型执行 30 帧，方向模型按 cadence 执行 3 帧。
-- TTA 未触发；30 帧完整默认 pipeline 的跟踪循环为 `13.4304 s`，约 `2.2337 FPS`；相对前一等价版本 `15.2388 s` 快约 `11.9%`。悠悠球检测和绳线字段逐帧完全一致；两次独立运行的 pose 浮点输出及其派生方向字段存在非确定性差异，不属于本轮字符串流程改动。
+- 30 帧完整默认 pipeline 的跟踪循环为 `14.5332 s`，约 `2.0642 FPS`。移除组件前后的悠悠球检测和绳线字段逐帧完全一致；两次独立运行的 pose 浮点输出及其派生方向字段存在非确定性差异，不属于悠悠球检测流程改动。
 
 ## 复现命令
 
