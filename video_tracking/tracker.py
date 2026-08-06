@@ -1082,6 +1082,7 @@ def track_video(
     async_video_write: bool = True,
     parallel_semantic_preprocess: bool = True,
     parallel_run_input_hashing: bool = True,
+    orientation_direct_inference: bool = True,
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
         raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
@@ -1432,6 +1433,7 @@ def track_video(
                     yoyo,
                     orientation_imgsz,
                     device,
+                    direct_inference=orientation_direct_inference,
                 )
                 trick_orientation = (
                     orientation_filter_state.update(raw_orientation)
@@ -1768,6 +1770,7 @@ def track_video(
             "string_unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
             "yoyo_division": yoyo_division,
             "orientation_model_enabled": bool(enable_orientation_model),
+            "orientation_direct_inference": bool(orientation_direct_inference),
             "orientation_weights": str(resolved_orientation_weights),
             "orientation_imgsz": int(orientation_imgsz),
             "orientation_inference_fps": float(orientation_inference_fps),
@@ -1993,6 +1996,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--orientation-weights", default=str(TRACKING_CONFIG.orientation_weights_path))
     parser.add_argument("--no-orientation-model", action="store_true")
+    parser.add_argument(
+        "--orientation-direct-inference",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the fused orientation classifier directly without predictor setup overhead.",
+    )
     parser.add_argument("--orientation-imgsz", type=int, default=TRACKING_CONFIG.orientation_imgsz)
     parser.add_argument(
         "--orientation-inference-fps",
@@ -2091,6 +2100,7 @@ def main() -> int:
         yoyo_division=args.yoyo_division,
         orientation_weights_path=args.orientation_weights,
         enable_orientation_model=not args.no_orientation_model,
+        orientation_direct_inference=args.orientation_direct_inference,
         orientation_imgsz=args.orientation_imgsz,
         orientation_inference_fps=args.orientation_inference_fps,
         orientation_adaptive_inference=not args.no_orientation_adaptive_inference,

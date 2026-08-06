@@ -44,6 +44,11 @@ class TrainingV3Tests(unittest.TestCase):
             parse_args(["input.mp4", "--no-parallel-run-input-hashing"])
             .parallel_run_input_hashing
         )
+        self.assertTrue(parse_args(["input.mp4"]).orientation_direct_inference)
+        self.assertFalse(
+            parse_args(["input.mp4", "--no-orientation-direct-inference"])
+            .orientation_direct_inference
+        )
 
     def test_orientation_crop_ignores_hands_and_string_geometry(self):
         base = {"yoyo_bbox_pixel": [400, 300, 440, 340]}

@@ -193,25 +193,61 @@ def predict_orientation(
     yoyo: dict[str, Any] | None,
     imgsz: int,
     device: str,
+    direct_inference: bool = False,
 ) -> dict[str, Any] | None:
     height, width = frame.shape[:2]
     left, top, right, bottom = orientation_crop_box(width, height, yoyo)
     crop = frame[top:bottom, left:right]
     if crop.size == 0:
         return None
-    kwargs: dict[str, Any] = {"source": crop, "imgsz": int(imgsz), "verbose": False}
-    if str(device).strip():
-        kwargs["device"] = str(device).strip()
-    result = model.predict(**kwargs)[0]
-    probs = getattr(result, "probs", None)
-    if probs is None or getattr(probs, "data", None) is None:
-        return None
-    values = [float(value) for value in probs.data.detach().cpu().tolist()]
     names = {int(key): str(value) for key, value in dict(model.names).items()}
-    top1 = int(probs.top1)
+    if direct_inference:
+        import cv2
+        import torch
+        from PIL import Image
+        from ultralytics.data.augment import classify_transforms
+        from ultralytics.utils.torch_utils import select_device
+
+        runtime_key = (int(imgsz), str(device).strip())
+        runtime = getattr(model, "_yoyo_orientation_runtime", None)
+        if runtime is None or runtime["key"] != runtime_key:
+            network = model.model.fuse(verbose=False)
+            selected_device = select_device(str(device).strip(), verbose=False)
+            network = network.to(selected_device).eval()
+            transforms = network.transforms
+            first_transform = getattr(transforms, "transforms", [None])[0]
+            if getattr(first_transform, "size", None) != int(imgsz):
+                transforms = classify_transforms((int(imgsz), int(imgsz)))
+            runtime = {
+                "key": runtime_key,
+                "network": network,
+                "device": selected_device,
+                "transforms": transforms,
+            }
+            setattr(model, "_yoyo_orientation_runtime", runtime)
+        tensor = runtime["transforms"](
+            Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+        ).unsqueeze(0).to(runtime["device"])
+        with torch.inference_mode():
+            output = runtime["network"](tensor)
+            probabilities = output[0] if isinstance(output, (list, tuple)) else output
+            values = [float(value) for value in probabilities[0].detach().cpu().tolist()]
+        top1 = max(range(len(values)), key=values.__getitem__)
+        top1_confidence = values[top1]
+    else:
+        kwargs: dict[str, Any] = {"source": crop, "imgsz": int(imgsz), "verbose": False}
+        if str(device).strip():
+            kwargs["device"] = str(device).strip()
+        result = model.predict(**kwargs)[0]
+        probs = getattr(result, "probs", None)
+        if probs is None or getattr(probs, "data", None) is None:
+            return None
+        values = [float(value) for value in probs.data.detach().cpu().tolist()]
+        top1 = int(probs.top1)
+        top1_confidence = float(probs.top1conf.detach().cpu().item())
     return {
         "label": names[top1],
-        "confidence": round(float(probs.top1conf.detach().cpu().item()), 6),
+        "confidence": round(top1_confidence, 6),
         "probabilities": {names[index]: round(value, 6) for index, value in enumerate(values)},
         "crop_box_pixel": [left, top, right, bottom],
         "crop_policy": "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
