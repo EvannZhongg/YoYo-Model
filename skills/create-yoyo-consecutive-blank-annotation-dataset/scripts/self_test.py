@@ -305,6 +305,41 @@ def run() -> None:
         assert 80 not in filtered_indices
         assert filtered_metadata["provenance_filtered_blocks"] > 0
         assert filtered_metadata["frame_cache"]["video_seek_count"] == 1
+
+        assert generator.parse_time_seconds("2:04") == 124.0
+        explicit_args = generator.argparse.Namespace(
+            edge_fraction=0.04,
+            exclude_frame_window=0,
+            jpeg_quality=96,
+            perceptual_hamming_threshold=0,
+            position_bias="middle",
+            start_time=8.0,
+        )
+        explicit_run, _, explicit_metadata = generator.decode_candidates(
+            long_video,
+            long_hash,
+            20,
+            generator.ReferenceInventory(),
+            explicit_args,
+            set(),
+            [],
+        )
+        assert [candidate.frame_index for candidate in explicit_run] == list(range(80, 100))
+        assert explicit_metadata["requested_start_frame"] == 80
+        try:
+            generator.decode_candidates(
+                long_video,
+                long_hash,
+                20,
+                generator.ReferenceInventory(provenance={(long_hash, 80)}),
+                explicit_args,
+                set(),
+                [],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("explicit start must not shift past a provenance conflict")
     print(json.dumps({"ok": True, "test": "create-yoyo-consecutive-blank-annotation-dataset"}))
 
 

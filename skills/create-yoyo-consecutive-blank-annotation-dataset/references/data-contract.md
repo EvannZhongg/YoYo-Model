@@ -83,3 +83,7 @@ counts. Keep the first run's `sampling_manifest.json` immutable. Store each
 append manifest under `provenance/sampling_manifest-<hash>.json` and list all
 runs in `manifest.json`. Paths inside the generated dataset are relative except
 for original source-video paths.
+
+An explicit start time maps to the nearest source frame using the reported FPS.
+Only that consecutive window may be attempted; deduplication failure is a hard
+error and must not shift the requested run.

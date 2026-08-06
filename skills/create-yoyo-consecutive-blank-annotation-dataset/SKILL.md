@@ -24,6 +24,12 @@ Use `--position-bias front` or `--position-bias back` when the requested run
 should come from an eligible early or late part of the source. The default is
 `middle`. The edge exclusion still follows `--edge-fraction`.
 
+Use `--start-time MM:SS` when the run must start at an exact timestamp. The
+generator converts the time to the nearest frame using the source FPS and
+tries only that start; it does not search or silently shift on a deduplication
+conflict. `SS` and `HH:MM:SS` forms are also accepted. Do not combine an exact
+start time with `--position-bias`.
+
 For different run lengths, create the first group and append each differently
 sized group while the Workbench server is stopped:
 

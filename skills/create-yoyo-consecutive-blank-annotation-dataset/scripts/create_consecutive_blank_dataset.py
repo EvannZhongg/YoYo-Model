@@ -115,6 +115,24 @@ def validate_dataset_name(value: str) -> str:
     return value
 
 
+def parse_time_seconds(value: str) -> float:
+    parts = value.strip().split(":")
+    if not 1 <= len(parts) <= 3:
+        raise argparse.ArgumentTypeError("start-time must be SS, MM:SS, or HH:MM:SS")
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("start-time contains a non-numeric component") from exc
+    if any(number < 0 for number in numbers):
+        raise argparse.ArgumentTypeError("start-time cannot be negative")
+    if len(numbers) > 1 and any(number >= 60 for number in numbers[1:]):
+        raise argparse.ArgumentTypeError("minutes and seconds components must be below 60")
+    seconds = 0.0
+    for number in numbers:
+        seconds = seconds * 60.0 + number
+    return seconds
+
+
 def discover_videos(value: str | None, list_file: str | None) -> list[Path]:
     if bool(value) == bool(list_file):
         raise ValueError("provide exactly one of --videos or --videos-list")
@@ -565,13 +583,26 @@ def decode_candidates(
     block_candidates = 0
     provenance_filtered_blocks = 0
     blocked_filtered_blocks = 0
-    try:
-        for block_start in ordered_block_starts(
+    requested_start_time = getattr(args, "start_time", None)
+    if requested_start_time is None:
+        block_starts = ordered_block_starts(
             frame_count,
             desired,
             args.edge_fraction,
             getattr(args, "position_bias", "middle"),
-        ):
+        )
+        requested_start_frame = None
+    else:
+        requested_start_frame = int(round(float(requested_start_time) * fps))
+        if requested_start_frame < 0 or requested_start_frame + desired > frame_count:
+            capture.release()
+            raise ValueError(
+                f"requested run {requested_start_frame}-{requested_start_frame + desired - 1} "
+                f"is outside video frame range 0-{frame_count - 1}: {video}"
+            )
+        block_starts = [requested_start_frame]
+    try:
+        for block_start in block_starts:
             block_candidates += 1
             if block_overlaps_reference(
                 reference_frames, block_start, desired, args.exclude_frame_window
@@ -636,6 +667,8 @@ def decode_candidates(
         "block_candidates_considered": block_candidates,
         "provenance_filtered_blocks": provenance_filtered_blocks,
         "blocked_filtered_blocks": blocked_filtered_blocks,
+        "requested_start_time_s": requested_start_time,
+        "requested_start_frame": requested_start_frame,
         "frame_cache": cache_stats,
     }
     return selected, rejected, metadata
@@ -1179,7 +1212,9 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             "schema_version": SAMPLING_SCHEMA_VERSION,
             "created_at_utc": utc_now(),
             "sampling_method": (
-                f"{args.position_bias}-preferred consecutive runs with non-overlap checks"
+                "explicit-time consecutive runs with non-overlap checks"
+                if args.start_time is not None
+                else f"{args.position_bias}-preferred consecutive runs with non-overlap checks"
             ),
             "recognition_model_used": False,
             "videos_root": str(Path(args.videos_list or args.videos).expanduser().resolve()),
@@ -1190,6 +1225,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "frames_per_source": counts,
                 "edge_fraction": args.edge_fraction,
                 "position_bias": args.position_bias,
+                "start_time_s": args.start_time,
                 "provenance_window_prefilter": True,
                 "decode_workers": args.decode_workers,
                 "jpeg_quality": args.jpeg_quality,
@@ -1306,6 +1342,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="middle",
         help="Prefer eligible runs near the temporal middle, front, or back.",
     )
+    parser.add_argument(
+        "--start-time",
+        type=parse_time_seconds,
+        help="Require the run to start exactly at SS, MM:SS, or HH:MM:SS.",
+    )
     parser.add_argument("--exclude-frame-window", type=int, default=0)
     parser.add_argument("--perceptual-hamming-threshold", type=int, default=0)
     parser.add_argument("--jpeg-quality", type=int, default=96)
@@ -1319,6 +1360,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("frame counts, hash-workers, and decode-workers must be positive")
     if args.frame_cache and args.no_frame_cache:
         parser.error("--frame-cache and --no-frame-cache cannot be used together")
+    if args.start_time is not None and args.position_bias != "middle":
+        parser.error("--start-time cannot be combined with --position-bias")
     if args.total_frames is not None and args.total_frames < 1:
         parser.error("total-frames must be positive")
     if not 0 <= args.edge_fraction < 0.5:
