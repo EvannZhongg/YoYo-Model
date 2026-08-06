@@ -1,4 +1,4 @@
-from training_v2.train_orientation import main
+from training_v3.train_orientation import main
 
 
 if __name__ == "__main__":

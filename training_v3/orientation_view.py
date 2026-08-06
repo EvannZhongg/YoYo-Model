@@ -1,4 +1,4 @@
-"""Build a crop-focused orientation view without mutating the canonical dataset."""
+"""Build a hand-independent yoyo orientation view."""
 
 from __future__ import annotations
 
@@ -18,31 +18,26 @@ from common.files import sha256_file
 from config import BASE_DIR
 
 
-def _points(annotation: dict[str, Any]) -> list[tuple[float, float]]:
-    result: list[tuple[float, float]] = []
+def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] | None:
     bbox = annotation.get("yoyo_bbox_pixel")
     if isinstance(bbox, list) and len(bbox) == 4:
         x1, y1, x2, y2 = (float(value) for value in bbox)
-        result.extend([(x1, y1), (x2, y2)])
-    for value in (annotation.get("hands_pixel") or {}).values():
-        if isinstance(value, list) and len(value) == 2:
-            result.append((float(value[0]), float(value[1])))
-    for polyline in annotation.get("string_polylines_pixel") or []:
-        for value in polyline:
-            if isinstance(value, list) and len(value) == 2:
-                result.append((float(value[0]), float(value[1])))
-    return result
+        if x2 > x1 and y2 > y1:
+            return x1, y1, x2, y2
+    return None
 
 
 def _crop_box(annotation: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int]:
-    points = _points(annotation)
-    if not points:
-        return 0, 0, width, height
-    xs, ys = zip(*points)
-    center_x = (min(xs) + max(xs)) / 2.0
-    center_y = (min(ys) + max(ys)) / 2.0
-    span = max(max(xs) - min(xs), max(ys) - min(ys))
-    side = min(float(min(width, height)), max(span * 1.6, min(width, height) * 0.28))
+    bbox = _yoyo_bbox(annotation)
+    if bbox is None:
+        # Reviewed not-applicable frames may not contain a visible yoyo.
+        side = float(min(width, height)) * 0.28
+        center_x, center_y = width / 2.0, height / 2.0
+    else:
+        x1, y1, x2, y2 = bbox
+        center_x, center_y = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        span = max(x2 - x1, y2 - y1)
+        side = min(float(min(width, height)), max(span * 3.0, min(width, height) * 0.12))
     left = max(0.0, min(center_x - side / 2.0, width - side))
     top = max(0.0, min(center_y - side / 2.0, height - side))
     return int(round(left)), int(round(top)), int(round(left + side)), int(round(top + side))
@@ -66,6 +61,7 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         shutil.rmtree(output)
     output.mkdir(parents=True)
     counts: dict[str, Counter[str]] = defaultdict(Counter)
+    yoyo_visibility_counts: Counter[str] = Counter()
     train_paths: dict[str, list[Path]] = defaultdict(list)
     records: list[dict[str, Any]] = []
     for record in parent["records"]:
@@ -73,6 +69,8 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         source = Path(record["canonical_image"])
         split = str(record["split"])
         orientation = str(record["trick_orientation"])
+        yoyo_visibility_counts["visible"] += int(_yoyo_bbox(annotation) is not None)
+        yoyo_visibility_counts["not_visible"] += int(_yoyo_bbox(annotation) is None)
         name = f"{record['source_group']}__{source.stem}.jpg"
         target = output / split / orientation / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -104,14 +102,14 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
             _link(source, target)
             repeated += 1
     identity = {
-        "schema": "yoyo_orientation_roi_view_v1",
+        "schema": "yoyo_orientation_roi_view_v2",
         "parent_dataset_id": parent["dataset_id"],
         "parent_manifest_sha256": sha256_file(parent_path),
-        "crop_policy": "square_union_hands_yoyo_string_1p6_min_28pct",
+        "crop_policy": "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
     }
     view_id = f"orientation_roi_{hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:12]}"
     manifest = {
-        "schema_version": "yoyo_orientation_roi_view_v1",
+        "schema_version": "yoyo_orientation_roi_view_v2",
         "task": "orientation",
         "view_id": view_id,
         "dataset_id": parent["dataset_id"],
@@ -124,6 +122,13 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "counts": {split: dict(values) for split, values in counts.items()},
         "classes": ["horizontal", "normal", "not_applicable"],
         "crop_policy": identity["crop_policy"],
+        "input_dependencies": {
+            "yoyo_bbox_pixel": True,
+            "hands_pixel": False,
+            "string_geometry": False,
+            "no_yoyo_policy": "deterministic_center_crop",
+        },
+        "yoyo_visibility_counts": dict(yoyo_visibility_counts),
         "train_balance": {
             "original_counts": {name: len(paths) for name, paths in sorted(train_paths.items())},
             "target_per_class": target_per_class,

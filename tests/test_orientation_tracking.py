@@ -25,18 +25,16 @@ class _Vector(_Scalar):
 
 
 class OrientationTrackingTests(unittest.TestCase):
-    def test_crop_matches_training_union_policy(self):
+    def test_crop_matches_yoyo_only_training_policy(self):
         crop = orientation_crop_box(
             1000,
             600,
             {"bbox": [450, 250, 550, 350]},
-            [{"x": 300, "y": 200}, {"x": 700, "y": 200}],
-            {"points": [[300, 200], [500, 500]]},
         )
-        self.assertEqual(crop, (200, 0, 800, 600))
+        self.assertEqual(crop, (350, 150, 650, 450))
 
-    def test_crop_uses_full_frame_without_tracking_points(self):
-        self.assertEqual(orientation_crop_box(640, 360, None, [], None), (0, 0, 640, 360))
+    def test_crop_uses_deterministic_center_negative_without_yoyo(self):
+        self.assertEqual(orientation_crop_box(640, 360, None), (270, 130, 370, 230))
 
     def test_prediction_is_json_ready_and_carry_is_explicit(self):
         class Probs:
@@ -55,9 +53,13 @@ class OrientationTrackingTests(unittest.TestCase):
                 return [Result()]
 
         model = Model()
-        prediction = predict_orientation(model, np.zeros((360, 640, 3), dtype=np.uint8), None, [], None, 320, "cpu")
+        prediction = predict_orientation(model, np.zeros((360, 640, 3), dtype=np.uint8), None, 320, "cpu")
         self.assertEqual(prediction["label"], "normal")
-        self.assertEqual(prediction["crop_box_pixel"], [0, 0, 640, 360])
+        self.assertEqual(prediction["crop_box_pixel"], [270, 130, 370, 230])
+        self.assertEqual(
+            prediction["crop_policy"],
+            "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
+        )
         self.assertEqual(model.kwargs["imgsz"], 320)
         carried = carry_orientation(prediction, 2)
         self.assertEqual(carried["inference_status"], "carried")

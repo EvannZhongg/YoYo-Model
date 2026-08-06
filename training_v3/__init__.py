@@ -1,4 +1,4 @@
-"""Fresh v2/v3-only dataset and training pipeline."""
+"""Pose-excluded, hand-independent multi-task training pipeline."""
 
 from .prepare_dataset import build_training_dataset
 

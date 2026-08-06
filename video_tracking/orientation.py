@@ -15,32 +15,22 @@ def orientation_crop_box(
     width: int,
     height: int,
     yoyo: dict[str, Any] | None,
-    hands: list[dict[str, Any]] | None,
-    string: dict[str, Any] | None,
 ) -> tuple[int, int, int, int]:
-    """Match the square union crop used by the orientation training view."""
-    points: list[tuple[float, float]] = []
+    """Match the yoyo-only square crop used by the orientation training view."""
     bbox = (yoyo or {}).get("bbox")
-    if isinstance(bbox, list) and len(bbox) == 4:
+    if (
+        isinstance(bbox, list)
+        and len(bbox) == 4
+        and float(bbox[2]) > float(bbox[0])
+        and float(bbox[3]) > float(bbox[1])
+    ):
         x1, y1, x2, y2 = (float(value) for value in bbox)
-        points.extend(((x1, y1), (x2, y2)))
-    for hand in hands or []:
-        if "x" in hand and "y" in hand:
-            points.append((float(hand["x"]), float(hand["y"])))
-    polylines = (string or {}).get("polylines") or []
-    if not polylines and (string or {}).get("points"):
-        polylines = [(string or {})["points"]]
-    for polyline in polylines:
-        for point in polyline:
-            if isinstance(point, (list, tuple)) and len(point) == 2:
-                points.append((float(point[0]), float(point[1])))
-    if not points:
-        return 0, 0, int(width), int(height)
-    xs, ys = zip(*points)
-    center_x = (min(xs) + max(xs)) / 2.0
-    center_y = (min(ys) + max(ys)) / 2.0
-    span = max(max(xs) - min(xs), max(ys) - min(ys))
-    side = min(float(min(width, height)), max(span * 1.6, min(width, height) * 0.28))
+        center_x, center_y = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        span = max(x2 - x1, y2 - y1)
+        side = min(float(min(width, height)), max(span * 3.0, min(width, height) * 0.12))
+    else:
+        side = float(min(width, height)) * 0.28
+        center_x, center_y = width / 2.0, height / 2.0
     left = max(0.0, min(center_x - side / 2.0, width - side))
     top = max(0.0, min(center_y - side / 2.0, height - side))
     return int(round(left)), int(round(top)), int(round(left + side)), int(round(top + side))
@@ -71,13 +61,11 @@ def predict_orientation(
     model: Any,
     frame: np.ndarray,
     yoyo: dict[str, Any] | None,
-    hands: list[dict[str, Any]] | None,
-    string: dict[str, Any] | None,
     imgsz: int,
     device: str,
 ) -> dict[str, Any] | None:
     height, width = frame.shape[:2]
-    left, top, right, bottom = orientation_crop_box(width, height, yoyo, hands, string)
+    left, top, right, bottom = orientation_crop_box(width, height, yoyo)
     crop = frame[top:bottom, left:right]
     if crop.size == 0:
         return None
@@ -96,7 +84,7 @@ def predict_orientation(
         "confidence": round(float(probs.top1conf.detach().cpu().item()), 6),
         "probabilities": {names[index]: round(value, 6) for index, value in enumerate(values)},
         "crop_box_pixel": [left, top, right, bottom],
-        "crop_policy": "square_union_hands_yoyo_string_1p6_min_28pct",
+        "crop_policy": "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
         "inference_status": "ran",
         "age_frames": 0,
     }

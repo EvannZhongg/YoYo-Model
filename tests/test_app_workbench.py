@@ -411,7 +411,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("No video provided", outputs[-1])
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
-    def test_unified_training_uses_manifest_and_training_v2(self, run_command):
+    def test_unified_training_uses_manifest_and_training_v3(self, run_command):
         with TemporaryDirectory() as directory:
             dataset = Path(directory) / "dataset"
             dataset.mkdir()
@@ -420,7 +420,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
 
         self.assertEqual(result, "ok")
         args = run_command.call_args.args[0]
-        self.assertIn("training_v2.train", args)
+        self.assertIn("training_v3.train", args)
         self.assertEqual(args[args.index("--task") + 1], "orientation")
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
@@ -438,7 +438,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(Path(args[args.index("--dataset-dir") + 1]).name, "string_segmentation")
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
-    def test_evaluation_uses_training_v2_evaluator(self, run_command):
+    def test_evaluation_uses_training_v3_evaluator(self, run_command):
         with TemporaryDirectory() as directory:
             run = Path(directory) / "run"
             run.mkdir()
@@ -446,7 +446,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             result = workbench_evaluate_v2v3(str(run), "cpu")
 
         self.assertEqual(result, "ok")
-        self.assertEqual(run_command.call_args.args[0][:3], ["-m", "training_v2.evaluate", str(run)])
+        self.assertEqual(run_command.call_args.args[0][:3], ["-m", "training_v3.evaluate", str(run)])
 
     def test_tracking_gallery_uses_frame_index_without_segments(self):
         with TemporaryDirectory() as directory:

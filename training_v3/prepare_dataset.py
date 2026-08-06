@@ -23,8 +23,12 @@ from common.files import sha256_file
 from config import BASE_DIR
 
 
-SCHEMA_VERSION = "yoyo_multitask_dataset_v3"
-SOURCE_POLICY = "all_non_score_annotations; quality_approved; image_sha256_deduplicated; source_group_isolated"
+SCHEMA_VERSION = "yoyo_multitask_dataset_v4_pose_excluded"
+SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; pose_annotations_excluded"
+POSE_ANNOTATION_FIELDS = {
+    "hands", "hands_pixel", "hands_2d", "hands_normalized",
+    "hand_landmarks_pixel", "hand_pose", "pose", "pose_person",
+}
 VALID_ORIENTATIONS = ("normal", "horizontal", "not_applicable")
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible"}
 SPLITS = ("train", "val", "test")
@@ -453,6 +457,8 @@ def build_training_dataset(
             orientation_train_images[sample.orientation].append(orientation_image)
         canonical_label.parent.mkdir(parents=True, exist_ok=True)
         canonical_annotation = dict(sample.annotation)
+        for field in POSE_ANNOTATION_FIELDS:
+            canonical_annotation.pop(field, None)
         canonical_annotation["dataset_management"] = {
             "dataset_id": dataset_id,
             "split": split,
@@ -597,6 +603,13 @@ def build_training_dataset(
             "detection": "quality-approved yoyo_bbox_pixel; empty label is a reviewed negative",
             "string_segmentation": "approved masks or buffered visible centerlines; not_visible is a reviewed negative",
             "orientation": "three-way trick_orientation including not_applicable",
+            "pose_annotations": "excluded from the dataset; RTMPose is runtime-only",
+        },
+        "task_input_dependencies": {
+            "detection": ["image", "yoyo_bbox_pixel"],
+            "string_segmentation": ["image", "string_mask_or_polyline"],
+            "orientation": ["image", "yoyo_bbox_pixel_or_fixed_negative_crop", "trick_orientation"],
+            "hand_string_attachment_required": False,
         },
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -604,7 +617,7 @@ def build_training_dataset(
     with (canonical_root / "index.jsonl").open("w", encoding="utf-8") as file:
         for record in records:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
-    from training_v2.semantic_view import write_semantic_view_manifest
+    from training_v3.semantic_view import write_semantic_view_manifest
 
     write_semantic_view_manifest(output_dir)
     return manifest

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from common.files import sha256_file
 from config import BASE_DIR
-from training_v2.train import _initialization_lineage, _json_value, _weights_for
+from training_v3.train import _initialization_lineage, _json_value, _weights_for
 
 
 def train_orientation(

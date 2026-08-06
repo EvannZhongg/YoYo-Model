@@ -6,19 +6,19 @@ from pathlib import Path
 from PIL import Image
 
 from common.files import sha256_file
-from training_v2.evaluate import (
+from training_v3.evaluate import (
     _artifact_suffix,
     _check_dataset_manifest,
     _detection_recall_from_confusion,
     _json_value,
 )
-from training_v2.prepare_dataset import SOURCE_POLICY, build_training_dataset, discover_annotation_sources
-from training_v2.orientation_view import build_orientation_view
+from training_v3.prepare_dataset import POSE_ANNOTATION_FIELDS, SOURCE_POLICY, build_training_dataset, discover_annotation_sources
+from training_v3.orientation_view import build_orientation_view
 
 
 def _annotation(group: str, orientation: str, image_name: str, image_sha256: str) -> dict:
     return {
-        "schema_version": "agent_yoyo_string_annotation_v4",
+        "schema_version": "yoyo_string_annotation_v5_rtmpose",
         "source_image": f"../../images/{group}/{image_name}",
         "image_sha256": image_sha256,
         "image_size": [64, 48],
@@ -30,6 +30,7 @@ def _annotation(group: str, orientation: str, image_name: str, image_sha256: str
         "string_polylines_pixel": [[[8, 10], [30, 20], [45, 25]]],
         "string_review_status": "approved",
         "trick_orientation": orientation,
+        "hand_pose": {"source": "rtmpose-m_wholebody_onnx"},
         "quality": {
             "reviews": [
                 {"decision": "approve", "review_scope": ["visible_geometry", "yoyo_bbox"]},
@@ -86,6 +87,7 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(first["source_inventory"]["NYPC1A"]["labels_discovered"], 9)
             self.assertEqual(first["source_inventory"]["world_final"]["samples_included"], 9)
             self.assertEqual(first["split_policy"]["leakage"]["source_group_overlap_count"], 0)
+            self.assertFalse(first["task_input_dependencies"]["hand_string_attachment_required"])
             group_sets = [set(first["split_policy"]["source_groups"][split]) for split in ("train", "val", "test")]
             self.assertFalse(group_sets[0] & group_sets[1])
             self.assertFalse(group_sets[0] & group_sets[2])
@@ -97,6 +99,9 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             output = Path(first["output_dir"])
             self.assertEqual(len(list((output / "canonical" / "images").rglob("*.jpg"))), 18)
             self.assertEqual(len(list((output / "canonical" / "labels").rglob("*.json"))), 18)
+            for label in (output / "canonical" / "labels").rglob("*.json"):
+                annotation = json.loads(label.read_text(encoding="utf-8"))
+                self.assertFalse(POSE_ANNOTATION_FIELDS & set(annotation))
             self.assertEqual(len((output / "canonical" / "index.jsonl").read_text(encoding="utf-8").splitlines()), 18)
             self.assertTrue((output / "detection" / "data.yaml").is_file())
             self.assertTrue((output / "string_segmentation" / "data.yaml").is_file())
@@ -110,6 +115,8 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(orientation["train_balance"]["repeated_image_count"], 0)
             self.assertEqual(len(list((output / "orientation").rglob("*.jpg"))), 18)
             roi = build_orientation_view(output)
+            self.assertFalse(roi["input_dependencies"]["hands_pixel"])
+            self.assertFalse(roi["input_dependencies"]["string_geometry"])
             self.assertEqual(roi["counts"]["test"]["total"], first["counts"]["test"]["samples"])
             self.assertTrue(all(Path(record["image"]).is_file() for record in roi["records"]))
             for split in ("train", "val", "test"):
