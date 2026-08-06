@@ -25,6 +25,7 @@ from video_tracking.review_sheet import (
     make_tracking_review_sheet,
 )
 from video_tracking.tracker import (
+    _AsyncVideoWriter,
     _augment_semantic_color_observation,
     _draw_frame,
     _can_seed_previous_string,
@@ -38,6 +39,41 @@ from video_tracking.tracker import (
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_async_video_writer_preserves_order_and_releases_backend(self):
+        class FakeWriter:
+            def __init__(self):
+                self.values = []
+                self.released = False
+
+            def write(self, frame):
+                self.values.append(int(frame[0, 0]))
+
+            def release(self):
+                self.released = True
+
+        backend = FakeWriter()
+        writer = _AsyncVideoWriter(backend, queue_size=1)
+        for value in (3, 1, 4, 1, 5):
+            writer.write(np.full((1, 1), value, dtype=np.uint8))
+        writer.release()
+
+        self.assertEqual(backend.values, [3, 1, 4, 1, 5])
+        self.assertTrue(backend.released)
+
+    def test_async_video_writer_surfaces_background_failure(self):
+        class FailingWriter:
+            def write(self, _):
+                raise OSError("encode failed")
+
+            def release(self):
+                pass
+
+        writer = _AsyncVideoWriter(FailingWriter(), queue_size=1)
+        writer.write(np.zeros((1, 1), dtype=np.uint8))
+
+        with self.assertRaisesRegex(RuntimeError, "Background video write failed"):
+            writer.release()
+
     def test_color_observation_resamples_temporal_reference_once_per_frame(self):
         frame = np.zeros((160, 240, 3), dtype=np.uint8)
         yoyo = {"center": [120.0, 80.0], "bbox": [110.0, 70.0, 130.0, 90.0]}

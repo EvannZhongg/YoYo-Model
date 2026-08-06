@@ -12,6 +12,8 @@ import argparse
 import json
 import logging
 import math
+import queue
+import threading
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -69,6 +71,54 @@ logging.basicConfig(
     handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
+
+
+class _AsyncVideoWriter:
+    """Write ordered video frames on one bounded background worker."""
+
+    _STOP = object()
+
+    def __init__(self, writer: cv2.VideoWriter, queue_size: int = 2) -> None:
+        self._writer = writer
+        self._queue: queue.Queue[np.ndarray | object] = queue.Queue(
+            maxsize=max(1, int(queue_size)),
+        )
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="tracking-video-writer",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            frame = self._queue.get()
+            try:
+                if frame is self._STOP:
+                    return
+                if self._error is None:
+                    try:
+                        self._writer.write(frame)
+                    except BaseException as exc:
+                        self._error = exc
+            finally:
+                self._queue.task_done()
+
+    def _raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise RuntimeError("Background video write failed") from self._error
+
+    def write(self, frame: np.ndarray) -> None:
+        self._raise_if_failed()
+        self._queue.put(frame)
+        self._raise_if_failed()
+
+    def release(self) -> None:
+        self._queue.put(self._STOP)
+        self._thread.join()
+        self._writer.release()
+        self._raise_if_failed()
 
 
 def _safe_float(value: Any) -> float | None:
@@ -994,6 +1044,7 @@ def track_video(
     export_json: bool = True,
     start_seconds: float = 0.0,
     max_frames: int = 0,
+    async_video_write: bool = True,
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
         raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
@@ -1084,17 +1135,20 @@ def track_video(
     start_frame = max(0, int(round(float(start_seconds) * fps)))
     if start_frame:
         capture.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    writer = cv2.VideoWriter(
+    video_writer = cv2.VideoWriter(
         str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (output_width, output_height)
     )
-    if not writer.isOpened():
+    if not video_writer.isOpened():
         capture.release()
         raise RuntimeError(f"Could not create output video: {output_path}")
     try:
         import supervision as sv
         tracker = sv.ByteTrack(frame_rate=max(1, int(round(fps))))
     except Exception as exc:
+        capture.release()
+        video_writer.release()
         raise RuntimeError("supervision is required for stable track IDs") from exc
+    writer = _AsyncVideoWriter(video_writer) if async_video_write else video_writer
 
     records: list[dict[str, Any]] = []
     previous_center: tuple[float, float] | None = None
@@ -1580,6 +1634,7 @@ def track_video(
                 "requires_single_yoyo": True,
             },
             "visualization_max_width": int(visualization_max_width),
+            "async_video_write": bool(async_video_write),
             "pose_enabled": enable_pose,
             "pose_backend": pose_model.backend_name if pose_model is not None else "unavailable",
             "pose_weights": str(pose_model.pose_path) if pose_model is not None else str(pose_weights_path or ""),
@@ -1729,6 +1784,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=TRACKING_CONFIG.visualization_max_width,
         help="Maximum annotated preview width; 0 preserves source resolution.",
+    )
+    parser.add_argument(
+        "--async-video-write",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Overlap ordered MP4 encoding with inference using a bounded worker.",
     )
     parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
     parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))
@@ -1898,6 +1959,7 @@ def main() -> int:
         imgsz=args.imgsz,
         device=args.device,
         visualization_max_width=args.visualization_max_width,
+        async_video_write=args.async_video_write,
         pose_weights_path=args.pose_weights or None,
         pose_detector_path=args.pose_detector or None,
         enable_pose=args.pose,
