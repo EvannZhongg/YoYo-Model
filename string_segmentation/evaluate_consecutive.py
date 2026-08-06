@@ -145,7 +145,7 @@ def evaluate_consecutive_checkpoint(
         adaptive_enabled = False
         adaptive_window: list[tuple[bool, float, float]] = []
         adaptive_gate_metrics: dict[str, float | int] = {}
-        previous_gray: np.ndarray | None = None
+        previous_frame: np.ndarray | None = None
         previous_string: dict[str, Any] | None = None
         last_yoyo_frame: int | None = None
         for frame in group.get("frames") or []:
@@ -248,12 +248,11 @@ def evaluate_consecutive_checkpoint(
                     and frame_index - last_yoyo_frame
                     <= max(0, int(unanchored_semantic_grace_frames))
                 )
-                current_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 final_string = estimate_string(
                     image,
                     yoyo,
                     [],
-                    previous_gray,
+                    None,
                     previous_string,
                     yoyo_division=str(annotation.get("yoyo_division") or "1A"),
                     observation=final_string,
@@ -261,9 +260,8 @@ def evaluate_consecutive_checkpoint(
                     max_forward_backward_error=max_forward_backward_error,
                     allow_color_fallback=False,
                     allow_unanchored_semantic=allow_unanchored_semantic,
-                    current_gray=current_gray,
+                    previous_frame=previous_frame,
                 )
-                previous_gray = current_gray
                 previous_string = (
                     final_string
                     if final_string is not None
@@ -271,6 +269,7 @@ def evaluate_consecutive_checkpoint(
                     and not final_string.get("hand_anchor_mismatch")
                     else None
                 )
+                previous_frame = image if previous_string is not None else None
                 if yoyo is not None:
                     last_yoyo_frame = frame_index
             predicted_components.append(

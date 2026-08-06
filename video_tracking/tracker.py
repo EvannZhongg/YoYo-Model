@@ -1080,7 +1080,7 @@ def track_video(
     last_seen_frame: int | None = None
     last_seen_edge_clipped = False
     missing_streak = 0
-    previous_gray: np.ndarray | None = None
+    previous_frame: np.ndarray | None = None
     previous_string: dict[str, Any] | None = None
     selected_track_id: int | None = None
     selected_track_bbox: list[float] | None = None
@@ -1227,12 +1227,11 @@ def track_video(
             and last_seen_frame is not None
             and frame_index - last_seen_frame <= unanchored_semantic_grace_frames
         )
-        current_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         string = estimate_string(
             frame,
             yoyo,
             wrists,
-            previous_gray,
+            None,
             previous_string,
             yoyo_division,
             observation=model_string,
@@ -1242,7 +1241,7 @@ def track_video(
             # evidence. Do not replace it with a weaker HSV/Hough proposal.
             allow_color_fallback=string_model is None,
             allow_unanchored_semantic=allow_unanchored_semantic,
-            current_gray=current_gray,
+            previous_frame=previous_frame,
         )
         reacquired_string = _should_reacquire_string(
             scheduled_string_inference,
@@ -1272,7 +1271,7 @@ def track_video(
                 frame,
                 yoyo,
                 wrists,
-                previous_gray,
+                None,
                 previous_string,
                 yoyo_division,
                 observation=model_string,
@@ -1280,7 +1279,7 @@ def track_video(
                 max_forward_backward_error=string_flow_fb_max_error,
                 allow_color_fallback=False,
                 allow_unanchored_semantic=allow_unanchored_semantic,
-                current_gray=current_gray,
+                previous_frame=previous_frame,
             )
         scheduled_orientation_inference = bool(
             orientation_model is not None and processed_frames >= next_orientation_processed_frame
@@ -1455,7 +1454,6 @@ def track_video(
             )
         )
         previous_center = center
-        previous_gray = current_gray
         # A visible string can persist briefly while the yoyo is occluded or
         # outside the frame; its record remains explicitly review-only.
         previous_string = (
@@ -1463,6 +1461,7 @@ def track_video(
             if _can_seed_previous_string(string)
             else None
         )
+        previous_frame = frame if previous_string is not None else None
         frame_index += 1
         processed_frames += 1
     capture.release()

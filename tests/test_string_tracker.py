@@ -115,6 +115,37 @@ class StringTrackerTemporalTests(unittest.TestCase):
         convert.assert_not_called()
         propagate.assert_not_called()
 
+    def test_estimate_string_defers_gray_conversion_until_flow_gap(self):
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        previous_frame = np.full_like(frame, 7)
+        previous_string = {
+            "points": [[18.0, 20.0], [78.0, 60.0]],
+            "confidence": 0.7,
+            "method": "semantic_segmentation",
+        }
+        with (
+            patch(
+                "video_tracking.string_tracker.cv2.cvtColor",
+                side_effect=lambda image, _: image[:, :, 0],
+            ) as convert,
+            patch("video_tracking.string_tracker._propagate_string_geometry", return_value=None) as propagate,
+        ):
+            result = estimate_string(
+                frame,
+                None,
+                [],
+                None,
+                previous_string,
+                allow_color_fallback=False,
+                previous_frame=previous_frame,
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(convert.call_count, 2)
+        self.assertEqual(propagate.call_count, 1)
+        np.testing.assert_array_equal(propagate.call_args.args[0], previous_frame[:, :, 0])
+        np.testing.assert_array_equal(propagate.call_args.args[1], frame[:, :, 0])
+
     def test_adaptive_domain_gate_rejects_strong_or_near_observations(self):
         for confidence, distance in ((0.90, 100.0), (0.75, 20.0)):
             history = []

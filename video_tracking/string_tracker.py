@@ -485,9 +485,9 @@ def estimate_string(
     allow_color_fallback: bool = True,
     allow_unanchored_semantic: bool = False,
     current_gray: np.ndarray | None = None,
+    previous_frame: np.ndarray | None = None,
 ) -> dict[str, Any] | None:
     """Estimate a string while preserving uncertainty in the returned record."""
-    gray = current_gray if current_gray is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     width, height = frame.shape[1], frame.shape[0]
 
     def finalize(result: dict[str, Any]) -> dict[str, Any]:
@@ -500,8 +500,12 @@ def estimate_string(
     if observed is None and previous_string and previous_string.get("points"):
         previous_age = int(previous_string.get("propagation_age_frames", 0))
         if previous_age < max(0, int(max_propagation_frames)):
+            gray = current_gray if current_gray is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            flow_previous_gray = previous_gray
+            if flow_previous_gray is None and previous_frame is not None:
+                flow_previous_gray = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
             propagated = _propagate_string_geometry(
-                previous_gray,
+                flow_previous_gray,
                 gray,
                 previous_string,
                 width,
