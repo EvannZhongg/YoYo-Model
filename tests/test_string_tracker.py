@@ -31,6 +31,7 @@ from video_tracking.tracker import (
     _can_seed_previous_string,
     _inference_interval_frames,
     _load_string_model,
+    _prepare_semantic_letterbox,
     _predict_string_model,
     _select_pose_person,
     _should_reacquire_string,
@@ -332,6 +333,86 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
         self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
         self.assertEqual(result["semantic_probability_ensemble"]["alpha"], 0.3)
+
+    def test_prepared_semantic_letterbox_skips_duplicate_resize(self):
+        meta = SimpleNamespace(
+            original_width=32,
+            original_height=32,
+            target_width=32,
+            target_height=32,
+            resized_width=32,
+            resized_height=32,
+            pad_x=0,
+            pad_y=0,
+            scale=1.0,
+        )
+        model = {
+            "kind": "semantic_ensemble",
+            "model": object(),
+            "checkpoint": {
+                "threshold": 0.4,
+                "model_config": {"input_width": 32, "input_height": 32},
+            },
+            "ensemble_model": object(),
+            "ensemble_alpha": 0.3,
+            "ensemble_candidate_threshold": 0.5,
+            "device": "cpu",
+        }
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        tensor = object()
+        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
+
+        with (
+            patch("video_tracking.tracker.prepare_letterboxed_input") as prepare,
+            patch(
+                "video_tracking.tracker.normalize_image_for_inference",
+                return_value=tensor,
+            ) as normalize,
+            patch(
+                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
+                return_value=np.full((32, 32), 0.5, dtype=np.float32),
+            ) as predict,
+            patch(
+                "video_tracking.tracker.semantic_mask_observation",
+                return_value=observation,
+            ),
+        ):
+            result = _predict_string_model(
+                model,
+                image,
+                None,
+                0.2,
+                32,
+                "cpu",
+                "1A",
+                prepared_letterbox=(image, None, meta),
+            )
+
+        prepare.assert_not_called()
+        normalize.assert_called_once_with(image, "cpu")
+        self.assertIs(predict.call_args.args[2], tensor)
+        self.assertEqual(result["points"], observation["points"])
+
+    def test_parallel_semantic_letterbox_uses_active_model_size(self):
+        model = {
+            "kind": "semantic_adaptive_ensemble",
+            "checkpoint": {"model_config": {"input_width": 64, "input_height": 32}},
+            "adaptive_checkpoint": {
+                "model_config": {"input_width": 96, "input_height": 64},
+            },
+            "adaptive_enabled": True,
+        }
+        expected = (np.zeros((64, 96, 3), dtype=np.uint8), None, object())
+
+        with patch("video_tracking.tracker.letterbox", return_value=expected) as resize:
+            actual = _prepare_semantic_letterbox(
+                model,
+                np.zeros((20, 40, 3), dtype=np.uint8),
+                1.0,
+            )
+
+        self.assertIs(actual, expected)
+        self.assertEqual(resize.call_args.args[1:], (96, 64))
 
     def test_adaptive_ensemble_selects_primary_and_alpha_from_state(self):
         meta = SimpleNamespace(

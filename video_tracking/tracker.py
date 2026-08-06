@@ -9,6 +9,7 @@ allows a later string segmentation model to consume the same data.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import math
@@ -29,7 +30,9 @@ from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
     PreparedCalibratedEnsemblePredictor,
     is_semantic_checkpoint,
+    letterbox,
     load_checkpoint as load_semantic_checkpoint,
+    normalize_image_for_inference,
     polyline_probability_support,
     predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
@@ -391,6 +394,7 @@ def _predict_string_model(
     color_probability_min_mean: float = 0.40,
     color_probability_min_fraction: float = 0.50,
     color_semantic_prefilter: bool = False,
+    prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -404,12 +408,18 @@ def _predict_string_model(
         model_config = checkpoint["model_config"]
         scale = float(semantic_inference_scale)
         input_width, input_height, component_area_scale = _semantic_inference_parameters(model_config, scale)
-        tensor, meta = prepare_letterboxed_input(
-            frame,
-            input_width,
-            input_height,
-            model_device,
-        )
+        if prepared_letterbox is None:
+            tensor, meta = prepare_letterboxed_input(
+                frame,
+                input_width,
+                input_height,
+                model_device,
+            )
+        else:
+            image, _, meta = prepared_letterbox
+            if (meta.target_width, meta.target_height) != (input_width, input_height):
+                raise ValueError("Prepared semantic letterbox has an unexpected size")
+            tensor = normalize_image_for_inference(image, model_device)
         primary_threshold = float(checkpoint.get("threshold", 0.5))
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
@@ -518,6 +528,24 @@ def _predict_string_model(
         "method": "yolo_segmentation",
         "needs_review": False,
     }
+
+
+def _prepare_semantic_letterbox(
+    model: Any,
+    frame: np.ndarray,
+    semantic_inference_scale: float,
+) -> tuple[np.ndarray, np.ndarray | None, Any] | None:
+    if not isinstance(model, dict) or model.get("kind") not in {
+        "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
+    }:
+        return None
+    adaptive_enabled = bool(model.get("adaptive_enabled"))
+    checkpoint = model["adaptive_checkpoint"] if adaptive_enabled else model["checkpoint"]
+    input_width, input_height, _ = _semantic_inference_parameters(
+        checkpoint["model_config"],
+        float(semantic_inference_scale),
+    )
+    return letterbox(frame, input_width, input_height)
 
 
 def _select_pose_person(
@@ -1045,6 +1073,7 @@ def track_video(
     start_seconds: float = 0.0,
     max_frames: int = 0,
     async_video_write: bool = True,
+    parallel_semantic_preprocess: bool = True,
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
         raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
@@ -1149,6 +1178,18 @@ def track_video(
         video_writer.release()
         raise RuntimeError("supervision is required for stable track IDs") from exc
     writer = _AsyncVideoWriter(video_writer) if async_video_write else video_writer
+    semantic_preprocess_executor = (
+        concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="semantic-letterbox",
+        )
+        if parallel_semantic_preprocess
+        and isinstance(string_model, dict)
+        and string_model.get("kind") in {
+            "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
+        }
+        else None
+    )
 
     records: list[dict[str, Any]] = []
     previous_center: tuple[float, float] | None = None
@@ -1191,6 +1232,19 @@ def track_video(
             string_model["adaptive_enabled"] = True
             string_adaptive_activation_frame = frame_index
             string_adaptive_pending = False
+        scheduled_string_inference = bool(
+            string_model is not None and processed_frames % string_inference_interval == 0
+        )
+        semantic_preprocess_future = (
+            semantic_preprocess_executor.submit(
+                _prepare_semantic_letterbox,
+                string_model,
+                frame,
+                string_inference_scale,
+            )
+            if scheduled_string_inference and semantic_preprocess_executor is not None
+            else None
+        )
         kwargs: dict[str, Any] = {
             "source": frame,
             "conf": confidence,
@@ -1256,9 +1310,6 @@ def track_video(
         distance_to_hand = None
         if center and wrists:
             distance_to_hand = min(math.hypot(item["x"] - center[0], item["y"] - center[1]) for item in wrists)
-        scheduled_string_inference = bool(
-            string_model is not None and processed_frames % string_inference_interval == 0
-        )
         model_string = None
         if scheduled_string_inference:
             model_string = _predict_string_model(
@@ -1275,6 +1326,11 @@ def track_video(
                 string_color_probability_min_mean,
                 string_color_probability_min_fraction,
                 string_color_semantic_prefilter,
+                (
+                    semantic_preprocess_future.result()
+                    if semantic_preprocess_future is not None
+                    else None
+                ),
             )
             string_inference_frames += 1
             if (
@@ -1539,6 +1595,8 @@ def track_video(
         previous_frame = frame if previous_string is not None else None
         frame_index += 1
         processed_frames += 1
+    if semantic_preprocess_executor is not None:
+        semantic_preprocess_executor.shutdown(wait=True)
     capture.release()
     writer.release()
     if metadata_file:
@@ -1635,6 +1693,7 @@ def track_video(
             },
             "visualization_max_width": int(visualization_max_width),
             "async_video_write": bool(async_video_write),
+            "parallel_semantic_preprocess": bool(parallel_semantic_preprocess),
             "pose_enabled": enable_pose,
             "pose_backend": pose_model.backend_name if pose_model is not None else "unavailable",
             "pose_weights": str(pose_model.pose_path) if pose_model is not None else str(pose_weights_path or ""),
@@ -1790,6 +1849,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Overlap ordered MP4 encoding with inference using a bounded worker.",
+    )
+    parser.add_argument(
+        "--parallel-semantic-preprocess",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Overlap exact semantic letterboxing with detector inference.",
     )
     parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
     parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))
@@ -1960,6 +2025,7 @@ def main() -> int:
         device=args.device,
         visualization_max_width=args.visualization_max_width,
         async_video_write=args.async_video_write,
+        parallel_semantic_preprocess=args.parallel_semantic_preprocess,
         pose_weights_path=args.pose_weights or None,
         pose_detector_path=args.pose_detector or None,
         enable_pose=args.pose,
