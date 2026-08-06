@@ -20,6 +20,12 @@ class TrainingV3Tests(unittest.TestCase):
         self.assertEqual(parse_args(["input.mp4"]).pose, TRACKING_CONFIG.enable_pose)
         self.assertTrue(parse_args(["input.mp4", "--pose"]).pose)
         self.assertFalse(parse_args(["input.mp4", "--no-pose"]).pose)
+        self.assertTrue(TRACKING_CONFIG.string_color_semantic_prefilter)
+        self.assertTrue(parse_args(["input.mp4"]).string_color_semantic_prefilter)
+        self.assertFalse(
+            parse_args(["input.mp4", "--no-string-color-semantic-prefilter"])
+            .string_color_semantic_prefilter
+        )
 
     def test_orientation_crop_ignores_hands_and_string_geometry(self):
         base = {"yoyo_bbox_pixel": [400, 300, 440, 340]}

@@ -84,6 +84,9 @@ tracking:
   # supports it. This recovers weak, fragmented string pixels without allowing
   # unrelated saturated stage lines into the final geometry.
   string_color_probability_augment: true
+  # Restrict Hough candidates to a dilated p>=0.10 semantic neighborhood.
+  # This removes unrelated stage lines before the expensive Hough search.
+  string_color_semantic_prefilter: true
   string_color_probability_min_mean: 0.40
   string_color_probability_min_fraction: 0.50
   # Temporal string tracking is review-only: stop propagation after a short

@@ -157,6 +157,7 @@ def run_video_tracking(
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),
+            string_color_semantic_prefilter=TRACKING_CONFIG.string_color_semantic_prefilter,
             yoyo_division=yoyo_division,
             enable_orientation_model=bool(enable_orientation_model),
             orientation_weights_path=orientation_weights_path.strip() or None,

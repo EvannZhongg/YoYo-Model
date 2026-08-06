@@ -71,6 +71,7 @@ def evaluate_consecutive_checkpoint(
     color_augment: bool = False,
     color_probability_min_mean: float | None = None,
     color_probability_min_fraction: float = 0.5,
+    color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     temporal: bool = False,
     max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
@@ -185,6 +186,8 @@ def evaluate_consecutive_checkpoint(
                     image, yoyo, require_yoyo_proximity=False,
                     mark_far_ambiguous=True,
                     reference_points=(observation or {}).get("points"),
+                    semantic_probability=probability if color_semantic_prefilter else None,
+                    semantic_meta=meta if color_semantic_prefilter else None,
                 )
                 if color is not None:
                     color_support = polyline_probability_support(
@@ -321,6 +324,7 @@ def evaluate_consecutive_checkpoint(
         "color_augment": bool(color_augment),
         "color_probability_min_mean": color_probability_min_mean,
         "color_probability_min_fraction_at_0_10": color_probability_min_fraction,
+        "color_semantic_prefilter": bool(color_semantic_prefilter),
         "temporal": bool(temporal),
         "max_propagation_frames": int(max_propagation_frames),
         "max_forward_backward_error": float(max_forward_backward_error),
@@ -355,6 +359,11 @@ def main() -> int:
     parser.add_argument("--color-augment", action="store_true")
     parser.add_argument("--color-probability-min-mean", type=float, default=None)
     parser.add_argument("--color-probability-min-fraction", type=float, default=0.5)
+    parser.add_argument(
+        "--color-semantic-prefilter",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.string_color_semantic_prefilter,
+    )
     parser.add_argument("--temporal", action="store_true")
     parser.add_argument(
         "--max-propagation-frames",
@@ -387,6 +396,7 @@ def main() -> int:
         color_augment=args.color_augment,
         color_probability_min_mean=args.color_probability_min_mean,
         color_probability_min_fraction=args.color_probability_min_fraction,
+        color_semantic_prefilter=args.color_semantic_prefilter,
         temporal=args.temporal,
         max_propagation_frames=args.max_propagation_frames,
         max_forward_backward_error=args.max_forward_backward_error,

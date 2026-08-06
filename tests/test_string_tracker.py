@@ -61,6 +61,27 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(resample.call_count, 1)
 
+    def test_color_observation_prefilter_requires_semantic_support(self):
+        frame = np.zeros((180, 240, 3), dtype=np.uint8)
+        cv2.line(frame, (120, 90), (220, 30), (0, 255, 0), 4)
+        yoyo = {"center": [120.0, 90.0], "bbox": [108.0, 78.0, 132.0, 102.0]}
+        meta = SimpleNamespace(scale=1.0, pad_x=0, pad_y=0)
+
+        self.assertIsNone(
+            _color_line_observation(
+                frame, yoyo, require_yoyo_proximity=False,
+                semantic_probability=np.zeros((180, 240), dtype=np.float32),
+                semantic_meta=meta,
+            )
+        )
+        self.assertIsNotNone(
+            _color_line_observation(
+                frame, yoyo, require_yoyo_proximity=False,
+                semantic_probability=np.ones((180, 240), dtype=np.float32),
+                semantic_meta=meta,
+            )
+        )
+
     def test_estimate_string_reuses_precomputed_current_gray(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
         current_gray = np.zeros((80, 120), dtype=np.uint8)

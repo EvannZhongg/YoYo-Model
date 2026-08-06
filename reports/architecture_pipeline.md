@@ -177,7 +177,7 @@ flowchart TD
     K --> L[tracked.mp4 / frames.jsonl / run.json]
 ```
 
-## 2026-08-07 版本5（当前默认 Pipeline）
+## 2026-08-07 版本6（当前默认 Pipeline）
 
 RTMPose-m WholeBody 保留为 Workbench 和 CLI 可选审核分支，默认关闭。当前悠悠球检测、
 绳线追踪和仅悠悠球 ROI 的方向分类均不依赖姿态输出。
@@ -188,8 +188,14 @@ flowchart TD
     B --> C[ByteTrack ID 跟踪]
 
     A --> D[双路 LR-ASPP 绳线分割]
-    D --> E[概率校准、颜色候选门控与中心线提取]
-    E --> Q{当前帧有新鲜观测?}
+    D --> E[概率校准融合与语义中心线]
+    A --> L[颜色 ROI]
+    E --> M[p&gt;=0.10 语义支持区<br/>映射并膨胀 31x31]
+    L --> N[语义邻域预筛 Hough]
+    M --> N
+    N --> O[沿线概率门控与组件并集]
+    E --> O
+    O --> Q{当前帧有新鲜观测?}
     Q -->|是| F[直接保留当前观测]
     Q -->|否| R[Lucas-Kanade 前后向光流]
     R --> P[短时传播几何]

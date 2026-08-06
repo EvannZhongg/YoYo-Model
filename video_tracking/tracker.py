@@ -264,6 +264,7 @@ def _augment_semantic_color_observation(
     threshold: float,
     min_mean: float,
     min_fraction_at_0_10: float,
+    semantic_prefilter: bool = False,
 ) -> dict[str, Any] | None:
     """Add a color line only when the semantic map independently supports it."""
     if observation is None or yoyo is None:
@@ -274,6 +275,8 @@ def _augment_semantic_color_observation(
         require_yoyo_proximity=False,
         mark_far_ambiguous=True,
         reference_points=observation.get("points"),
+        semantic_probability=probability if semantic_prefilter else None,
+        semantic_meta=meta if semantic_prefilter else None,
     )
     if color is None:
         return observation
@@ -320,6 +323,7 @@ def _predict_string_model(
     color_probability_augment: bool = False,
     color_probability_min_mean: float = 0.40,
     color_probability_min_fraction: float = 0.50,
+    color_semantic_prefilter: bool = False,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -390,6 +394,7 @@ def _predict_string_model(
                 threshold,
                 color_probability_min_mean,
                 color_probability_min_fraction,
+                color_semantic_prefilter,
             )
         if observation is not None:
             if ensemble_metadata is not None:
@@ -945,6 +950,7 @@ def track_video(
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
     string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
     string_color_probability_augment: bool = TRACKING_CONFIG.string_color_probability_augment,
+    string_color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     string_color_probability_min_mean: float = TRACKING_CONFIG.string_color_probability_min_mean,
     string_color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
@@ -1193,6 +1199,7 @@ def track_video(
                 string_color_probability_augment,
                 string_color_probability_min_mean,
                 string_color_probability_min_fraction,
+                string_color_semantic_prefilter,
             )
             string_inference_frames += 1
             if (
@@ -1258,6 +1265,7 @@ def track_video(
                 string_color_probability_augment,
                 string_color_probability_min_mean,
                 string_color_probability_min_fraction,
+                string_color_semantic_prefilter,
             )
             string_inference_frames += 1
             string = estimate_string(
@@ -1572,6 +1580,7 @@ def track_video(
             "string_inference_fps": float(string_inference_fps),
             "string_inference_interval_frames": int(string_inference_interval),
             "string_color_probability_augment": bool(string_color_probability_augment),
+            "string_color_semantic_prefilter": bool(string_color_semantic_prefilter),
             "string_color_probability_min_mean": float(string_color_probability_min_mean),
             "string_color_probability_min_fraction": float(string_color_probability_min_fraction),
             "string_max_propagation_frames": int(string_max_propagation_frames),
@@ -1767,6 +1776,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.string_color_probability_min_mean,
     )
     parser.add_argument(
+        "--string-color-semantic-prefilter",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.string_color_semantic_prefilter,
+        help="Restrict color/Hough candidates to the semantic probability neighborhood.",
+    )
+    parser.add_argument(
         "--string-color-probability-min-fraction",
         type=float,
         default=TRACKING_CONFIG.string_color_probability_min_fraction,
@@ -1867,6 +1882,7 @@ def main() -> int:
         string_inference_scale=args.string_inference_scale,
         string_inference_fps=args.string_inference_fps,
         string_color_probability_augment=not args.no_string_color_probability_augment,
+        string_color_semantic_prefilter=args.string_color_semantic_prefilter,
         string_color_probability_min_mean=args.string_color_probability_min_mean,
         string_color_probability_min_fraction=args.string_color_probability_min_fraction,
         string_max_propagation_frames=args.string_max_propagation_frames,

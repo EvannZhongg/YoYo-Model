@@ -398,6 +398,10 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             default_kwargs["string_adaptive_ensemble_alpha"],
             TRACKING_CONFIG.string_adaptive_ensemble_alpha,
         )
+        self.assertEqual(
+            default_kwargs["string_color_semantic_prefilter"],
+            TRACKING_CONFIG.string_color_semantic_prefilter,
+        )
 
     def test_tracking_without_video_returns_current_output_shape(self):
         outputs = run_video_tracking(

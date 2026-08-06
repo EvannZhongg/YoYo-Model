@@ -14,6 +14,9 @@ import cv2
 import numpy as np
 
 
+_COLOR_SEMANTIC_SUPPORT_KERNEL = np.ones((31, 31), dtype=np.uint8)
+
+
 def update_adaptive_string_domain_gate(
     history: list[tuple[bool, float, float]],
     observation: dict[str, Any] | None,
@@ -91,6 +94,9 @@ def _color_line_observation(
     require_yoyo_proximity: bool,
     mark_far_ambiguous: bool = False,
     reference_points: list[list[float]] | None = None,
+    semantic_probability: np.ndarray | None = None,
+    semantic_meta: Any | None = None,
+    semantic_min_probability: float = 0.10,
 ) -> dict[str, Any] | None:
     """Find a saturated line segment in the yoyo-centered search region."""
     height, width = frame.shape[:2]
@@ -112,6 +118,30 @@ def _color_line_observation(
     kernel = np.ones((3, 3), dtype=np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    if semantic_probability is not None and semantic_meta is not None:
+        probability = np.asarray(semantic_probability, dtype=np.float32)
+        px1 = max(0, int(math.floor(rx1 * semantic_meta.scale + semantic_meta.pad_x)))
+        py1 = max(0, int(math.floor(ry1 * semantic_meta.scale + semantic_meta.pad_y)))
+        px2 = min(
+            probability.shape[1],
+            int(math.ceil(rx2 * semantic_meta.scale + semantic_meta.pad_x)),
+        )
+        py2 = min(
+            probability.shape[0],
+            int(math.ceil(ry2 * semantic_meta.scale + semantic_meta.pad_y)),
+        )
+        if px2 <= px1 or py2 <= py1:
+            return None
+        support = (probability[py1:py2, px1:px2] >= float(semantic_min_probability)).astype(
+            np.uint8
+        )
+        support = cv2.resize(
+            support, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_NEAREST,
+        )
+        # A 15 px source-space radius retains weak string edges while removing
+        # unrelated saturated stage lines before the expensive Hough search.
+        support = cv2.dilate(support, _COLOR_SEMANTIC_SUPPORT_KERNEL, iterations=1)
+        mask = cv2.bitwise_and(mask, support)
     diag = math.hypot(roi.shape[1], roi.shape[0])
     lines = cv2.HoughLinesP(
         mask,

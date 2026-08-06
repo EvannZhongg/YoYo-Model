@@ -213,6 +213,14 @@ class TrackingConfig:
         ),
         True,
     )
+    string_color_semantic_prefilter: bool = _as_bool(
+        _env_or_config(
+            "TRACKING_STRING_COLOR_SEMANTIC_PREFILTER",
+            "tracking.string_color_semantic_prefilter",
+            True,
+        ),
+        True,
+    )
     string_color_probability_min_mean: float = float(
         _env_or_config(
             "TRACKING_STRING_COLOR_PROBABILITY_MIN_MEAN",
