@@ -124,6 +124,7 @@ def run_video_tracking(
             device=device.strip(),
             enable_pose=bool(enable_pose),
             pose_weights_path=pose_weights_path.strip() or None,
+            pose_detector_path=TRACKING_CONFIG.pose_detector_path,
             auto_download_pose=TRACKING_CONFIG.auto_download_pose,
             enable_string_model=bool(enable_string_model),
             string_weights_path=string_weights_path.strip() or None,

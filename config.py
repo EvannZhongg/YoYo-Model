@@ -116,7 +116,20 @@ class TrackingConfig:
     visualization_max_width: int = int(
         _env_or_config("TRACKING_VISUALIZATION_MAX_WIDTH", "tracking.visualization_max_width", 1920)
     )
-    pose_weights_path: Path = _as_path(_env_or_config("TRACKING_POSE_WEIGHTS_PATH", "tracking.pose_weights_path", "models/yolo11n-pose.pt"))
+    pose_weights_path: Path = _as_path(
+        _env_or_config(
+            "TRACKING_POSE_WEIGHTS_PATH",
+            "tracking.pose_weights_path",
+            "models/rtmpose/rtmpose-m-wholebody-256x192.onnx",
+        )
+    )
+    pose_detector_path: Path = _as_path(
+        _env_or_config(
+            "TRACKING_POSE_DETECTOR_PATH",
+            "tracking.pose_detector_path",
+            "models/rtmpose/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx",
+        )
+    )
     enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", True), True)
     auto_download_pose: bool = _as_bool(_env_or_config("TRACKING_AUTO_DOWNLOAD_POSE", "tracking.auto_download_pose", False), False)
     string_weights_path: Path = _as_path(
@@ -231,7 +244,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_ORIENTATION_WEIGHTS_PATH",
             "tracking.orientation_weights_path",
-            "runs/candidates/yoyo_unified_582cde69ebb8_orientation_roi_d88241f08b82_best_nyyc36-warm-freeze10-lr1e4-v1/weights/best.pt",
+            "runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt",
         )
     )
     enable_orientation_model: bool = _as_bool(

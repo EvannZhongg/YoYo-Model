@@ -406,7 +406,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertIn("temporal_reference_rejected", metadata["review_reasons"])
         self.assertEqual(
             metadata["selection_method"],
-            "visible_wrists_yoyo_proximity_then_pose_quality",
+            "person_extent_pose_quality_then_yoyo_proximity",
         )
 
     def test_tracking_review_sampler_keeps_events_and_full_video_context(self):

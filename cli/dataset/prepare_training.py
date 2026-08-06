@@ -1,4 +1,4 @@
-from training_v2.prepare_dataset import main
+from training_v3.prepare_dataset import main
 
 
 if __name__ == "__main__":

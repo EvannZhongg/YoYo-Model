@@ -1,0 +1,5 @@
+# Install this file inside the project virtual environment, then install
+# RTMLib without dependencies so pip does not replace the project's OpenCV:
+#   python -m pip install -r training_v3/requirements-rtmpose.txt
+#   python -m pip install rtmlib==0.0.16 --no-deps
+onnxruntime-gpu==1.22.0

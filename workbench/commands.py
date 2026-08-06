@@ -69,14 +69,14 @@ def workbench_train_v2v3(
         ]
     elif task == "orientation_roi":
         args = [
-            "-m", "training_v2.train_orientation",
+            "-m", "training_v3.train_orientation",
             "--view-manifest", str(dataset_root / "orientation_roi" / "manifest.json"),
             "--project-dir", project_dir,
             "--epochs", str(int(epochs)),
         ]
     else:
         args = [
-            "-m", "training_v2.train",
+            "-m", "training_v3.train",
             "--dataset-dir", dataset_dir,
             "--project-dir", project_dir,
             "--task", task,
@@ -91,6 +91,6 @@ def workbench_evaluate_v2v3(run_dir: str, device: str) -> str:
     manifest_path = Path(run_dir) / "run_manifest.json"
     if not manifest_path.is_file():
         return f"Refused: model run manifest is missing: {manifest_path}"
-    args = ["-m", "training_v2.evaluate", run_dir]
+    args = ["-m", "training_v3.evaluate", run_dir]
     _append_value(args, "--device", device)
     return _run_workbench_command(args)

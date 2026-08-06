@@ -1,4 +1,4 @@
-from training_v2.semantic_view import main
+from training_v3.semantic_view import main
 
 
 if __name__ == "__main__":

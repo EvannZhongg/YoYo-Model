@@ -12,7 +12,7 @@ from typing import Any
 
 from common.files import sha256_file
 from config import BASE_DIR
-from training_v2.prepare_dataset import SOURCE_POLICY
+from training_v3.prepare_dataset import SOURCE_POLICY
 from yolo_training.download_model import download_model
 
 

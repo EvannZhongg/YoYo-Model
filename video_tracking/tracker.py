@@ -35,6 +35,13 @@ from string_segmentation.semantic_model import (
 )
 from video_tracking.review_sheet import make_tracking_review_sheet
 from video_tracking.orientation import carry_orientation, load_orientation_model, predict_orientation
+from video_tracking.rtmpose_backend import (
+    COCO_BODY_KEYPOINT_COUNT,
+    DEFAULT_DETECTOR_PATH,
+    DEFAULT_POSE_PATH,
+    RTMPoseWholebody,
+    hand_landmarks,
+)
 from video_tracking.string_tracker import (
     _color_line_observation,
     estimate_string,
@@ -64,18 +71,21 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
-def _load_pose_model(weights_path: str | Path | None, auto_download: bool):
-    if not weights_path and not auto_download:
-        return None, None
-    from ultralytics import YOLO
-
-    requested = str(weights_path or "yolo11n-pose.pt")
+def _load_pose_model(
+    weights_path: str | Path | None,
+    auto_download: bool,
+    device: str = "",
+    detector_path: str | Path | None = None,
+):
+    requested = Path(weights_path or DEFAULT_POSE_PATH)
+    detector = Path(detector_path or DEFAULT_DETECTOR_PATH)
     try:
-        model = YOLO(requested)
+        model = RTMPoseWholebody(requested, detector, device)
     except Exception as exc:
-        logger.warning("Pose model unavailable (%s): %s", requested, exc)
+        suffix = " Automatic downloads are disabled; use the project download command." if auto_download else ""
+        logger.warning("RTMPose model unavailable (%s): %s%s", requested, exc, suffix)
         return None, str(exc)
-    return model, requested
+    return model, str(requested)
 
 
 def _load_string_model(
@@ -457,7 +467,9 @@ def _select_pose_person(
             if has_yoyo and visible_wrists
             else diagonal
         )
-        mean_visible_confidence = float(person_confidence[visible].mean()) if np.any(visible) else 0.0
+        body_confidence = person_confidence[:COCO_BODY_KEYPOINT_COUNT]
+        body_visible = body_confidence >= 0.20
+        mean_visible_confidence = float(body_confidence[body_visible].mean()) if np.any(body_visible) else 0.0
         box = boxes[index] if index < len(boxes) else np.zeros(4, dtype=np.float32)
         box_area = max(0.0, float(box[2] - box[0])) * max(0.0, float(box[3] - box[1]))
         temporal_iou = _bbox_iou(
@@ -471,31 +483,33 @@ def _select_pose_person(
             ))
             if has_previous else diagonal
         )
-        cold_start_score = (
-            int(bool(visible_wrists)),
-            -wrist_distance / diagonal if has_yoyo else 0.0,
-            len(visible_wrists),
-            int(visible.sum()),
-            mean_visible_confidence,
-            float(box_confidence[index]) if index < len(box_confidence) else 0.0,
-            box_area / max(1.0, float(width * height)),
-        )
-        temporal_score = (
-            temporal_iou,
-            -temporal_center_distance / diagonal,
-            *cold_start_score,
-        )
         candidates.append({
             "index": index,
             "wrist_distance": wrist_distance,
-            "visible_count": int(visible.sum()),
+            "visible_count": int(body_visible.sum()),
             "visible_wrist_count": len(visible_wrists),
             "box": box,
-            "cold_start_score": cold_start_score,
-            "temporal_score": temporal_score,
+            "box_area": box_area,
+            "box_height": max(0.0, float(box[3] - box[1])),
+            "mean_body_confidence": mean_visible_confidence,
             "temporal_iou": temporal_iou,
             "temporal_center_distance": temporal_center_distance,
         })
+    max_area = max((item["box_area"] for item in candidates), default=1.0)
+    max_height = max((item["box_height"] for item in candidates), default=1.0)
+    for item in candidates:
+        proximity = max(0.0, 1.0 - float(item["wrist_distance"]) / diagonal) if has_yoyo else 0.0
+        item["cold_start_score"] = (
+            0.45 * item["box_area"] / max(1.0, max_area)
+            + 0.25 * min(1.0, item["mean_body_confidence"])
+            + 0.20 * item["box_height"] / max(1.0, max_height)
+            + 0.10 * proximity
+        )
+        item["temporal_score"] = (
+            item["temporal_iou"],
+            -item["temporal_center_distance"] / diagonal,
+            item["cold_start_score"],
+        )
     temporal_candidates = [
         item for item in candidates
         if item["temporal_iou"] >= 0.05
@@ -521,9 +535,9 @@ def _select_pose_person(
         review_reasons.append("low_temporal_iou")
     return selected, {
         "selection_method": (
-            "temporal_continuity_then_visible_wrists_yoyo_proximity_pose_quality"
+            "temporal_continuity_then_person_extent_pose_quality_yoyo_proximity"
             if temporal_reference_used
-            else "visible_wrists_yoyo_proximity_then_pose_quality"
+            else "person_extent_pose_quality_then_yoyo_proximity"
         ),
         "person_index": int(selected),
         "person_count": int(len(points)),
@@ -554,29 +568,13 @@ def _predict_pose(
     if model is None:
         return [], [], {"status": "disabled_or_unavailable"}
     try:
-        kwargs: dict[str, Any] = {"source": frame, "imgsz": int(imgsz), "verbose": False}
-        if str(device).strip():
-            kwargs["device"] = str(device).strip()
-        result = model.predict(**kwargs)[0]
-        keypoints = getattr(result, "keypoints", None)
-        if keypoints is None or keypoints.xy is None:
+        result = model.predict(frame)
+        all_points = result.keypoints
+        all_confidence = result.scores
+        boxes = result.boxes
+        if not len(all_points):
             return [], [], {"status": "no_person"}
-        all_points = keypoints.xy.cpu().numpy()
-        all_confidence = (
-            keypoints.conf.cpu().numpy()
-            if getattr(keypoints, "conf", None) is not None
-            else np.ones(all_points.shape[:2], dtype=np.float32)
-        )
-        boxes = (
-            result.boxes.xyxy.cpu().numpy()
-            if getattr(result, "boxes", None) is not None and result.boxes.xyxy is not None
-            else np.zeros((len(all_points), 4), dtype=np.float32)
-        )
-        box_confidence = (
-            result.boxes.conf.cpu().numpy()
-            if getattr(result, "boxes", None) is not None and result.boxes.conf is not None
-            else np.zeros(len(all_points), dtype=np.float32)
-        )
+        box_confidence = np.zeros(len(all_points), dtype=np.float32)
         selection = _select_pose_person(
             all_points, all_confidence, boxes, box_confidence, yoyo,
             frame.shape[1], frame.shape[0], previous_person_bbox,
@@ -586,22 +584,33 @@ def _predict_pose(
         selected, metadata = selection
         points = all_points[selected]
         confidence = all_confidence[selected]
-        # COCO pose indexes: left/right wrist are 9/10.
+        # COCO WholeBody retains body wrist indexes 9/10 and adds 21 detailed
+        # landmarks per hand at indexes 91:112 and 112:133.
         wrists: list[dict[str, Any]] = []
-        for index, name in ((9, "left_wrist"), (10, "right_wrist")):
+        for index, name, side in ((9, "left_wrist", "left"), (10, "right_wrist", "right")):
             if index >= len(points):
                 continue
             conf = float(confidence[index]) if index < len(confidence) else 1.0
             if conf < 0.20:
                 continue
-            wrists.append({"name": name, "x": float(points[index][0]), "y": float(points[index][1]), "confidence": conf})
+            wrists.append({
+                "name": name,
+                "x": float(points[index][0]),
+                "y": float(points[index][1]),
+                "confidence": conf,
+                "landmarks": hand_landmarks(points, confidence, side),
+                "source": model.backend_name,
+            })
         pose = []
-        for index, point in enumerate(points):
+        for index, point in enumerate(points[:COCO_BODY_KEYPOINT_COUNT]):
             conf = float(confidence[index]) if index < len(confidence) else 1.0
             pose.append({"index": index, "x": float(point[0]), "y": float(point[1]), "confidence": conf})
         metadata.update({
             "status": "ok",
             "box_confidence": round(float(box_confidence[selected]), 4),
+            "backend": model.backend_name,
+            "keypoint_schema": model.keypoint_schema,
+            "wholebody_keypoint_count": int(len(points)),
             "temporal_reference_age_frames": (
                 int(temporal_reference_age_frames)
                 if metadata.get("temporal_reference_available")
@@ -905,6 +914,7 @@ def track_video(
     text_scale: float = TRACKING_CONFIG.text_scale,
     visualization_max_width: int = TRACKING_CONFIG.visualization_max_width,
     pose_weights_path: str | Path | None = None,
+    pose_detector_path: str | Path | None = None,
     enable_pose: bool = False,
     auto_download_pose: bool = False,
     string_weights_path: str | Path | None = None,
@@ -969,7 +979,10 @@ def track_video(
 
     model = YOLO(str(weights_path))
     class_names = {int(key): str(value) for key, value in dict(getattr(model, "names", {}) or {}).items()}
-    pose_model, pose_error = _load_pose_model(pose_weights_path, auto_download_pose) if enable_pose else (None, None)
+    pose_model, pose_error = (
+        _load_pose_model(pose_weights_path, auto_download_pose, device, pose_detector_path)
+        if enable_pose else (None, None)
+    )
     string_model, string_model_status = _load_string_model(
         string_weights_path,
         enable_string_model,
@@ -1229,8 +1242,6 @@ def track_video(
                     orientation_model,
                     frame,
                     yoyo,
-                    wrists,
-                    string,
                     orientation_imgsz,
                     device,
                 )
@@ -1442,10 +1453,11 @@ def track_video(
             else ""
         ),
         "pose_weights_sha256": (
-            sha256_file(Path(pose_weights_path))
-            if pose_model is not None and pose_weights_path and Path(pose_weights_path).is_file()
+            sha256_file(pose_model.pose_path)
+            if pose_model is not None
             else ""
         ),
+        "pose_detector_sha256": sha256_file(pose_model.detector_path) if pose_model is not None else "",
         "orientation_weights_sha256": (
             sha256_file(resolved_orientation_weights)
             if orientation_model is not None and resolved_orientation_weights.is_file()
@@ -1470,7 +1482,9 @@ def track_video(
             },
             "visualization_max_width": int(visualization_max_width),
             "pose_enabled": enable_pose,
-            "pose_weights": str(pose_weights_path or ""),
+            "pose_backend": pose_model.backend_name if pose_model is not None else "unavailable",
+            "pose_weights": str(pose_model.pose_path) if pose_model is not None else str(pose_weights_path or ""),
+            "pose_detector": str(pose_model.detector_path) if pose_model is not None else str(pose_detector_path or ""),
             "string_model_enabled": bool(enable_string_model),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
             "string_ensemble_weights": str(string_ensemble_weights_path or ""),
@@ -1547,7 +1561,13 @@ def track_video(
         "bad_case_counts": dict(sorted(bad_case_counts.items())),
         "string_geometry_counts": string_geometry_counts,
         "weights": str(weights_path),
-        "pose_weights": pose_error or str(pose_weights_path or "") if enable_pose else "",
+        "pose_weights": (
+            str(pose_model.pose_path)
+            if pose_model is not None
+            else pose_error or str(pose_weights_path or "")
+            if enable_pose
+            else ""
+        ),
         "string_model": string_model_status,
         "orientation_model": orientation_model_status,
         "frame_count": processed_frames,
@@ -1584,8 +1604,9 @@ def parse_args() -> argparse.Namespace:
         default=TRACKING_CONFIG.visualization_max_width,
         help="Maximum annotated preview width; 0 preserves source resolution.",
     )
-    parser.add_argument("--pose-weights", default="")
-    parser.add_argument("--pose", action="store_true", help="Run optional YOLO pose inference for wrists/body landmarks.")
+    parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
+    parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))
+    parser.add_argument("--pose", action="store_true", help="Run RTMPose-m WholeBody inference for hand/body landmarks.")
     parser.add_argument("--auto-download-pose", action="store_true")
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument(
@@ -1709,6 +1730,7 @@ def main() -> int:
         device=args.device,
         visualization_max_width=args.visualization_max_width,
         pose_weights_path=args.pose_weights or None,
+        pose_detector_path=args.pose_detector or None,
         enable_pose=args.pose,
         auto_download_pose=args.auto_download_pose,
         string_weights_path=args.string_weights,
