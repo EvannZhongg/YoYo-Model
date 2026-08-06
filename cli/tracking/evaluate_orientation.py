@@ -252,7 +252,6 @@ def main() -> int:
         "strong_switch_margin": TRACKING_CONFIG.orientation_strong_switch_margin,
     }
     baseline_replay = _replay(records, args.baseline_fps, None)
-    cadence_replay = _replay(records, args.burst_fps, None)
     adaptive_kwargs = {
         "burst_inference_fps": float(args.burst_fps),
         "min_confidence": TRACKING_CONFIG.orientation_adaptive_min_confidence,
@@ -260,7 +259,6 @@ def main() -> int:
     }
     candidate_replay = _replay(records, args.baseline_fps, filter_kwargs, adaptive_kwargs)
     baseline = _metrics(records, baseline_replay["predictions"])
-    unfiltered_candidate_cadence = _metrics(records, cadence_replay["predictions"])
     candidate = _metrics(records, candidate_replay["predictions"])
     every_group_non_decreasing = all(
         candidate["groups"][group_id]["accuracy"] >= values["accuracy"]
@@ -284,12 +282,6 @@ def main() -> int:
             "temporal_filter": False,
             "inference_count": baseline_replay["inference_count"],
             "metrics": baseline,
-        },
-        "candidate_cadence_ablation": {
-            "inference_fps": float(args.burst_fps),
-            "temporal_filter": False,
-            "inference_count": cadence_replay["inference_count"],
-            "metrics": unfiltered_candidate_cadence,
         },
         "candidate": {
             "stable_inference_fps": float(args.baseline_fps),
