@@ -10,8 +10,8 @@ Trace all defensible visible strokes and build an ordered `string_path`. Hidden
 segments can be represented only by `inferred` path edges and
 `unresolved_gaps`; do not draw them into `string_polylines_pixel`.
 
-Before applying or approving, trace the full visible route from hands through
-mounts, returns, loop sides, hanging drops, and the visible yoyo when present.
+Before applying or approving, trace the full visible route through mounts,
+returns, loop sides, hanging drops, and the visible yoyo when present.
 Reject half-route labels where one obvious visible branch is missing even if
 the labeled branch is accurate.
 

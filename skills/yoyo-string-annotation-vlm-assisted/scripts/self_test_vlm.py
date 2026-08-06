@@ -59,8 +59,6 @@ def draft_label(image_path: Path) -> dict:
         "string_polyline_pixel": None,
         "string_polyline_2d": None,
         "string_mask_polygons_pixel": None,
-        "hands_pixel": {"left": None, "right": None},
-        "hands_2d": {"left": None, "right": None},
         "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "unknown",
@@ -111,11 +109,13 @@ class TriageBoundaryTests(unittest.TestCase):
             "notes": "Obvious yoyo performance frame.",
             "string_polylines_pixel": [[[1, 2], [3, 4]]],
             "yoyo_bbox": [1, 2, 3, 4],
+            "hands_pixel": {"left": [1, 2], "right": None},
             "confidence": {"domain": 0.99, "scene": 0.99, "yoyo_presence": 0.9, "bad_cases": 0.95, "overall": 0.95},
         }
         assessment, warnings = vlm_triage.normalize_assessment(raw)
         self.assertNotIn("string_polylines_pixel", assessment)
         self.assertNotIn("yoyo_bbox", assessment)
+        self.assertNotIn("hands_pixel", assessment)
         self.assertTrue(any("prohibited" in item for item in warnings))
 
     def test_only_safe_fields_are_promoted(self) -> None:

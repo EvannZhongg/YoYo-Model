@@ -38,7 +38,6 @@ Every full apply supplies the complete visible state:
     [[635, 340], [700, 397], [754, 440]]
   ],
   "string_mask_polygons_pixel": null,
-  "hands_pixel": {"left": [510, 190], "right": null},
   "yoyo_division": "1A",
   "scene_label": "trick",
   "trick_orientation": "horizontal",
@@ -47,8 +46,8 @@ Every full apply supplies the complete visible state:
     "reconstruction_status": "partial",
     "paths": [
       {
-        "path_id": "left-hand-to-yoyo",
-        "start_anchor": "left_hand",
+        "path_id": "visible-route-to-yoyo",
+        "start_anchor": "unknown",
         "end_anchor": "yoyo",
         "points_pixel": [[510,190], [548,250], [602,318], [635,340], [700,397], [754,440]],
         "edges": [
@@ -60,7 +59,7 @@ Every full apply supplies the complete visible state:
         ]
       }
     ],
-    "unresolved_gaps": ["string hidden behind hand between (602,318) and (635,340)"]
+    "unresolved_gaps": ["string is not visible between (602,318) and (635,340)"]
   },
   "bad_case": ["partial_occlusion"],
   "notes": "Visible strokes are split; hidden route is metadata only."
@@ -99,11 +98,11 @@ It rebuilds `string_path` from visible strokes by default; set
 
 Occluded, behind-neck, behind-hand, behind-body, and ambiguous crossing segments
 must be split in visible geometry. Do not add a drawn segment to close a loop,
-bridge a hand wrap, or maintain topology. Use path metadata for hidden order.
+bridge an occluded wrap, or maintain topology. Use path metadata for hidden order.
 
 Before approval, visible geometry must cover the full defensible visible route.
 Do not label only one obvious branch when another visible branch, vertical
-return, loop side, hanging drop, or hand-to-yoyo section remains unlabeled.
+return, loop side, hanging drop, or other visible section remains unlabeled.
 Hidden gaps may split the route, but visible pieces on both sides of a gap must
 be included when pixels support them.
 

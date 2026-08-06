@@ -23,6 +23,16 @@ MODES = ("append-isolated", "strict-eval")
 BASELINE_TOKEN = "{baseline_manifest}"
 PROTECTED_CANONICAL_TOKEN = "{protected_canonical}"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
+LEGACY_NON_TASK_FIELDS = {
+    "hands",
+    "hands_pixel",
+    "hands_2d",
+    "hands_normalized",
+    "hand_landmarks_pixel",
+    "hand_pose",
+    "pose",
+    "pose_person",
+}
 
 
 class ContractError(ValueError):
@@ -462,7 +472,15 @@ def _record_label_paths(
 
 def _stable_label_value(path: Path) -> dict[str, Any]:
     value = _read_json(path)
-    return {key: item for key, item in value.items() if key != "dataset_management"}
+    return {
+        key: item
+        for key, item in value.items()
+        if key != "dataset_management" and key not in LEGACY_NON_TASK_FIELDS
+    }
+
+
+def _present_non_task_fields(path: Path) -> set[str]:
+    return LEGACY_NON_TASK_FIELDS.intersection(_read_json(path))
 
 
 def _label_key(path: Path, dataset_root: Path) -> str:
@@ -511,7 +529,7 @@ def _load_protected_reviews(
 def _verify_protected_labels(
     old_labels: dict[str, Path],
     new_labels: dict[str, Path],
-) -> None:
+) -> dict[str, int]:
     changed = [
         image_hash
         for image_hash, old_path in old_labels.items()
@@ -523,6 +541,22 @@ def _verify_protected_labels(
         raise ContractError(
             f"protected canonical label content changed for {len(changed)} existing images: {preview}"
         )
+    residual = {
+        image_hash: sorted(_present_non_task_fields(path))
+        for image_hash, path in new_labels.items()
+        if _present_non_task_fields(path)
+    }
+    if residual:
+        preview = ", ".join(f"{key}:{'/'.join(value)}" for key, value in list(residual.items())[:5])
+        raise ContractError(
+            f"rebuilt canonical labels retain unsupported non-task fields for {len(residual)} images: {preview}"
+        )
+    return {
+        "non_task_fields_removed_label_count": sum(
+            bool(_present_non_task_fields(path)) for path in old_labels.values()
+        ),
+        "non_task_field_residual_count": 0,
+    }
 
 
 def _rebind_reviews(
@@ -813,7 +847,7 @@ def run_protected_build(args: argparse.Namespace) -> int:
             raise ContractError("; ".join(verification["errors"]))
         old_labels = _record_label_paths(baseline, backup_root, active_root)
         new_labels = _record_label_paths(rebuilt, active_root, active_root)
-        _verify_protected_labels(old_labels, new_labels)
+        contract_cleanup = _verify_protected_labels(old_labels, new_labels)
         rebound_document = _rebind_reviews(
             review_document,
             args.review_dataset_key,
@@ -830,6 +864,7 @@ def run_protected_build(args: argparse.Namespace) -> int:
             "protected": True,
             "dataset_backup_retained": True,
             "protected_label_count": len(old_labels),
+            **contract_cleanup,
             "review_entry_count_rebound": len(reviews_by_hash),
             "rebuilt_manifest_sha256": sha256_file(manifest_path),
         }

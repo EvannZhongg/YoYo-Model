@@ -100,7 +100,7 @@ The weak VLM may supply only:
 - task priority
 - short factual notes and normalized JSON
 
-It must never supply or promote string visibility, trick orientation, hands,
+It must never supply or promote string visibility, trick orientation,
 yoyo bbox, coordinates, masks, centerlines, paths, topology, review decisions,
 or approval status.
 
@@ -119,7 +119,7 @@ For `clear_candidate`, `standard`, and `hard_case`, perform the listed
 
 1. Inspect raw pixels plus relevant temporal context.
 2. Trace every defensible visible string section and split all unsupported gaps.
-3. Set final string visibility, yoyo bbox, hands, anchors, path, hidden gaps, and orientation.
+3. Set final string visibility, yoyo bbox, yoyo/unknown path anchors, ordered path, hidden gaps, and orientation.
 4. Apply one complete candidate for the first geometry revision.
 5. Render, inspect every edge, and use compact patches until approved or unresolved.
 

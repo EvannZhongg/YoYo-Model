@@ -129,6 +129,9 @@ def main() -> int:
             str(sampling_manifest_path),
         )
         label = project / "labels" / "video-a" / "frame_0001.json"
+        initialized = json.loads(label.read_text(encoding="utf-8"))
+        assert "hands_pixel" not in initialized
+        assert "hands_2d" not in initialized
         candidate = root / "candidate.json"
         candidate.write_text(
             json.dumps(
@@ -137,7 +140,6 @@ def main() -> int:
                     "yoyo_bbox_pixel": [300, 245, 340, 285],
                     "string_visibility": "visible",
                     "string_polylines_pixel": [[[140, 60], [210, 105], [260, 180], [320, 245]]],
-                    "hands_pixel": {"left": [140, 60], "right": None},
                     "yoyo_division": "1A",
                     "scene_label": "trick",
                     "trick_orientation": "normal",
@@ -146,8 +148,8 @@ def main() -> int:
                         "reconstruction_status": "complete",
                         "paths": [
                             {
-                                "path_id": "hand-to-yoyo",
-                                "start_anchor": "left_hand",
+                                "path_id": "visible-route-to-yoyo",
+                                "start_anchor": "unknown",
                                 "end_anchor": "yoyo",
                                 "points_pixel": [[140, 60], [210, 105], [260, 180], [320, 245]],
                                 "edges": [
@@ -208,7 +210,6 @@ def main() -> int:
                     "yoyo_bbox_pixel": [150, 122.5, 170, 142.5],
                     "string_visibility": "visible",
                     "string_polylines_pixel": [[[70, 30], [105, 52.5], [130, 90], [160, 122.5]]],
-                    "hands_pixel": {"left": [70, 30], "right": None},
                     "yoyo_division": "1A",
                     "scene_label": "trick",
                     "trick_orientation": "normal",
@@ -217,8 +218,8 @@ def main() -> int:
                         "reconstruction_status": "complete",
                         "paths": [
                             {
-                                "path_id": "scaled-hand-to-yoyo",
-                                "start_anchor": "left_hand",
+                                "path_id": "scaled-visible-route-to-yoyo",
+                                "start_anchor": "unknown",
                                 "end_anchor": "yoyo",
                                 "points_pixel": [[70, 30], [105, 52.5], [130, 90], [160, 122.5]],
                                 "edges": [
@@ -371,7 +372,6 @@ def main() -> int:
                         "string_visibility",
                         "string_polylines_pixel",
                         "string_mask_polygons_pixel",
-                        "hands_pixel",
                         "yoyo_division",
                         "scene_label",
                         "trick_orientation",
@@ -418,7 +418,7 @@ def main() -> int:
 
         invalid_anchor = root / "invalid-anchor.json"
         invalid_anchor_payload = json.loads(candidate.read_text(encoding="utf-8"))
-        invalid_anchor_payload["string_path"]["paths"][0]["start_anchor"] = "hand"
+        invalid_anchor_payload["string_path"]["paths"][0]["start_anchor"] = "left_hand"
         invalid_anchor.write_text(json.dumps(invalid_anchor_payload), encoding="utf-8")
         run("apply", "--label", str(label), "--candidate", str(invalid_anchor), "--actor", "anchor-gate-test")
         invalid_anchor_review = run(
@@ -432,10 +432,10 @@ def main() -> int:
             "--role",
             "semantic-critic",
             "--notes",
-            "Generic hand anchors must be rejected.",
+            "Legacy hand anchors must be rejected.",
             expected=2,
         )
-        assert "start_anchor=hand is unsupported" in invalid_anchor_review.stderr
+        assert "start_anchor=left_hand is unsupported" in invalid_anchor_review.stderr
         run(
             "review",
             "--label",

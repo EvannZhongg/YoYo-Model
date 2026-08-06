@@ -30,10 +30,20 @@ TRICK_ORIENTATIONS = {"normal", "horizontal", "unknown", "not_applicable"}
 TOPOLOGIES = {"open", "loop", "branched", "multiple", "uncertain"}
 RECONSTRUCTION_STATUS = {"complete", "partial", "uncertain", "not_applicable"}
 EDGE_EVIDENCE = {"observed", "temporal", "inferred"}
-PATH_ANCHORS = {"left_hand", "right_hand", "yoyo", "unknown"}
+PATH_ANCHORS = {"yoyo", "unknown"}
 ACCEPTED_REVIEW = {"approved", "reviewed"}
 REQUIRED_APPROVAL_ROLES = {"geometry-critic", "semantic-critic"}
 REMOVED_FIELDS = {"".join(chr(item) for item in (118, 97, 114, 105, 97, 116, 105, 111, 110, 95, 116, 97, 103, 115))}
+LEGACY_NON_TASK_FIELDS = {
+    "hands",
+    "hands_pixel",
+    "hands_2d",
+    "hands_normalized",
+    "hand_landmarks_pixel",
+    "hand_pose",
+    "pose",
+    "pose_person",
+}
 CORE_FIELDS = (
     "image_sha256",
     "image_size",
@@ -43,7 +53,6 @@ CORE_FIELDS = (
     "string_visibility",
     "string_polylines_pixel",
     "string_mask_polygons_pixel",
-    "hands_pixel",
     "yoyo_division",
     "scene_label",
     "trick_orientation",
@@ -326,11 +335,6 @@ def transform_candidate_coordinates(candidate: dict[str, Any], width: int, heigh
         converted["string_polyline_pixel"] = convert_points(converted.get("string_polyline_pixel"))
     if "string_mask_polygons_pixel" in converted:
         converted["string_mask_polygons_pixel"] = convert_polylines(converted.get("string_mask_polygons_pixel"))
-    if isinstance(converted.get("hands_pixel"), dict):
-        converted["hands_pixel"] = {
-            name: convert_point_value(value, transform) if value else None
-            for name, value in converted["hands_pixel"].items()
-        }
     if converted.get("yoyo_bbox_pixel"):
         raw_box = bbox(converted.get("yoyo_bbox_pixel"))
         if raw_box:
@@ -440,6 +444,8 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result = copy.deepcopy(base)
     for removed_field in REMOVED_FIELDS:
         result.pop(removed_field, None)
+    for field in LEGACY_NON_TASK_FIELDS:
+        result.pop(field, None)
     string_visibility = str(candidate.get("string_visibility", result.get("string_visibility", "uncertain"))).lower()
     result["string_visibility"] = string_visibility if string_visibility in STRING_VISIBILITY else "uncertain"
     yoyo_visibility = str(candidate.get("visibility", result.get("visibility", "uncertain"))).lower()
@@ -471,22 +477,6 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
         if raw_bbox
         else []
     )
-
-    hands_raw = candidate.get("hands_pixel")
-    hands_normalized = False
-    if not isinstance(hands_raw, dict):
-        hands_raw = candidate.get("hands_2d") if isinstance(candidate.get("hands_2d"), dict) else {}
-        hands_normalized = True
-    hands: dict[str, list[float] | None] = {}
-    for name in ("left", "right"):
-        parsed = point(hands_raw.get(name))
-        if parsed and hands_normalized:
-            parsed = normalized_to_pixel(parsed, width, height)
-        hands[name] = [round(item, 3) for item in parsed] if parsed else None
-    result["hands_pixel"] = hands
-    result["hands_2d"] = {
-        name: pixel_to_normalized(value, width, height) if value else None for name, value in hands.items()
-    }
 
     masks = []
     for polygon in candidate.get("string_mask_polygons_pixel") or []:
@@ -564,8 +554,6 @@ def initial_label(
         "string_polyline_pixel": None,
         "string_polyline_2d": None,
         "string_mask_polygons_pixel": None,
-        "hands_pixel": {"left": None, "right": None},
-        "hands_2d": {"left": None, "right": None},
         "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "unknown",
@@ -773,7 +761,6 @@ def build_candidate_from_patch(base: dict[str, Any], patch: dict[str, Any]) -> d
         if patch.get("rebuild_string_path", True):
             candidate["string_path"] = observed_path_from_strokes(
                 strokes,
-                hands=candidate.get("hands_pixel"),
                 yoyo_bbox=candidate.get("yoyo_bbox_pixel"),
                 image_size=(width, height),
             )
@@ -919,15 +906,10 @@ def point_box_distance(value: list[float], raw_bbox: list[float]) -> float:
 
 def infer_path_anchor(
     value: list[float],
-    hands: dict[str, list[float] | None] | None,
     yoyo_bbox: list[float] | None,
     threshold: float,
 ) -> str:
     candidates: list[tuple[float, str]] = []
-    for name in ("left", "right"):
-        hand = (hands or {}).get(name)
-        if hand:
-            candidates.append((distance(value, hand), f"{name}_hand"))
     if yoyo_bbox:
         candidates.append((point_box_distance(value, yoyo_bbox), "yoyo"))
     if not candidates:
@@ -938,7 +920,6 @@ def infer_path_anchor(
 
 def observed_path_from_strokes(
     strokes: list[list[list[float]]],
-    hands: dict[str, list[float] | None] | None = None,
     yoyo_bbox: list[float] | None = None,
     image_size: tuple[int, int] | list[int] | None = None,
 ) -> dict[str, Any]:
@@ -947,8 +928,8 @@ def observed_path_from_strokes(
     paths = []
     unresolved = []
     for index, stroke in enumerate(strokes):
-        start_anchor = infer_path_anchor(stroke[0], hands, yoyo_bbox, threshold)
-        end_anchor = infer_path_anchor(stroke[-1], hands, yoyo_bbox, threshold)
+        start_anchor = infer_path_anchor(stroke[0], yoyo_bbox, threshold)
+        end_anchor = infer_path_anchor(stroke[-1], yoyo_bbox, threshold)
         paths.append(
             {
                 "path_id": f"observed-stroke-{index + 1}",
@@ -991,7 +972,6 @@ def command_derive_centerlines(args: argparse.Namespace) -> int:
     candidate["string_polylines_pixel"] = strokes
     candidate["string_path"] = observed_path_from_strokes(
         strokes,
-        hands=label.get("hands_pixel"),
         yoyo_bbox=label.get("yoyo_bbox_pixel"),
         image_size=(width, height),
     )
@@ -1100,6 +1080,9 @@ def validate_label(
 ) -> dict[str, list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
+    legacy_non_task_fields = sorted(LEGACY_NON_TASK_FIELDS.intersection(label))
+    if legacy_non_task_fields:
+        errors.append("unsupported non-task annotation fields: " + ", ".join(legacy_non_task_fields))
     if label.get("schema_version") != SCHEMA_VERSION:
         errors.append(
             f"unsupported schema_version={label.get('schema_version')}; expected {SCHEMA_VERSION}"
@@ -1219,7 +1202,6 @@ def validate_label(
     observed_edge_count = 0
     yoyo_anchored = False
     anchor_threshold = max(8.0, math.hypot(width, height) * 0.08)
-    label_hands = label.get("hands_pixel") or {}
     label_yoyo_bbox = label.get("yoyo_bbox_pixel")
     for path_index, path_item in enumerate(path_data.get("paths") or []):
         if not isinstance(path_item, dict):
@@ -1231,21 +1213,13 @@ def validate_label(
             if anchor not in PATH_ANCHORS:
                 errors.append(
                     f"string_path.paths[{path_index}].{endpoint_name}={anchor} is unsupported; "
-                    "use left_hand, right_hand, yoyo, or unknown"
+                    "use yoyo or unknown"
                 )
                 continue
             if anchor == "unknown" or not points:
                 continue
             endpoint = points[point_index]
-            if anchor in {"left_hand", "right_hand"}:
-                hand = label_hands.get(anchor.removesuffix("_hand"))
-                if not hand:
-                    errors.append(f"string_path.paths[{path_index}].{endpoint_name} names missing {anchor}")
-                elif distance(endpoint, hand) > anchor_threshold:
-                    errors.append(
-                        f"string_path.paths[{path_index}].{endpoint_name} is too far from {anchor}"
-                    )
-            elif anchor == "yoyo":
+            if anchor == "yoyo":
                 if not label_yoyo_bbox:
                     errors.append(f"string_path.paths[{path_index}].{endpoint_name} names missing yoyo bbox")
                 elif point_box_distance(endpoint, label_yoyo_bbox) > anchor_threshold:
@@ -1428,12 +1402,6 @@ def render_layer(
     raw_bbox = label.get("yoyo_bbox_pixel")
     if raw_bbox:
         draw.rectangle([round(item * scale) for item in raw_bbox], outline=(50, 255, 70, 255), width=line_width + 1)
-    for name, raw in (label.get("hands_pixel") or {}).items():
-        if raw:
-            x, y = scale_point(raw, scale)
-            radius = max(4, line_width * 2)
-            draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill=(255, 230, 0, 230))
-            draw.text((x + radius + 2, y), name, fill=(255, 230, 0, 255), font=font)
     header = (
         f"string={label.get('string_visibility')} plane={label.get('trick_orientation')} "
         f"status={label.get('string_review_status')} "
@@ -1448,9 +1416,6 @@ def geometry_bounds(label: dict[str, Any]) -> tuple[float, float, float, float] 
     points = []
     for stroke in label.get("string_polylines_pixel") or []:
         points.extend(stroke)
-    for item in (label.get("hands_pixel") or {}).values():
-        if item:
-            points.append(item)
     for path_item in (label.get("string_path") or {}).get("paths") or []:
         points.extend(path_item.get("points_pixel") or [])
     raw_bbox = label.get("yoyo_bbox_pixel")
@@ -1496,10 +1461,6 @@ def command_render(args: argparse.Namespace) -> int:
                 item[1] -= offset_y
         for polygon in detail_label.get("string_mask_polygons_pixel") or []:
             for item in polygon:
-                item[0] -= offset_x
-                item[1] -= offset_y
-        for item in (detail_label.get("hands_pixel") or {}).values():
-            if item:
                 item[0] -= offset_x
                 item[1] -= offset_y
         if detail_label.get("yoyo_bbox_pixel"):
@@ -1649,14 +1610,6 @@ def command_propagate(args: argparse.Namespace) -> int:
         candidate["bad_case"] = sorted(set((candidate.get("bad_case") or []) + ["temporal_propagation_failed"]))
     elif propagated_strokes and previous.get("string_visibility") == "visible":
         candidate["string_visibility"] = "partial"
-    previous_hands = previous.get("hands_pixel") or {}
-    hand_names = [name for name in ("left", "right") if previous_hands.get(name)]
-    tracked_hands, hand_errors = flow_points(previous_gray, current_gray, [previous_hands[name] for name in hand_names], args.max_error)
-    attempted_measurements += len(tracked_hands)
-    all_errors.extend(item for item in hand_errors if item is not None)
-    candidate["hands_pixel"] = {"left": None, "right": None}
-    for name, tracked in zip(hand_names, tracked_hands):
-        candidate["hands_pixel"][name] = tracked
     raw_bbox = previous.get("yoyo_bbox_pixel")
     if raw_bbox:
         corners = [raw_bbox[:2], raw_bbox[2:]]

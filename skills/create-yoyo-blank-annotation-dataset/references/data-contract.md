@@ -19,7 +19,7 @@ manifest hash.
 
 Geometry starts empty. Prefill yoyo visibility as `visible`, trick orientation as
 `normal`, and string visibility as `partial`, matching the canonical label values
-used in `datasets/1Ayoyo_dataset`. Boxes, polylines, masks, hands, and paths contain
+used in `datasets/1Ayoyo_dataset`. Boxes, polylines, masks, and paths contain
 no geometry. `string_review_status` is `unresolved`. Quality revision, history,
 and reviews are empty. These categorical defaults are annotation conveniences,
 not reviewed training truth.

@@ -41,13 +41,16 @@ PROHIBITED_KEY_PARTS = {
     "box",
     "coordinate",
     "geometry",
+    "hand",
     "mask",
     "orientation",
     "point",
     "polyline",
     "polygon",
+    "pose",
     "review_status",
     "string_visibility",
+    "wrist",
 }
 
 
@@ -339,7 +342,7 @@ def compute_handoff(assessment: dict[str, Any], promotions: dict[str, Any], sett
         rank = 3 if hard else 1 if clear_positive else 2
         tasks = [
             "Inspect original pixels and annotate every defensible visible string centerline segment.",
-            "Set final string visibility, yoyo bbox, hands, anchors, ordered path, hidden gaps, and trick orientation.",
+            "Set final string visibility, yoyo bbox, yoyo/unknown anchors, ordered path, hidden gaps, and trick orientation.",
             "Render and refine geometry, then obtain independent geometry and semantic approvals.",
         ]
     skipped = []

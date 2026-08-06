@@ -33,7 +33,7 @@ dataset. The protected action:
 - atomically moves the complete active dataset to a unique backup;
 - requires `{protected_canonical}` in the builder command so manual labels are
   included as a source;
-- rejects any existing canonical JSON change except `dataset_management`;
+- normalizes canonical labels to the current task contract and rejects any other existing canonical JSON change except `dataset_management`;
 - rebinds review entries by image SHA to the rebuilt label paths and hashes;
 - restores the original dataset automatically if build or validation fails.
 
@@ -147,7 +147,8 @@ Do not change `$stamp`, `$datasetBackup`, `$reviewSnapshot`, `$guardArgs`, or
 
 Treat nonzero exit as a hard gate. Confirm `protected_label_count` matches the
 baseline sample count, `review_entry_count_rebound` matches the preflight
-review count, `dataset_backup_retained=true`, and `ok=true` before training.
+review count, `non_task_field_residual_count=0`, `dataset_backup_retained=true`,
+and `ok=true` before training.
 If `rolled_back=true`, diagnose the rejected candidate and start again with
 new backup paths; never bypass the label-content check.
 

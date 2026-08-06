@@ -72,8 +72,8 @@ def assert_initial_defaults(dataset: Path) -> None:
         assert label["string_polylines_pixel"] is None
         assert label["string_polylines_2d"] is None
         assert label["string_mask_polygons_pixel"] is None
-        assert label["hands_pixel"] == {"left": None, "right": None}
-        assert label["hands_2d"] == {"left": None, "right": None}
+        assert "hands_pixel" not in label
+        assert "hands_2d" not in label
         assert label["string_path"]["paths"] == []
         assert label["string_path"]["unresolved_gaps"] == []
 

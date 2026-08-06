@@ -31,7 +31,7 @@ For an anchors-only annotation project that still keeps temporal evidence, use
 `--separate-context`. Anchor files go to `images/` and neighbor files go to
 `context/`; provenance for both remains in the same sampling manifest.
 
-The descriptor cannot identify a yoyo, hand, string, or pose. The manifest
+The descriptor uses appearance statistics only and cannot identify semantic objects. The manifest
 records `recognition_model_used=false`, parameters, source hashes, timestamps,
 and anchor/context roles.
 

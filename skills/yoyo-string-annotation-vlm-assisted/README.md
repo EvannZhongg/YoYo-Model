@@ -1,6 +1,6 @@
 # YOYO String Annotation VLM Assisted
 
-本目录提供一套 VLM 辅助的悠悠球绳标注流程。配置的 VLM 只负责粗粒度分流：判断素材是否属于目标领域、场景是否明显为招式、是否存在明显坏例，以及安排复核优先级。绳子中心线、悠悠球框、手部位置、路径拓扑、招式方向和最终审核必须由视觉标注代理基于原图与相邻帧完成。
+本目录提供一套 VLM 辅助的悠悠球绳标注流程。配置的 VLM 只负责粗粒度分流：判断素材是否属于目标领域、场景是否明显为招式、是否存在明显坏例，以及安排复核优先级。绳子中心线、悠悠球框、路径拓扑、招式方向和最终审核必须由视觉标注代理基于原图与相邻帧完成。
 
 ## 配置并使用模型
 
@@ -112,7 +112,7 @@ triage:
 - `triage/results/<source_group>/*.json`：标准化判断、置信度、警告和安全提升结果。
 - `triage/agent_handoff.json`：按 `quick_verify`、`clear_candidate`、`standard`、`hard_case` 排序的视觉代理任务。
 
-VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `notes`。它不能填写或批准 `string_visibility`、`trick_orientation`、坐标、框、手部、中心线、mask、路径、拓扑、审核结论等字段。
+VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `notes`。它不能填写或批准 `string_visibility`、`trick_orientation`、坐标、框、中心线、mask、路径、拓扑、审核结论等字段。
 
 ## 当前标注字段
 
@@ -151,8 +151,6 @@ VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `
 | `string_polylines_2d` | 多段中心线的 0–999 镜像 |
 | `string_polyline_pixel` / `string_polyline_2d` | 第一段中心线的兼容镜像字段 |
 | `string_mask_polygons_pixel` | 可选的可见绳区域多边形 |
-| `hands_pixel` | 左右手原图像素位置：`{"left": point|null, "right": point|null}` |
-| `hands_2d` | 左右手位置的 0–999 镜像 |
 | `yoyo_division` | `1A`、`2A`、`3A`、`4A`、`5A` |
 | `scene_label` | `trick`、`transition`、`non_trick`、`unknown` |
 | `trick_orientation` | `normal`、`horizontal`、`unknown`、`not_applicable` |
@@ -168,7 +166,7 @@ VLM 可以提升高置信度的 `scene_label`、安全 `bad_case` 和事实性 `
 | `reconstruction_status` | `complete`、`partial`、`uncertain`、`not_applicable` |
 | `paths` | 有序路径数组 |
 | `paths[].path_id` | 路径标识 |
-| `paths[].start_anchor` / `end_anchor` | `left_hand`、`right_hand`、`yoyo` 或 `unknown` |
+| `paths[].start_anchor` / `end_anchor` | `yoyo` 或 `unknown` |
 | `paths[].points_pixel` | 原图像素坐标中的有序路径点 |
 | `paths[].edges` | 相邻点之间的边，包含 `from`、`to`、`evidence` 和 `confidence` |
 | `paths[].edges[].evidence` | `observed`、`temporal` 或 `inferred` |

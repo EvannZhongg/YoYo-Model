@@ -21,7 +21,7 @@ Allowed observations:
 - scalar confidence values in `[0,1]`
 
 Prohibited output includes coordinates, boxes, points, masks, polygons,
-polylines, centerlines, final string visibility, trick orientation, hands,
+polylines, centerlines, final string visibility, trick orientation,
 attachment, path ordering, topology, gaps, review decisions, and approvals.
 The script discards prohibited keys and records a warning.
 

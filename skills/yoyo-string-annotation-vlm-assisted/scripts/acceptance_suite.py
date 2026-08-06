@@ -18,8 +18,6 @@ import annotation_pipeline as pipeline
 
 
 WIDTH, HEIGHT = 640, 360
-HAND_LEFT = [88, 74]
-HAND_RIGHT = [552, 74]
 YOYO_BOX = [294, 268, 346, 320]
 
 
@@ -37,13 +35,7 @@ def synthetic_provenance(source_group: str, frame_index: int) -> dict[str, Any]:
 
 
 def endpoint_anchor(point: list[float]) -> str:
-    distances = {
-        "left_hand": ((point[0] - HAND_LEFT[0]) ** 2 + (point[1] - HAND_LEFT[1]) ** 2) ** 0.5,
-        "right_hand": ((point[0] - HAND_RIGHT[0]) ** 2 + (point[1] - HAND_RIGHT[1]) ** 2) ** 0.5,
-        "yoyo": pipeline.point_box_distance(point, YOYO_BOX),
-    }
-    anchor, distance = min(distances.items(), key=lambda item: item[1])
-    return anchor if distance <= 36 else "unknown"
+    return "yoyo" if pipeline.point_box_distance(point, YOYO_BOX) <= 36 else "unknown"
 
 
 def observed_path(strokes: list[list[list[float]]], topology: str = "open") -> dict[str, Any]:
@@ -82,7 +74,6 @@ def positive_candidate(
         "string_visibility": visibility,
         "string_polylines_pixel": strokes,
         "string_mask_polygons_pixel": None,
-        "hands_pixel": {"left": HAND_LEFT, "right": HAND_RIGHT},
         "yoyo_division": "1A",
         "scene_label": "trick",
         "trick_orientation": "normal",
@@ -99,7 +90,6 @@ def negative_candidate(features: list[str], yoyo_visible: bool) -> dict[str, Any
         "string_visibility": "not_visible",
         "string_polylines_pixel": None,
         "string_mask_polygons_pixel": None,
-        "hands_pixel": {"left": None, "right": None},
         "yoyo_division": "1A",
         "scene_label": "non_trick",
         "trick_orientation": "not_applicable",
@@ -131,16 +121,12 @@ def draw_scene(
     strokes: list[list[list[float]]],
     style: str,
     draw_yoyo: bool = True,
-    draw_hands: bool = True,
 ) -> Image.Image:
     background = "#777b7e" if style in {"low_contrast", "ambiguous"} else "#d5d8dc"
     image = Image.new("RGB", (WIDTH, HEIGHT), background)
     draw = ImageDraw.Draw(image)
     if draw_yoyo:
         draw.ellipse(YOYO_BOX, fill="#c0392b", outline="#202020", width=3)
-    if draw_hands:
-        draw.ellipse((HAND_LEFT[0] - 10, HAND_LEFT[1] - 10, HAND_LEFT[0] + 10, HAND_LEFT[1] + 10), fill="#f0b27a")
-        draw.ellipse((HAND_RIGHT[0] - 10, HAND_RIGHT[1] - 10, HAND_RIGHT[0] + 10, HAND_RIGHT[1] + 10), fill="#f0b27a")
     color = "#7b7f81" if style == "ambiguous" else "#858a8d" if style == "low_contrast" else "#17202a"
     width = 2 if style in {"thin", "low_contrast"} else 4
     for stroke in strokes:
@@ -231,7 +217,6 @@ def main() -> int:
             case["strokes"],
             case.get("style", "normal"),
             draw_yoyo=not case.get("negative") or bool(case.get("yoyo_visible")),
-            draw_hands=not case.get("negative"),
         )
         image.save(image_path)
         raw_paths.append(image_path)

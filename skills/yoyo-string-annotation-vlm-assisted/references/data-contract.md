@@ -2,8 +2,8 @@
 
 ## Consumer Requirements
 
-The target is thin binary yoyo string segmentation. Pixel geometry is
-authoritative and must be stored in original image coordinates. Generated
+The target is thin binary yoyo string segmentation plus yoyo geometry. Pixel
+geometry is authoritative and must be stored in original image coordinates. Generated
 `*_2d` mirrors use a 0-999 scale and are not the source of truth.
 
 Required top-level fields:
@@ -41,8 +41,8 @@ crossing must create a break. A hidden connection may appear only in
 rasterized as segmentation truth.
 
 Approved positive geometry must cover every defensible visible section of the
-route, not just the easiest span. Missing visible hand-to-yoyo sections,
-returns, loop sides, hanging drops, or other branches are label defects even
+route, not just the easiest span. Missing visible string sections, returns,
+loop sides, hanging drops, or other branches are label defects even
 when the annotated segment is well aligned.
 
 For motion blur, keep one defensible physical centerline. Do not encode blur

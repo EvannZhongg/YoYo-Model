@@ -73,6 +73,8 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                         "schema_version": "test",
                         "notes": "manual edit" if index == 1 else "",
                         "workbench_edits": [{"actor": "reviewer"}] if index == 1 else [],
+                        "hands_pixel": {"left": [10, 20], "right": None},
+                        "hands_2d": {"left": [16, 56], "right": None},
                         "dataset_management": {"dataset_id": "old"},
                     },
                     indent=2,
@@ -110,15 +112,17 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                     "from pathlib import Path",
                     "active=Path(sys.argv[1])",
                     "protected=Path(sys.argv[2])",
-                    "mutate=sys.argv[3]=='mutate'",
+                    "mode=sys.argv[3]",
                     "value=json.loads((protected.parent/'manifest.json').read_text(encoding='utf-8'))",
                     "target=active/'canonical'/'labels'",
                     "target.mkdir(parents=True)",
                     "for index,record in enumerate(value['records'],start=1):",
                     " old=protected/'labels'/f'label-{index}.json'",
                     " document=json.loads(old.read_text(encoding='utf-8'))",
+                    " if mode!='retain': document.pop('hands_pixel',None)",
+                    " if mode!='retain': document.pop('hands_2d',None)",
                     " document['dataset_management']={'dataset_id':'new'}",
-                    " if mutate and index==1: document['notes']='overwritten'",
+                    " if mode=='mutate' and index==1: document['notes']='overwritten'",
                     " new=target/old.name",
                     " new.write_text(json.dumps(document,indent=2),encoding='utf-8')",
                     " record['canonical_label']=str(new)",
@@ -279,11 +283,16 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertTrue(review_snapshot.is_file())
         rebuilt = json.loads(edited_label.read_text(encoding="utf-8"))
         self.assertEqual(rebuilt["notes"], "manual edit")
+        self.assertNotIn("hands_pixel", rebuilt)
+        self.assertNotIn("hands_2d", rebuilt)
         rebound = json.loads(review_map.read_text(encoding="utf-8"))
         review = rebound["datasets"]["dataset"]["samples"]["label-1.json"]
         self.assertEqual(review["label_sha256"], sha256_file(edited_label))
         self.assertEqual(review["reviewer"], "human")
-        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["review_entry_count_rebound"], 1)
+        saved_report = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(saved_report["review_entry_count_rebound"], 1)
+        self.assertEqual(saved_report["non_task_fields_removed_label_count"], 3)
+        self.assertEqual(saved_report["non_task_field_residual_count"], 0)
 
     def test_plain_run_rejects_dataset_with_canonical_labels(self) -> None:
         dataset, manifest_path, _, _, _ = self.protected_fixture()
@@ -325,6 +334,32 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertTrue(dataset.is_dir())
         self.assertFalse(backup.exists())
         self.assertEqual(json.loads(edited_label.read_text(encoding="utf-8"))["notes"], "manual edit")
+        self.assertEqual(review_map.read_bytes(), review_before)
+
+    def test_protected_run_rolls_back_residual_non_task_fields(self) -> None:
+        dataset, manifest_path, review_map, builder, edited_label = self.protected_fixture()
+        backup = self.root / "backups" / "dataset-before"
+        review_snapshot = self.root / "lineage" / "review-before.json"
+        review_before = review_map.read_bytes()
+        label_before = edited_label.read_bytes()
+        exit_code = main(
+            [
+                "protected-run",
+                "--manifest", str(manifest_path),
+                "--backup-dir", str(backup),
+                "--review-map", str(review_map),
+                "--review-snapshot-out", str(review_snapshot),
+                "--review-dataset-key", "dataset",
+                "--max-ratio-deviation", "1",
+                "--allow-command-without-baseline",
+                "--", sys.executable, str(builder), str(dataset),
+                "{protected_canonical}", "retain",
+            ]
+        )
+        self.assertEqual(exit_code, 4)
+        self.assertTrue(dataset.is_dir())
+        self.assertFalse(backup.exists())
+        self.assertEqual(edited_label.read_bytes(), label_before)
         self.assertEqual(review_map.read_bytes(), review_before)
 
     def test_plan_preserves_old_splits_and_balances_new_groups(self) -> None:
