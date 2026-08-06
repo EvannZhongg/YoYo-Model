@@ -47,6 +47,25 @@ excludes every sibling dataset whose manifest identifies it as an earlier
 output of this skill. Add other baselines with repeatable `--exclude-dataset`.
 Never disable the root baseline check.
 
+## Fast Decoding
+
+Candidate decoding is progressive: it first tries two temporally balanced
+candidates per requested stratum and stops as soon as a complete diverse set
+passes deduplication. `--oversample-factor` remains the hard fallback budget,
+not a number of frames that must always be decoded.
+
+The default decoded-frame cache is
+`annotations/source_frame_jpeg_cache`. Entries are content-addressed by source
+video SHA-256, frame index, and JPEG quality, so retries and later generation
+runs can reuse decoded frames without seeking through the video again. Use
+`--frame-cache PATH` to relocate it or `--no-frame-cache` for a one-off run.
+The cache is disposable and is never a dataset or annotation source.
+
+Two videos are decoded concurrently by default. Adjust with
+`--decode-workers N`; reduce it to `1` on memory-constrained machines. Results
+are still committed in input order and cross-video deduplication is applied
+before publication.
+
 For stricter separation around frames already present from the same source
 video, pass `--exclude-frame-window N`. The default rejects the identical frame;
 `N=2` also rejects two neighboring frames on either side.

@@ -125,6 +125,27 @@ def run() -> None:
         ]
         assert generator.main([*common, "--dataset-name", "batch-one"]) == 0
         first = datasets / "batch-one"
+        create_manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
+        create_sampling = json.loads((first / "sampling_manifest.json").read_text(encoding="utf-8"))
+        source_metadata = create_sampling["sources"][0]
+        cached_record = create_manifest["records"][0]
+        cached_stats = {"hit_count": 0, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
+        cached_capture = cv2.VideoCapture(str(video))
+        cached_candidate = generator.decode_frame_candidate(
+            cached_capture,
+            str(cached_record["source_video_sha256"]),
+            int(cached_record["frame_index"]),
+            tuple(source_metadata["image_size"]),
+            generator.argparse.Namespace(
+                jpeg_quality=96,
+                frame_cache_root=cache.parent / "source_frame_jpeg_cache",
+            ),
+            cached_stats,
+            [None],
+        )
+        cached_capture.release()
+        assert cached_candidate is not None
+        assert cached_stats == {"hit_count": 1, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
         reference_key = (generator.sha256_file(video), 20)
         assert len(keys(first)) == 4
         assert reference_key not in keys(first)
@@ -269,6 +290,21 @@ def run() -> None:
         front_indices = [candidate.frame_index for candidate in front_run]
         expected_front_start = int(metadata["frame_count"] * front_args.edge_fraction)
         assert front_indices == list(range(expected_front_start, expected_front_start + 20))
+
+        long_hash = generator.sha256_file(long_video)
+        filtered_run, _, filtered_metadata = generator.decode_candidates(
+            long_video,
+            long_hash,
+            20,
+            generator.ReferenceInventory(provenance={(long_hash, 80)}),
+            long_args,
+            set(),
+            [],
+        )
+        filtered_indices = [candidate.frame_index for candidate in filtered_run]
+        assert 80 not in filtered_indices
+        assert filtered_metadata["provenance_filtered_blocks"] > 0
+        assert filtered_metadata["frame_cache"]["video_seek_count"] == 1
     print(json.dumps({"ok": True, "test": "create-yoyo-consecutive-blank-annotation-dataset"}))
 
 

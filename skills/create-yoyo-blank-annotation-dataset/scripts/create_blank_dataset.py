@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import concurrent.futures
 import hashlib
 import io
@@ -28,6 +29,7 @@ ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 DATASET_SCHEMA_VERSION = "yoyo_blank_annotation_dataset_v1"
 HASH_CACHE_SCHEMA_VERSION = "agent_video_sha256_cache_v1"
+FRAME_CACHE_SCHEMA_VERSION = "agent_video_frame_jpeg_cache_v1"
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
 
 
@@ -427,6 +429,93 @@ def encode_jpeg(image: Image.Image, quality: int) -> bytes:
     return buffer.getvalue()
 
 
+def frame_cache_path(root: Path, video_hash: str, frame_index: int, jpeg_quality: int) -> Path:
+    return (
+        root
+        / FRAME_CACHE_SCHEMA_VERSION
+        / video_hash[:2]
+        / video_hash
+        / f"q{jpeg_quality:03d}"
+        / f"frame-{frame_index:012d}.jpg"
+    )
+
+
+def candidate_from_jpeg(frame_index: int, jpeg: bytes, expected_size: tuple[int, int]) -> Candidate:
+    with Image.open(io.BytesIO(jpeg)) as encoded:
+        encoded.load()
+        if encoded.size != expected_size:
+            raise ValueError(
+                f"cached frame size mismatch at frame {frame_index}: "
+                f"actual={encoded.size} expected={expected_size}"
+            )
+        image = encoded.convert("RGB")
+        dhash = difference_hash(image)
+        features = descriptor(image)
+    return Candidate(frame_index, jpeg, sha256_bytes(jpeg), dhash, features)
+
+
+def decode_frame_candidate(
+    capture: cv2.VideoCapture,
+    video_hash: str,
+    frame_index: int,
+    image_size: tuple[int, int],
+    args: argparse.Namespace,
+    cache_stats: dict[str, int],
+) -> Candidate | None:
+    cache_root = getattr(args, "frame_cache_root", None)
+    cache_file = (
+        frame_cache_path(cache_root, video_hash, frame_index, args.jpeg_quality)
+        if isinstance(cache_root, Path)
+        else None
+    )
+    if cache_file is not None and cache_file.is_file():
+        try:
+            candidate = candidate_from_jpeg(frame_index, cache_file.read_bytes(), image_size)
+            cache_stats["hit_count"] += 1
+            return candidate
+        except (OSError, ValueError):
+            cache_stats["invalid_count"] += 1
+
+    cache_stats["miss_count"] += 1
+    cache_stats["video_seek_count"] += 1
+    capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+    ok, frame = capture.read()
+    if not ok or frame is None:
+        return None
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    jpeg = encode_jpeg(image, args.jpeg_quality)
+    candidate = candidate_from_jpeg(frame_index, jpeg, image_size)
+    if cache_file is not None:
+        write_bytes_atomic(cache_file, jpeg)
+    return candidate
+
+
+def progressive_candidate_batches(
+    frame_count: int,
+    desired: int,
+    oversample: int,
+    edge_fraction: float,
+) -> list[list[int]]:
+    indices = candidate_indices(frame_count, desired, oversample, edge_fraction)
+    strata: list[list[int]] = [[] for _ in range(desired)]
+    for frame_index in indices:
+        stratum = min(desired - 1, frame_index * desired // frame_count)
+        start = math.floor(stratum * frame_count / desired)
+        stop = math.floor((stratum + 1) * frame_count / desired)
+        center = (start + stop - 1) / 2.0
+        strata[stratum].append(frame_index)
+        strata[stratum].sort(key=lambda value: (abs(value - center), value))
+    return [
+        sorted(group[depth] for group in strata if depth < len(group))
+        for depth in range(max((len(group) for group in strata), default=0))
+    ]
+
+
+def overlaps_reference_frame(reference_frames: list[int], frame_index: int, window: int) -> bool:
+    position = bisect.bisect_left(reference_frames, frame_index - window)
+    return position < len(reference_frames) and reference_frames[position] <= frame_index + window
+
+
 def is_perceptual_duplicate(value: int, references: Iterable[int], threshold: int) -> bool:
     return any(hamming_distance(value, other) <= threshold for other in references)
 
@@ -514,49 +603,176 @@ def decode_candidates(
         capture.release()
         raise ValueError(f"invalid video metadata: {video}")
     rejected = {"provenance": 0, "image_sha256": 0, "perceptual": 0, "decode": 0}
+    cache_stats = {"hit_count": 0, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
     eligible: list[Candidate] = []
     reference_frames = sorted(index for digest, index in inventory.provenance if digest == video_hash)
-    for frame_index in candidate_indices(frame_count, desired, args.oversample_factor, args.edge_fraction):
-        if any(abs(frame_index - existing) <= args.exclude_frame_window for existing in reference_frames):
-            rejected["provenance"] += 1
-            continue
-        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            rejected["decode"] += 1
-            continue
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb)
-        jpeg = encode_jpeg(image, args.jpeg_quality)
-        image_hash = sha256_bytes(jpeg)
-        if image_hash in inventory.image_sha256 or image_hash in batch_hashes:
-            rejected["image_sha256"] += 1
-            continue
-        with Image.open(io.BytesIO(jpeg)) as encoded_image:
-            dhash = difference_hash(encoded_image)
-        if is_perceptual_duplicate(
-            dhash,
-            [*inventory.difference_hashes, *batch_dhashes],
-            args.perceptual_hamming_threshold,
-        ):
-            rejected["perceptual"] += 1
-            continue
-        eligible.append(Candidate(frame_index, jpeg, image_hash, dhash, descriptor(image)))
-    capture.release()
-    selected = select_candidates(
-        eligible,
-        desired,
-        frame_count,
-        args.min_frame_gap,
-        args.perceptual_hamming_threshold,
+    batches = progressive_candidate_batches(
+        frame_count, desired, args.oversample_factor, args.edge_fraction
     )
+    minimum_rounds = min(2, max(1, args.oversample_factor))
+    selected: list[Candidate] = []
+    attempted = 0
+    rounds = 0
+    try:
+        for rounds, batch in enumerate(batches, start=1):
+            for frame_index in batch:
+                attempted += 1
+                if overlaps_reference_frame(
+                    reference_frames, frame_index, args.exclude_frame_window
+                ):
+                    rejected["provenance"] += 1
+                    continue
+                candidate = decode_frame_candidate(
+                    capture,
+                    video_hash,
+                    frame_index,
+                    (width, height),
+                    args,
+                    cache_stats,
+                )
+                if candidate is None:
+                    rejected["decode"] += 1
+                    continue
+                if (
+                    candidate.image_sha256 in inventory.image_sha256
+                    or candidate.image_sha256 in batch_hashes
+                ):
+                    rejected["image_sha256"] += 1
+                    continue
+                if is_perceptual_duplicate(
+                    candidate.difference_hash,
+                    inventory.difference_hashes,
+                    args.perceptual_hamming_threshold,
+                ) or is_perceptual_duplicate(
+                    candidate.difference_hash,
+                    batch_dhashes,
+                    args.perceptual_hamming_threshold,
+                ):
+                    rejected["perceptual"] += 1
+                    continue
+                eligible.append(candidate)
+            if rounds >= minimum_rounds:
+                selected = select_candidates(
+                    eligible,
+                    desired,
+                    frame_count,
+                    args.min_frame_gap,
+                    args.perceptual_hamming_threshold,
+                )
+                if len(selected) == desired:
+                    break
+    finally:
+        capture.release()
     if len(selected) != desired:
         raise ValueError(
             f"{video} yielded {len(selected)}/{desired} unique frames; "
             "increase --oversample-factor or relax perceptual/min-gap settings"
         )
-    metadata = {"fps": fps, "frame_count": frame_count, "image_size": [width, height]}
+    metadata = {
+        "fps": fps,
+        "frame_count": frame_count,
+        "image_size": [width, height],
+        "candidate_budget": sum(len(batch) for batch in batches),
+        "candidate_attempted": attempted,
+        "progressive_rounds": rounds,
+        "frame_cache": cache_stats,
+    }
     return selected, rejected, metadata
+
+
+def selected_conflicts_with_batch(
+    selected: list[Candidate],
+    batch_hashes: set[str],
+    batch_dhashes: list[int],
+    perceptual_threshold: int,
+) -> bool:
+    return any(
+        candidate.image_sha256 in batch_hashes
+        or is_perceptual_duplicate(
+            candidate.difference_hash, batch_dhashes, perceptual_threshold
+        )
+        for candidate in selected
+    )
+
+
+def combine_retry_results(
+    first: tuple[list[Candidate], dict[str, int], dict[str, Any]],
+    second: tuple[list[Candidate], dict[str, int], dict[str, Any]],
+) -> tuple[list[Candidate], dict[str, int], dict[str, Any]]:
+    selected, rejected, metadata = second
+    first_rejected = first[1]
+    rejected = {
+        key: int(first_rejected.get(key, 0)) + int(rejected.get(key, 0))
+        for key in set(first_rejected) | set(rejected)
+    }
+    first_cache = first[2].get("frame_cache") or {}
+    cache = metadata.get("frame_cache") or {}
+    metadata["frame_cache"] = {
+        key: int(first_cache.get(key, 0)) + int(cache.get(key, 0))
+        for key in set(first_cache) | set(cache)
+    }
+    metadata["speculative_retry"] = True
+    return selected, rejected, metadata
+
+
+def decode_sources_in_order(
+    videos: list[Path],
+    counts: list[int],
+    video_hashes: dict[Path, str],
+    inventory: ReferenceInventory,
+    args: argparse.Namespace,
+    batch_hashes: set[str],
+    batch_dhashes: list[int],
+) -> Iterable[tuple[Path, str, list[Candidate], dict[str, int], dict[str, Any]]]:
+    workers = min(len(videos), max(1, int(getattr(args, "decode_workers", 1))))
+    if workers == 1:
+        for video, desired in zip(videos, counts):
+            video_hash = video_hashes[video]
+            result = decode_candidates(
+                video, video_hash, desired, inventory, args, batch_hashes, batch_dhashes
+            )
+            yield video, video_hash, *result
+        return
+
+    def speculative(index: int) -> tuple[list[Candidate], dict[str, int], dict[str, Any]]:
+        video = videos[index]
+        return decode_candidates(
+            video,
+            video_hashes[video],
+            counts[index],
+            inventory,
+            args,
+            set(),
+            [],
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            index: executor.submit(speculative, index)
+            for index in range(min(workers, len(videos)))
+        }
+        for index, video in enumerate(videos):
+            result = futures.pop(index).result()
+            next_index = index + workers
+            if next_index < len(videos):
+                futures[next_index] = executor.submit(speculative, next_index)
+            if selected_conflicts_with_batch(
+                result[0],
+                batch_hashes,
+                batch_dhashes,
+                args.perceptual_hamming_threshold,
+            ):
+                retry = decode_candidates(
+                    video,
+                    video_hashes[video],
+                    counts[index],
+                    inventory,
+                    args,
+                    batch_hashes,
+                    batch_dhashes,
+                )
+                result = combine_retry_results(result, retry)
+            yield video, video_hashes[video], *result
 
 
 def initial_label(record: dict[str, Any], sampling_manifest_sha256: str) -> dict[str, Any]:
@@ -702,6 +918,7 @@ def generation_run(
         "added_sample_count": int(manifest["sample_count"]),
         "reference_datasets": list(manifest.get("reference_datasets") or []),
         "deduplication": dict(manifest.get("deduplication") or {}),
+        "source_frame_cache": dict(manifest.get("source_frame_cache") or {}),
     }
 
 
@@ -748,6 +965,7 @@ def merge_incremental_manifest(
         "generation_runs": [*runs, append_run],
         "last_append": append_run,
         "source_hash_cache": dict(addition.get("source_hash_cache") or {}),
+        "source_frame_cache": dict(addition.get("source_frame_cache") or {}),
     })
     merged["reference_datasets"] = list(dict.fromkeys([
         *(str(value) for value in existing.get("reference_datasets") or []),
@@ -844,22 +1062,39 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
     reference_paths = collect_reference_datasets(datasets_root, root_reference, args.exclude_dataset)
     inventory = build_reference_inventory(reference_paths)
     cache_path = Path(args.hash_cache).expanduser().resolve() if args.hash_cache else repository / "annotations" / "source_video_sha256_cache.json"
+    frame_cache_root = None
+    if not args.no_frame_cache:
+        frame_cache_root = (
+            Path(args.frame_cache).expanduser().resolve()
+            if args.frame_cache
+            else cache_path.parent / "source_frame_jpeg_cache"
+        )
+        if frame_cache_root.is_relative_to(output):
+            raise ValueError("frame cache must be outside the annotation dataset")
+    args.frame_cache_root = frame_cache_root
     video_hashes, cache_stats = resolve_video_hashes(videos, cache_path, args.hash_workers)
     staging = Path(tempfile.mkdtemp(prefix=f".{dataset_name}.building-", dir=datasets_root))
     try:
         records: list[dict[str, Any]] = []
         sources: list[dict[str, Any]] = []
         rejection_totals = {"provenance": 0, "image_sha256": 0, "perceptual": 0, "decode": 0}
+        frame_cache_totals = {"hit_count": 0, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
         batch_hashes: set[str] = set()
         batch_dhashes: list[int] = []
-        for video, desired in zip(videos, counts):
-            video_hash = video_hashes[video]
+        for video, video_hash, selected, rejected, metadata in decode_sources_in_order(
+            videos,
+            counts,
+            video_hashes,
+            inventory,
+            args,
+            batch_hashes,
+            batch_dhashes,
+        ):
             source_group = f"{clean_id(video.stem)[:40]}-{video_hash[:10]}"
-            selected, rejected, metadata = decode_candidates(
-                video, video_hash, desired, inventory, args, batch_hashes, batch_dhashes
-            )
             for key, value in rejected.items():
                 rejection_totals[key] += value
+            for key, value in (metadata.get("frame_cache") or {}).items():
+                frame_cache_totals[key] += int(value)
             for sequence_number, candidate in enumerate(selected, start=1):
                 sequence_id = f"seq-{sequence_number:03d}-anchor-{candidate.frame_index:08d}"
                 filename = f"{sequence_id}_anchor_frame_{candidate.frame_index:08d}.jpg"
@@ -902,6 +1137,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "total_frames": args.total_frames,
                 "frames_per_source": counts,
                 "oversample_factor": args.oversample_factor,
+                "progressive_candidate_decoding": True,
+                "decode_workers": args.decode_workers,
                 "edge_fraction": args.edge_fraction,
                 "jpeg_quality": args.jpeg_quality,
                 "single_frame_only": True,
@@ -951,6 +1188,12 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
                 "rejected": rejection_totals,
             },
             "source_hash_cache": {"path": str(cache_path), **cache_stats},
+            "source_frame_cache": {
+                "enabled": frame_cache_root is not None,
+                "path": str(frame_cache_root) if frame_cache_root is not None else None,
+                "schema_version": FRAME_CACHE_SCHEMA_VERSION,
+                **frame_cache_totals,
+            },
             "source_count": len(sources),
             "sample_count": len(records),
             "records": manifest_records,
@@ -1006,9 +1249,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--jpeg-quality", type=int, default=96)
     parser.add_argument("--hash-cache")
     parser.add_argument("--hash-workers", type=int, default=2)
+    parser.add_argument("--frame-cache", help="Override the persistent decoded-frame cache directory")
+    parser.add_argument("--no-frame-cache", action="store_true", help="Disable the persistent decoded-frame cache")
+    parser.add_argument("--decode-workers", type=int, default=2, help="Videos decoded concurrently")
     args = parser.parse_args(argv)
-    if args.frames_per_video < 1 or args.oversample_factor < 1 or args.hash_workers < 1:
-        parser.error("frame counts, oversample-factor, and hash-workers must be positive")
+    if args.frames_per_video < 1 or args.oversample_factor < 1 or args.hash_workers < 1 or args.decode_workers < 1:
+        parser.error("frame counts, oversample-factor, hash-workers, and decode-workers must be positive")
+    if args.frame_cache and args.no_frame_cache:
+        parser.error("--frame-cache and --no-frame-cache cannot be used together")
     if args.total_frames is not None and args.total_frames < 1:
         parser.error("total-frames must be positive")
     if not 0 <= args.edge_fraction < 0.5:

@@ -97,6 +97,29 @@ def run() -> None:
         ]
         assert generator.main([*common, "--dataset-name", "batch-one"]) == 0
         first = datasets / "batch-one"
+        create_manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
+        create_sampling = json.loads((first / "sampling_manifest.json").read_text(encoding="utf-8"))
+        source_metadata = create_sampling["sources"][0]
+        assert source_metadata["candidate_attempted"] <= 8
+        assert source_metadata["candidate_attempted"] < source_metadata["candidate_budget"]
+        assert create_manifest["source_frame_cache"]["video_seek_count"] <= 8
+        cached_record = create_manifest["records"][0]
+        cached_stats = {"hit_count": 0, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
+        cached_capture = cv2.VideoCapture(str(video))
+        cached_candidate = generator.decode_frame_candidate(
+            cached_capture,
+            str(cached_record["source_video_sha256"]),
+            int(cached_record["frame_index"]),
+            tuple(source_metadata["image_size"]),
+            generator.argparse.Namespace(
+                jpeg_quality=96,
+                frame_cache_root=cache.parent / "source_frame_jpeg_cache",
+            ),
+            cached_stats,
+        )
+        cached_capture.release()
+        assert cached_candidate is not None
+        assert cached_stats == {"hit_count": 1, "miss_count": 0, "invalid_count": 0, "video_seek_count": 0}
         reference_key = (generator.sha256_file(video), 20)
         assert len(keys(first)) == 4
         assert reference_key not in keys(first)

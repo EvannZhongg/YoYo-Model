@@ -50,6 +50,18 @@ run; candidates are still checked perceptually against reference datasets and
 previously completed runs. Use `--exclude-frame-window N` for wider separation
 from known source frames.
 
+Before decoding, the generator rejects every consecutive window that overlaps
+known source-frame provenance. A failed decoded frame also excludes every later
+overlapping window, avoiding repeated decoding of nearly identical shifted
+runs.
+
+Decoded frames are reused from `annotations/source_frame_jpeg_cache`, keyed by
+source video SHA-256, frame index, and JPEG quality. Use `--frame-cache PATH` to
+relocate it or `--no-frame-cache` to disable it. Two source videos are decoded
+concurrently by default; use `--decode-workers N` to tune CPU and memory use.
+Runs are committed in input order and retain the same cross-run deduplication
+gate.
+
 Never append directly to `datasets/1Ayoyo_dataset`. Never hand-edit generated
 manifests, hashes, paths, or provenance. During append, preserve every existing
 image, label, and Workbench review entry byte-for-byte. Read
