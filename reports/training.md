@@ -102,6 +102,8 @@ Pooled Precision/Recall/F1 从 `0.676094/0.382865/0.488881` 提升到 `0.697974/
 
 Workbench 默认配置在池高宇视频 `84.0 s` 起点完成 30 帧 smoke：悠悠球 30/30 帧存在，弱域于 `f4227` 触发并在 `f4228` 启用，tracking loop 为 `6.7253 s / 4.4608 FPS`；MP4、JSONL、审核总览和逐帧审核图均成功生成。`run.json` 记录亮脊默认开启、普通域门槛 `0.70` 以及当前三份语义权重，证据位于 `runs/experiments/bright_ridge_default_workbench_smoke/`。
 
+同一视频 `84.0 s` 起点另做 60 帧运行时 A/B，固定默认检测/绳线模型并关闭 pose 与方向分支，每侧独立复测两次：关闭亮脊的 tracking loop 平均 `9.393 s`，开启亮脊平均 `9.068 s`（`-3.46%`）。单次计时存在 GPU/编码波动，因此只据此判定没有可测的大幅减速，不主张亮脊本身会加速；证据位于 `runs/experiments/bright_ridge_runtime_audit_off*/` 和 `runs/experiments/bright_ridge_runtime_audit_on*/`。
+
 池高宇 `f4200-f4299` 仍是最弱区间：亮脊使 F1 相对提高约 22%，但绝对 Recall 仍只有 `0.077319`。当前剩余瓶颈是语义概率支持本身只覆盖局部白绳，导致亮脊候选在沿线概率验收前被裁掉；后续应增加同类场景的独立训练样本，而不是继续放宽几何门控。
 
 推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
