@@ -73,6 +73,8 @@ def evaluate_consecutive_checkpoint(
     color_probability_min_mean: float | None = None,
     color_probability_min_fraction: float = 0.5,
     color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
+    bright_line_augment: bool = TRACKING_CONFIG.string_bright_line_augment,
+    bright_line_min_mean: float = TRACKING_CONFIG.string_bright_line_min_mean,
     temporal: bool = False,
     max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
@@ -226,51 +228,81 @@ def evaluate_consecutive_checkpoint(
             )
             final_string = observation
             if color_augment and yoyo is not None:
-                color = _color_line_observation(
-                    image, yoyo, require_yoyo_proximity=False,
-                    mark_far_ambiguous=True,
-                    reference_points=(observation or {}).get("points"),
-                    semantic_probability=probability if color_semantic_prefilter else None,
-                    semantic_meta=meta if color_semantic_prefilter else None,
-                )
-                if color is not None:
-                    color_support = polyline_probability_support(
-                        probability, meta, color["points"], selected_threshold,
+                color = None
+                color_support: dict[str, float] = {}
+                tried_points: set[tuple[tuple[float, float], ...]] = set()
+                had_color_candidate = False
+                for use_bright_lines in ((False, True) if bright_line_augment else (False,)):
+                    candidate = _color_line_observation(
+                        image, yoyo, require_yoyo_proximity=False,
+                        mark_far_ambiguous=True,
+                        reference_points=(observation or {}).get("points"),
+                        semantic_probability=probability if color_semantic_prefilter else None,
+                        semantic_meta=meta if color_semantic_prefilter else None,
+                        include_bright_lines=use_bright_lines,
                     )
-                    probability_gate_passed = bool(
+                    if candidate is None:
+                        continue
+                    point_key = tuple(
+                        tuple(float(value) for value in point) for point in candidate["points"]
+                    )
+                    if point_key in tried_points:
+                        continue
+                    tried_points.add(point_key)
+                    had_color_candidate = True
+                    candidate_support = polyline_probability_support(
+                        probability, meta, candidate["points"], selected_threshold,
+                    )
+                    candidate_min_mean = (
+                        color_probability_min_mean
+                        if adaptive_enabled
+                        else max(
+                            float(color_probability_min_mean or 0.0),
+                            float(bright_line_min_mean),
+                        )
+                    ) if use_bright_lines else color_probability_min_mean
+                    if bool(
                         color_probability_min_mean is None
                         or (
-                            float(color_support.get("mean", 0.0)) >= color_probability_min_mean
-                            and float(color_support.get("fraction_at_0_10", 0.0))
+                            float(candidate_support.get("mean", 0.0))
+                            >= float(candidate_min_mean)
+                            and float(candidate_support.get("fraction_at_0_10", 0.0))
                             >= color_probability_min_fraction
                         )
-                    )
-                    if not probability_gate_passed:
-                        rejected_color_candidates += 1
-                    elif final_string is None:
-                        accepted_color_candidates += 1
-                        final_string = dict(color)
-                        final_string["color_points"] = color["points"]
-                        final_string["color_probability_support"] = color_support
-                    else:
-                        accepted_color_candidates += 1
-                        final_string = dict(final_string)
-                        polylines = list(final_string.get("polylines") or [final_string["points"]])
-                        polylines.append(color["points"])
-                        final_string.update({
-                            "polylines": polylines,
-                            "component_count": len(polylines),
-                            "method": (
-                                "semantic_color_probability_union"
-                                if color_probability_min_mean is not None
-                                else "semantic_color_union"
-                            ),
-                            "color_confidence": color.get("confidence"),
-                            "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
-                            "color_spatially_ambiguous": color.get("spatially_ambiguous"),
-                            "color_points": color["points"],
-                            "color_probability_support": color_support,
-                        })
+                    ):
+                        color = candidate
+                        color_support = candidate_support
+                        break
+                if color is None:
+                    rejected_color_candidates += int(had_color_candidate)
+                elif final_string is None:
+                    accepted_color_candidates += 1
+                    final_string = dict(color)
+                    final_string["color_points"] = color["points"]
+                    final_string["color_probability_support"] = color_support
+                    if color.get("line_features"):
+                        final_string["color_line_features"] = color["line_features"]
+                else:
+                    accepted_color_candidates += 1
+                    final_string = dict(final_string)
+                    polylines = list(final_string.get("polylines") or [final_string["points"]])
+                    polylines.append(color["points"])
+                    final_string.update({
+                        "polylines": polylines,
+                        "component_count": len(polylines),
+                        "method": (
+                            "semantic_color_probability_union"
+                            if color_probability_min_mean is not None
+                            else "semantic_color_union"
+                        ),
+                        "color_confidence": color.get("confidence"),
+                        "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
+                        "color_spatially_ambiguous": color.get("spatially_ambiguous"),
+                        "color_points": color["points"],
+                        "color_probability_support": color_support,
+                    })
+                    if color.get("line_features"):
+                        final_string["color_line_features"] = color["line_features"]
             if adaptive_model is not None and not adaptive_enabled:
                 adaptive_window, adaptive_enabled, adaptive_gate_metrics = (
                     update_adaptive_string_domain_gate(
@@ -368,6 +400,8 @@ def evaluate_consecutive_checkpoint(
         "color_probability_min_mean": color_probability_min_mean,
         "color_probability_min_fraction_at_0_10": color_probability_min_fraction,
         "color_semantic_prefilter": bool(color_semantic_prefilter),
+        "bright_line_augment": bool(bright_line_augment),
+        "bright_line_min_mean": float(bright_line_min_mean),
         "temporal": bool(temporal),
         "max_propagation_frames": int(max_propagation_frames),
         "max_forward_backward_error": float(max_forward_backward_error),
@@ -416,6 +450,16 @@ def main() -> int:
         action=argparse.BooleanOptionalAction,
         default=TRACKING_CONFIG.string_color_semantic_prefilter,
     )
+    parser.add_argument(
+        "--bright-line-augment",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.string_bright_line_augment,
+    )
+    parser.add_argument(
+        "--bright-line-min-mean",
+        type=float,
+        default=TRACKING_CONFIG.string_bright_line_min_mean,
+    )
     parser.add_argument("--temporal", action="store_true")
     parser.add_argument(
         "--max-propagation-frames",
@@ -460,6 +504,8 @@ def main() -> int:
         color_probability_min_mean=args.color_probability_min_mean,
         color_probability_min_fraction=args.color_probability_min_fraction,
         color_semantic_prefilter=args.color_semantic_prefilter,
+        bright_line_augment=args.bright_line_augment,
+        bright_line_min_mean=args.bright_line_min_mean,
         temporal=args.temporal,
         max_propagation_frames=args.max_propagation_frames,
         max_forward_backward_error=args.max_forward_backward_error,

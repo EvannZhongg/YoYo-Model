@@ -144,10 +144,26 @@ class StringTrackerTemporalTests(unittest.TestCase):
         kernel = np.ones((3, 3), dtype=np.uint8)
         full = cv2.morphologyEx(full, cv2.MORPH_OPEN, kernel, iterations=1)
         full = cv2.morphologyEx(full, cv2.MORPH_CLOSE, kernel, iterations=1)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        bright_ridge = cv2.morphologyEx(
+            gray,
+            cv2.MORPH_TOPHAT,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)),
+        )
+        bright = cv2.bitwise_and(
+            cv2.inRange(
+                hsv,
+                np.asarray([0, 0, 120], dtype=np.uint8),
+                np.asarray([179, 69, 255], dtype=np.uint8),
+            ),
+            cv2.inRange(bright_ridge, 12, 255),
+        )
+        bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel, iterations=1)
+        full = cv2.bitwise_or(full, bright)
 
         for support in supports:
             np.testing.assert_array_equal(
-                _saturated_line_mask(roi, support),
+                _saturated_line_mask(roi, support, include_bright_lines=True),
                 cv2.bitwise_and(full, support),
             )
 
@@ -274,6 +290,24 @@ class StringTrackerTemporalTests(unittest.TestCase):
             0.018,
         )
         self.assertFalse(color_triggered)
+
+        _, bright_triggered, bright_metrics = update_adaptive_string_domain_gate(
+            history[:-1],
+            {
+                "method": "semantic_color_probability_union",
+                "color_line_features": "saturated_and_bright",
+                "confidence": 0.75,
+                "distance_to_yoyo_px": 100.0,
+            },
+            3840,
+            2160,
+            12,
+            0,
+            0.82,
+            0.018,
+        )
+        self.assertTrue(bright_triggered)
+        self.assertEqual(bright_metrics["color_accepts"], 0)
 
     def test_semantic_ensemble_fuses_probabilities_before_geometry(self):
         meta = SimpleNamespace(
@@ -587,6 +621,38 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(accepted["method"], "semantic_color_probability_union")
         self.assertEqual(len(accepted["polylines"]), 2)
         self.assertEqual(rejected, observation)
+
+    def test_bright_ridge_fallback_recovers_low_saturation_string(self):
+        frame = np.full((180, 240, 3), (130, 160, 190), dtype=np.uint8)
+        cv2.line(frame, (120, 90), (205, 38), (235, 235, 235), 4)
+        yoyo = {"center": [120.0, 90.0], "bbox": [108.0, 78.0, 132.0, 102.0]}
+        observation = {
+            "points": [[120.0, 90.0], [150.0, 70.0]],
+            "polylines": [[[120.0, 90.0], [150.0, 70.0]]],
+            "confidence": 0.8,
+            "method": "semantic_segmentation",
+        }
+        probability = np.full((180, 240), 0.5, dtype=np.float32)
+        meta = SimpleNamespace(scale=1.0, pad_x=0, pad_y=0)
+
+        saturated_only = _augment_semantic_color_observation(
+            frame, yoyo, observation, probability, meta, 0.4, 0.4, 0.5,
+        )
+        with_bright_ridge = _augment_semantic_color_observation(
+            frame, yoyo, observation, probability, meta, 0.4, 0.4, 0.5,
+            include_bright_lines=True,
+            bright_line_min_mean=0.4,
+        )
+        strict_bright_ridge = _augment_semantic_color_observation(
+            frame, yoyo, observation, probability, meta, 0.4, 0.4, 0.5,
+            include_bright_lines=True,
+            bright_line_min_mean=0.7,
+        )
+
+        self.assertEqual(saturated_only, observation)
+        self.assertEqual(with_bright_ridge["method"], "semantic_color_probability_union")
+        self.assertEqual(with_bright_ridge["color_line_features"], "saturated_and_bright")
+        self.assertEqual(strict_bright_ridge, observation)
 
     def test_pose_person_selection_prefers_visible_wrists_near_yoyo(self):
         points = np.zeros((2, 17, 2), dtype=np.float32)

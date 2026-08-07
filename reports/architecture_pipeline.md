@@ -120,12 +120,14 @@ flowchart TD
     F --> Q[语义 mask 观测<br/>中心线 / 多组件提取]
     J --> Q
     P --> Q
-    A --> R[颜色 / Hough 几何候选]
-    P --> S[沿线概率门控<br/>mean >= 0.40<br/>P >= 0.10 覆盖率 >= 0.50]
+    A --> R[饱和色 HSV / Hough 候选]
+    A --> RB[低饱和亮脊 / Hough 后备候选<br/>仅在饱和色候选失败后执行]
+    P --> S[沿线概率门控<br/>饱和色与 adaptive 亮脊 mean >= 0.40<br/>普通域亮脊 mean >= 0.70<br/>P >= 0.10 覆盖率 >= 0.50]
     R --> S
+    RB --> S
     S --> T[语义 + 颜色组件并集<br/>review-only]
     Q --> T
-    T --> GA[最近 12 次语义观测门控<br/>颜色通过=0 / mean conf&lt;0.82<br/>mean distance ratio&gt;0.018]
+    T --> GA[最近 12 次语义观测门控<br/>饱和色通过=0 / 亮脊不计颜色成功<br/>mean conf&lt;0.82 / mean distance ratio&gt;0.018]
     GA --> GB{联合条件满足?}
     GB -->|否| K
     GB -->|是| GC[记录触发帧<br/>下一帧单向切换弱域主]

@@ -335,31 +335,52 @@ def _augment_semantic_color_observation(
     min_mean: float,
     min_fraction_at_0_10: float,
     semantic_prefilter: bool = False,
+    include_bright_lines: bool = False,
+    bright_line_min_mean: float | None = None,
 ) -> dict[str, Any] | None:
     """Add a color line only when the semantic map independently supports it."""
     if observation is None or yoyo is None:
         return observation
-    color = _color_line_observation(
-        frame,
-        yoyo,
-        require_yoyo_proximity=False,
-        mark_far_ambiguous=True,
-        reference_points=observation.get("points"),
-        semantic_probability=probability if semantic_prefilter else None,
-        semantic_meta=meta if semantic_prefilter else None,
-    )
+    color = None
+    support: dict[str, float] = {}
+    tried_points: set[tuple[tuple[float, float], ...]] = set()
+    for use_bright_lines in ([False, True] if include_bright_lines else [False]):
+        candidate = _color_line_observation(
+            frame,
+            yoyo,
+            require_yoyo_proximity=False,
+            mark_far_ambiguous=True,
+            reference_points=observation.get("points"),
+            semantic_probability=probability if semantic_prefilter else None,
+            semantic_meta=meta if semantic_prefilter else None,
+            include_bright_lines=use_bright_lines,
+        )
+        if candidate is None:
+            continue
+        point_key = tuple(tuple(float(value) for value in point) for point in candidate["points"])
+        if point_key in tried_points:
+            continue
+        tried_points.add(point_key)
+        candidate_support = polyline_probability_support(
+            probability,
+            meta,
+            candidate["points"],
+            threshold,
+        )
+        candidate_min_mean = (
+            float(bright_line_min_mean)
+            if use_bright_lines and bright_line_min_mean is not None
+            else float(min_mean)
+        )
+        if (
+            float(candidate_support.get("mean", 0.0)) >= candidate_min_mean
+            and float(candidate_support.get("fraction_at_0_10", 0.0))
+            >= float(min_fraction_at_0_10)
+        ):
+            color = candidate
+            support = candidate_support
+            break
     if color is None:
-        return observation
-    support = polyline_probability_support(
-        probability,
-        meta,
-        color["points"],
-        threshold,
-    )
-    if (
-        float(support.get("mean", 0.0)) < float(min_mean)
-        or float(support.get("fraction_at_0_10", 0.0)) < float(min_fraction_at_0_10)
-    ):
         return observation
     result = dict(observation)
     polylines = list(result.get("polylines") or [result["points"]])
@@ -377,6 +398,8 @@ def _augment_semantic_color_observation(
             "color_probability_support": support,
         }
     )
+    if color.get("line_features"):
+        result["color_line_features"] = color["line_features"]
     return result
 
 
@@ -394,6 +417,8 @@ def _predict_string_model(
     color_probability_min_mean: float = 0.40,
     color_probability_min_fraction: float = 0.50,
     color_semantic_prefilter: bool = False,
+    bright_line_augment: bool = False,
+    bright_line_min_mean: float = 0.70,
     prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
 ) -> dict[str, Any] | None:
     if model is None:
@@ -476,6 +501,8 @@ def _predict_string_model(
                 color_probability_min_mean,
                 color_probability_min_fraction,
                 color_semantic_prefilter,
+                bright_line_augment,
+                color_probability_min_mean if adaptive_enabled else bright_line_min_mean,
             )
         if observation is not None:
             if ensemble_metadata is not None:
@@ -1057,6 +1084,8 @@ def track_video(
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
     string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
     string_color_probability_augment: bool = TRACKING_CONFIG.string_color_probability_augment,
+    string_bright_line_augment: bool = TRACKING_CONFIG.string_bright_line_augment,
+    string_bright_line_min_mean: float = TRACKING_CONFIG.string_bright_line_min_mean,
     string_color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     string_color_probability_min_mean: float = TRACKING_CONFIG.string_color_probability_min_mean,
     string_color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
@@ -1109,6 +1138,8 @@ def track_video(
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
         raise ValueError("string_color_probability_min_fraction must be between 0 and 1")
+    if not 0.0 <= float(string_bright_line_min_mean) <= 1.0:
+        raise ValueError("string_bright_line_min_mean must be between 0 and 1")
     if float(orientation_inference_fps) < 0.0:
         raise ValueError("orientation_inference_fps must be non-negative")
     if float(orientation_burst_inference_fps) < 0.0:
@@ -1343,6 +1374,8 @@ def track_video(
                 string_color_probability_min_mean,
                 string_color_probability_min_fraction,
                 string_color_semantic_prefilter,
+                string_bright_line_augment,
+                string_bright_line_min_mean,
                 (
                     semantic_preprocess_future.result()
                     if semantic_preprocess_future is not None
@@ -1413,6 +1446,8 @@ def track_video(
                 string_color_probability_min_mean,
                 string_color_probability_min_fraction,
                 string_color_semantic_prefilter,
+                string_bright_line_augment,
+                string_bright_line_min_mean,
             )
             string_inference_frames += 1
             string = estimate_string(
@@ -1771,6 +1806,8 @@ def track_video(
             "string_inference_fps": float(string_inference_fps),
             "string_inference_interval_frames": int(string_inference_interval),
             "string_color_probability_augment": bool(string_color_probability_augment),
+            "string_bright_line_augment": bool(string_bright_line_augment),
+            "string_bright_line_min_mean": float(string_bright_line_min_mean),
             "string_color_semantic_prefilter": bool(string_color_semantic_prefilter),
             "string_color_probability_min_mean": float(string_color_probability_min_mean),
             "string_color_probability_min_fraction": float(string_color_probability_min_fraction),
@@ -1992,6 +2029,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.string_color_probability_min_mean,
     )
     parser.add_argument(
+        "--string-bright-line-augment",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.string_bright_line_augment,
+        help="Try a semantic-gated bright-ridge proposal after the saturated-color proposal fails.",
+    )
+    parser.add_argument(
+        "--string-bright-line-min-mean",
+        type=float,
+        default=TRACKING_CONFIG.string_bright_line_min_mean,
+        help="Semantic mean gate for bright-ridge proposals before adaptive mode activates.",
+    )
+    parser.add_argument(
         "--string-color-semantic-prefilter",
         action=argparse.BooleanOptionalAction,
         default=TRACKING_CONFIG.string_color_semantic_prefilter,
@@ -2108,6 +2157,8 @@ def main() -> int:
         string_inference_scale=args.string_inference_scale,
         string_inference_fps=args.string_inference_fps,
         string_color_probability_augment=not args.no_string_color_probability_augment,
+        string_bright_line_augment=args.string_bright_line_augment,
+        string_bright_line_min_mean=args.string_bright_line_min_mean,
         string_color_semantic_prefilter=args.string_color_semantic_prefilter,
         string_color_probability_min_mean=args.string_color_probability_min_mean,
         string_color_probability_min_fraction=args.string_color_probability_min_fraction,

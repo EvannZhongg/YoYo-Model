@@ -87,6 +87,12 @@ tracking:
   # supports it. This recovers weak, fragmented string pixels without allowing
   # unrelated saturated stage lines into the final geometry.
   string_color_probability_augment: true
+  # When the saturated-color proposal is absent or fails semantic gating, also
+  # search low-saturation local bright ridges. The original proposal keeps priority.
+  string_bright_line_augment: true
+  # Bright ridges are less color-specific, so normal domains use a stricter
+  # semantic mean gate. Confirmed adaptive domains retain the 0.40 color gate.
+  string_bright_line_min_mean: 0.70
   # Restrict Hough candidates to a dilated p>=0.10 semantic neighborhood.
   # This removes unrelated stage lines before the expensive Hough search.
   string_color_semantic_prefilter: true

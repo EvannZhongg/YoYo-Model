@@ -18,7 +18,11 @@ _COLOR_SEMANTIC_SUPPORT_KERNEL = np.ones((31, 31), dtype=np.uint8)
 _COLOR_MASK_KERNEL = np.ones((3, 3), dtype=np.uint8)
 _COLOR_HSV_LOWER = np.asarray([35, 70, 55], dtype=np.uint8)
 _COLOR_HSV_UPPER = np.asarray([179, 255, 255], dtype=np.uint8)
-_COLOR_MASK_DEPENDENCY_RADIUS = 4
+_COLOR_MASK_DEPENDENCY_RADIUS = 6
+_BRIGHT_STRING_HSV_LOWER = np.asarray([0, 0, 120], dtype=np.uint8)
+_BRIGHT_STRING_HSV_UPPER = np.asarray([179, 69, 255], dtype=np.uint8)
+_BRIGHT_STRING_TOPHAT_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+_BRIGHT_STRING_TOPHAT_MIN = 12
 
 
 def update_adaptive_string_domain_gate(
@@ -37,7 +41,8 @@ def update_adaptive_string_domain_gate(
     updated = [
         *history,
         (
-            str(value.get("method") or "") == "semantic_color_probability_union",
+            str(value.get("method") or "") == "semantic_color_probability_union"
+            and not value.get("color_line_features"),
             float(value.get("confidence") or 0.0),
             float(value.get("distance_to_yoyo_px") or 0.0) / diagonal,
         ),
@@ -95,8 +100,9 @@ def _resample_polyline(points: list[list[float]], count: int) -> np.ndarray:
 def _saturated_line_mask(
     roi: np.ndarray,
     semantic_support: np.ndarray | None = None,
+    include_bright_lines: bool = False,
 ) -> np.ndarray:
-    """Build the color mask, cropping only work that semantic support removes."""
+    """Build saturated-color and bright-ridge masks inside semantic support."""
     crop_x1 = crop_y1 = 0
     crop_x2, crop_y2 = roi.shape[1], roi.shape[0]
     if semantic_support is not None:
@@ -122,6 +128,17 @@ def _saturated_line_mask(
     color_mask = cv2.morphologyEx(
         color_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
     )
+    if include_bright_lines:
+        gray = cv2.cvtColor(color_roi, cv2.COLOR_BGR2GRAY)
+        bright_ridge = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, _BRIGHT_STRING_TOPHAT_KERNEL)
+        bright_mask = cv2.bitwise_and(
+            cv2.inRange(hsv, _BRIGHT_STRING_HSV_LOWER, _BRIGHT_STRING_HSV_UPPER),
+            cv2.inRange(bright_ridge, _BRIGHT_STRING_TOPHAT_MIN, 255),
+        )
+        bright_mask = cv2.morphologyEx(
+            bright_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
+        )
+        color_mask = cv2.bitwise_or(color_mask, bright_mask)
     if semantic_support is None:
         return color_mask
 
@@ -143,6 +160,7 @@ def _color_line_observation(
     semantic_probability: np.ndarray | None = None,
     semantic_meta: Any | None = None,
     semantic_min_probability: float = 0.10,
+    include_bright_lines: bool = False,
 ) -> dict[str, Any] | None:
     """Find a saturated line segment in the yoyo-centered search region."""
     height, width = frame.shape[:2]
@@ -183,7 +201,7 @@ def _color_line_observation(
         support = cv2.dilate(support, _COLOR_SEMANTIC_SUPPORT_KERNEL, iterations=1)
     # Strings are commonly saturated and brighter than the black stage. This
     # intentionally errs on the side of missing a line rather than inventing it.
-    mask = _saturated_line_mask(roi, support)
+    mask = _saturated_line_mask(roi, support, include_bright_lines)
     diag = math.hypot(roi.shape[1], roi.shape[0])
     lines = cv2.HoughLinesP(
         mask,
@@ -242,7 +260,7 @@ def _color_line_observation(
     if best is None:
         return None
     spatially_ambiguous = bool(mark_far_ambiguous and best[3] > max(120.0, 6.0 * scale))
-    return {
+    result = {
         "points": best[1],
         "confidence": round(float(min(best[2], 0.24) if spatially_ambiguous else best[2]), 4),
         "method": "color_hough_observation",
@@ -251,6 +269,9 @@ def _color_line_observation(
         "distance_to_frame_edge_px": round(float(best[4]), 2),
         "spatially_ambiguous": spatially_ambiguous,
     }
+    if include_bright_lines:
+        result["line_features"] = "saturated_and_bright"
+    return result
 
 
 def propagate_optical_flow(

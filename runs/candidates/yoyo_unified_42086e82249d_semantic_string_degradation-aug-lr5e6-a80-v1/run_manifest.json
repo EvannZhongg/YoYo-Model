@@ -33,8 +33,18 @@
   },
   "runtime_policy": {
     "default_ensemble_alpha": 0.3,
-    "adaptive_ensemble_alpha": 0.8,
+    "adaptive_ensemble_alpha": 0.5,
+    "adaptive_inference_scale": 1.5,
     "secondary_candidate_threshold": 0.5,
+    "bright_line_augmentation": {
+      "enabled": true,
+      "proposal_order": ["saturated_hsv", "low_saturation_bright_ridge_fallback"],
+      "normal_domain_min_mean_probability": 0.7,
+      "adaptive_domain_min_mean_probability": 0.4,
+      "minimum_fraction_at_0_10": 0.5,
+      "semantic_support_threshold": 0.1,
+      "neural_forwards_added": 0
+    },
     "gate": {
       "window_semantic_observations": 12,
       "maximum_color_accepts": 0,
@@ -53,23 +63,25 @@
   },
   "consecutive_evaluation": {
     "dataset": "datasets/1Ayoyo_consecutive",
-    "frame_count": 552,
-    "baseline": {"precision_at_8px": 0.670162, "recall_at_8px": 0.386274, "f1_at_8px": 0.490075, "chamfer_mean_px": 45.2064},
-    "candidate": {"precision_at_8px": 0.676090, "recall_at_8px": 0.391005, "f1_at_8px": 0.495466, "chamfer_mean_px": 44.3452},
+    "frame_count": 652,
+    "baseline": {"precision_at_8px": 0.676094, "recall_at_8px": 0.382865, "f1_at_8px": 0.488881, "chamfer_mean_px": 92.1143, "hd95_mean_px": 195.2501},
+    "candidate": {"precision_at_8px": 0.697974, "recall_at_8px": 0.434477, "f1_at_8px": 0.535570, "chamfer_mean_px": 86.3637, "hd95_mean_px": 183.6507},
     "weak_domain_groups": [
-      {"frames": 67, "baseline_f1_at_8px": 0.219108, "candidate_f1_at_8px": 0.221440, "baseline_recall_at_8px": 0.136065, "candidate_recall_at_8px": 0.136584},
-      {"frames": 120, "baseline_f1_at_8px": 0.299817, "candidate_f1_at_8px": 0.329529, "baseline_recall_at_8px": 0.208095, "candidate_recall_at_8px": 0.230849}
+      {"frames": 67, "baseline_f1_at_8px": 0.260956, "candidate_f1_at_8px": 0.405558, "baseline_recall_at_8px": 0.162958, "candidate_recall_at_8px": 0.277451},
+      {"frames": 120, "baseline_f1_at_8px": 0.370708, "candidate_f1_at_8px": 0.514192, "baseline_recall_at_8px": 0.264369, "candidate_recall_at_8px": 0.405545},
+      {"frames": 100, "frame_range": "4200-4299", "baseline_f1_at_8px": 0.101836, "candidate_f1_at_8px": 0.124459, "baseline_recall_at_8px": 0.063694, "candidate_recall_at_8px": 0.077319}
     ],
-    "non_triggered_groups_unchanged": 4,
-    "evaluation": "runs/experiments/semantic_degradation_aug_full_a08/summary.json"
+    "all_groups_non_regressing_precision_recall_f1_chamfer": true,
+    "baseline_evaluation": "runs/experiments/semantic_bright_ridge_ab_off_strict_652/summary.json",
+    "evaluation": "runs/experiments/semantic_bright_ridge_tiered_gate_final_652/summary.json"
   },
   "promotion": {
     "status": "promoted",
-    "rule": "Promoted because independent static Dice, tolerant F1, and negative-image false positives improved; both weak-domain sequences improved F1 and recall; and all four non-triggered sequences remained unchanged."
+    "rule": "Promoted because the 652-frame evaluation improves pooled precision, recall, F1, Chamfer, and HD95; every group is non-regressing in precision, recall, F1, and Chamfer; and no additional neural forward pass is used."
   },
   "limitations": [
-    "The adaptive gate is validated on six reviewed intervals and must be rechecked as new domains are added.",
-    "The first 67-frame weak-domain interval improves F1 and recall but has higher mean Chamfer, so review remains required.",
+    "The adaptive and bright-ridge gates are validated on seven reviewed intervals and must be rechecked as new domains are added.",
+    "The new Chi Gaoyu 4200-4299 interval remains low recall because semantic support covers only a small fraction of the visible white string.",
     "Semantic output remains review assistance and never overwrites annotation truth."
   ]
 }

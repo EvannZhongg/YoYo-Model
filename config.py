@@ -220,6 +220,21 @@ class TrackingConfig:
         ),
         True,
     )
+    string_bright_line_augment: bool = _as_bool(
+        _env_or_config(
+            "TRACKING_STRING_BRIGHT_LINE_AUGMENT",
+            "tracking.string_bright_line_augment",
+            True,
+        ),
+        True,
+    )
+    string_bright_line_min_mean: float = float(
+        _env_or_config(
+            "TRACKING_STRING_BRIGHT_LINE_MIN_MEAN",
+            "tracking.string_bright_line_min_mean",
+            0.70,
+        )
+    )
     string_color_semantic_prefilter: bool = _as_bool(
         _env_or_config(
             "TRACKING_STRING_COLOR_SEMANTIC_PREFILTER",
