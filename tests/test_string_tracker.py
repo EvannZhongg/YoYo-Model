@@ -393,6 +393,51 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertIs(predict.call_args.args[2], tensor)
         self.assertEqual(result["points"], observation["points"])
 
+    def test_scaled_semantic_inference_keeps_fixed_component_filter(self):
+        meta = SimpleNamespace(
+            original_width=1920, original_height=1080,
+            target_width=1440, target_height=816,
+            resized_width=1440, resized_height=810,
+            pad_x=0, pad_y=3, scale=0.75,
+        )
+        model = {
+            "kind": "semantic",
+            "model": object(),
+            "checkpoint": {
+                "threshold": 0.4,
+                "model_config": {"input_width": 960, "input_height": 544},
+            },
+            "device": "cpu",
+        }
+
+        with (
+            patch(
+                "video_tracking.tracker.prepare_letterboxed_input",
+                return_value=(object(), meta),
+            ) as prepare,
+            patch(
+                "video_tracking.tracker.predict_prepared_probability",
+                return_value=np.full((816, 1440), 0.5, dtype=np.float32),
+            ),
+            patch(
+                "video_tracking.tracker.semantic_mask_observation",
+                return_value={"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []},
+            ) as geometry,
+        ):
+            _predict_string_model(
+                model,
+                np.zeros((1080, 1920, 3), dtype=np.uint8),
+                None,
+                0.2,
+                1024,
+                "cpu",
+                "1A",
+                semantic_inference_scale=1.5,
+            )
+
+        self.assertEqual(prepare.call_args.args[1:3], (1440, 816))
+        self.assertEqual(geometry.call_args.kwargs["min_component_pixels"], 8)
+
     def test_parallel_semantic_letterbox_uses_active_model_size(self):
         model = {
             "kind": "semantic_adaptive_ensemble",

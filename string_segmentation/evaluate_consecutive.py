@@ -82,6 +82,7 @@ def evaluate_consecutive_checkpoint(
     ensemble_candidate_threshold: float = 0.5,
     adaptive_weights: Path | None = None,
     adaptive_ensemble_alpha: float = 0.0,
+    adaptive_inference_scale: float = TRACKING_CONFIG.string_adaptive_inference_scale,
     adaptive_warmup_frames: int = 0,
     adaptive_max_color_accepts: int = 0,
     adaptive_max_mean_confidence: float = 1.0,
@@ -126,6 +127,8 @@ def evaluate_consecutive_checkpoint(
             raise ValueError("Adaptive minimum mean distance ratio must be non-negative")
         if not 0.0 <= float(adaptive_ensemble_alpha) <= 1.0:
             raise ValueError("adaptive_ensemble_alpha must be between 0 and 1")
+        if not 0.5 <= float(adaptive_inference_scale) <= 2.0:
+            raise ValueError("adaptive_inference_scale must be between 0.5 and 2.0")
         adaptive_weights = adaptive_weights.resolve()
         adaptive_model, adaptive_checkpoint = load_checkpoint(adaptive_weights, device)
         if adaptive_checkpoint.get("model_config") != checkpoint.get("model_config"):
@@ -188,8 +191,11 @@ def evaluate_consecutive_checkpoint(
             active_ensemble_alpha = (
                 float(adaptive_ensemble_alpha) if adaptive_enabled else float(ensemble_alpha)
             )
+            active_scale = float(adaptive_inference_scale) if adaptive_enabled else 1.0
+            active_input_width = max(32, int(round(input_width * active_scale / 16.0)) * 16)
+            active_input_height = max(32, int(round(input_height * active_scale / 16.0)) * 16)
             tensor, meta = prepare_letterboxed_input(
-                image, input_width, input_height, device,
+                image, active_input_width, active_input_height, device,
             )
             if ensemble_model is not None:
                 active_predictor = (
@@ -211,8 +217,12 @@ def evaluate_consecutive_checkpoint(
                 probability = predict_prepared_probability(active_model, tensor)
             yoyo = _yoyo(annotation)
             observation = semantic_mask_observation(
-                probability, meta, selected_threshold, yoyo=yoyo,
+                probability,
+                meta,
+                selected_threshold,
+                yoyo=yoyo,
                 yoyo_division=str(annotation.get("yoyo_division") or "1A"),
+                min_component_pixels=8,
             )
             final_string = observation
             if color_augment and yoyo is not None:
@@ -371,6 +381,7 @@ def evaluate_consecutive_checkpoint(
         "adaptive_weights": str(adaptive_weights) if adaptive_weights is not None else "",
         "adaptive_weights_sha256": sha256_file(adaptive_weights) if adaptive_weights is not None else "",
         "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
+        "adaptive_inference_scale": float(adaptive_inference_scale),
         "adaptive_warmup_frames": int(adaptive_warmup_frames),
         "adaptive_max_color_accepts": int(adaptive_max_color_accepts),
         "adaptive_max_mean_confidence": float(adaptive_max_mean_confidence),
@@ -422,6 +433,11 @@ def main() -> int:
     parser.add_argument("--ensemble-candidate-threshold", type=float, default=0.5)
     parser.add_argument("--adaptive-weights", default="")
     parser.add_argument("--adaptive-ensemble-alpha", type=float, default=0.0)
+    parser.add_argument(
+        "--adaptive-inference-scale",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_inference_scale,
+    )
     parser.add_argument("--adaptive-warmup-frames", type=int, default=0)
     parser.add_argument("--adaptive-max-color-accepts", type=int, default=0)
     parser.add_argument("--adaptive-max-mean-confidence", type=float, default=1.0)
@@ -453,6 +469,7 @@ def main() -> int:
         ensemble_candidate_threshold=args.ensemble_candidate_threshold,
         adaptive_weights=Path(args.adaptive_weights) if str(args.adaptive_weights).strip() else None,
         adaptive_ensemble_alpha=args.adaptive_ensemble_alpha,
+        adaptive_inference_scale=args.adaptive_inference_scale,
         adaptive_warmup_frames=args.adaptive_warmup_frames,
         adaptive_max_color_accepts=args.adaptive_max_color_accepts,
         adaptive_max_mean_confidence=args.adaptive_max_mean_confidence,

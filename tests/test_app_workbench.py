@@ -1,3 +1,4 @@
+import fnmatch
 import json
 import unittest
 from pathlib import Path
@@ -44,6 +45,19 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertNotIn("Segment Manifest", labels)
         self.assertNotIn("Candidate Clips", labels)
         self.assertFalse(any("legacy-video" in value for value in values))
+
+    def test_video_tracking_input_accepts_mp4_and_mov(self):
+        config = create_demo().get_config_file()
+        input_video = next(
+            component["props"]
+            for component in config.get("components", [])
+            if component.get("props", {}).get("label") == "Input Video"
+        )
+        pattern = input_video["glob"]
+        self.assertTrue(fnmatch.fnmatch("match.mp4", pattern))
+        self.assertTrue(fnmatch.fnmatch("match.mov", pattern))
+        self.assertTrue(fnmatch.fnmatch("match.MOV", pattern))
+        self.assertFalse(fnmatch.fnmatch("match.avi", pattern))
 
     def test_score_annotation_component_has_local_resume_and_frame_controls(self):
         component = score_annotation_component_kwargs()
@@ -355,7 +369,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         }
 
         outputs = run_video_tracking(
-            "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
+            "input.mov", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
             False, "rtmpose.onnx", True, "string.pt", 0.2, 2.0, 10.0,
             "1A", True, "orientation.pt", 5.0, 1920,
         )
@@ -367,6 +381,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("Semantic inference frames: 3", outputs[-1])
         self.assertNotIn("TTA", outputs[-1])
         kwargs = track_video.call_args.kwargs
+        self.assertEqual(kwargs["source_video_path"], "input.mov")
         self.assertEqual(kwargs["string_inference_fps"], 10.0)
         self.assertEqual(kwargs["orientation_inference_fps"], 5.0)
         self.assertTrue(kwargs["enable_orientation_model"])
@@ -375,6 +390,10 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(kwargs["string_ensemble_alpha"], 0.0)
         self.assertIsNone(kwargs["string_adaptive_weights_path"])
         self.assertEqual(kwargs["string_adaptive_ensemble_alpha"], 0.0)
+        self.assertEqual(
+            kwargs["string_adaptive_inference_scale"],
+            TRACKING_CONFIG.string_adaptive_inference_scale,
+        )
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
 
@@ -397,6 +416,10 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(
             default_kwargs["string_adaptive_ensemble_alpha"],
             TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_inference_scale"],
+            TRACKING_CONFIG.string_adaptive_inference_scale,
         )
         self.assertEqual(
             default_kwargs["string_color_semantic_prefilter"],

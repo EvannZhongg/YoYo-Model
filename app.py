@@ -31,6 +31,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# FileExplorer uses a single fnmatch pattern, so character classes cover both
+# supported extensions and their uppercase variants.
+_TRACKING_VIDEO_GLOB = "*.[mM][opOP][4vV]"
+_TRACKING_VIDEO_EXTENSIONS = frozenset({".mp4", ".mov"})
+
+
 def _uploaded_video_path(video):
     if video is None:
         return None
@@ -107,6 +113,8 @@ def run_video_tracking(
     video_path = _uploaded_video_path(video)
     if not video_path:
         return (*empty, "Error: No video provided.")
+    if Path(video_path).suffix.lower() not in _TRACKING_VIDEO_EXTENSIONS:
+        return (*empty, f"Error: Unsupported video format: {Path(video_path).suffix or '(none)'}.")
 
     try:
         selected_string_weights = Path(string_weights_path.strip()).resolve() if string_weights_path.strip() else None
@@ -146,6 +154,7 @@ def run_video_tracking(
                 TRACKING_CONFIG.string_adaptive_ensemble_alpha
                 if use_default_string_ensemble else 0.0
             ),
+            string_adaptive_inference_scale=TRACKING_CONFIG.string_adaptive_inference_scale,
             string_adaptive_window_frames=TRACKING_CONFIG.string_adaptive_window_frames,
             string_adaptive_max_color_accepts=TRACKING_CONFIG.string_adaptive_max_color_accepts,
             string_adaptive_max_mean_confidence=(
@@ -247,7 +256,7 @@ def create_demo():
                         video_input = gr.FileExplorer(
                             label="Input Video",
                             root_dir=BASE_DIR / "videos",
-                            glob="*.mp4",
+                            glob=_TRACKING_VIDEO_GLOB,
                             file_count="single",
                             height=280,
                         )

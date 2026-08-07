@@ -44,17 +44,17 @@
 | 单 LR-ASPP | 0.583385 | 0.859735 | 0.983333 | 14.167 px |
 | 默认校准双模型融合 | 0.592413 | 0.868790 | **0.983333** | 10.0 px |
 | 旧弱域主模型 + 原副模型，alpha=0.50 | 0.598920 | 0.873985 | **0.983333** | 6.167 px |
-| 退化增强弱域主模型 + 原副模型，alpha=0.80 | **0.599546** | **0.877097** | **0.983333** | **4.333 px** |
+| 退化增强弱域主模型 + 原副模型，权重选择实验 alpha=0.80 | **0.599546** | **0.877097** | **0.983333** | **4.333 px** |
 
-新弱域模型在 330 张训练图上加入分辨率重采样、轻度高斯/线性运动模糊、对比度降低和 JPEG 压缩；验证与 test 保持原图。它与旧权重架构完全相同，不增加参数、每帧前向次数或输入尺寸。正式候选 manifest：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/run_manifest.json`。
+新弱域模型在 330 张训练图上加入分辨率重采样、轻度高斯/线性运动模糊、对比度降低和 JPEG 压缩；验证与 test 保持原图。它与旧权重架构完全相同，不增加参数或每帧前向次数。上表的 `alpha=0.80` 是权重选择阶段的 canonical test 结果，不是当前连续视频运行参数。正式候选 manifest：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/run_manifest.json`。
 
 当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_degradation_aug_test_a08/test_semantic_metrics.json`。
 
-弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型，并与原副模型按 `alpha=0.80` 融合。每帧仍只推理一个主模型和一个副模型；代价仍是第三个同架构 checkpoint 常驻显存。
+弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍以 `960x544` 使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型。触发后主/副输入提高到 `1440x816`，按 `alpha=0.50` 平衡融合，并固定使用 8 个输入像素的最小语义组件面积，避免面积阈值随分辨率放大后再次过滤细分支。每帧仍只推理一个主模型和一个副模型；第三个同架构 checkpoint 常驻显存。
 
 Workbench 默认选择该候选主权重时自动启用配套副权重和弱域主权重；手动选择其他绳线模型时两者均关闭，避免混用不匹配 checkpoint。
 
-默认 4K 30 帧 smoke 已确认 Workbench/CLI 加载新弱域 SHA-256 和 `alpha=0.80`，MP4、JSONL、审核图和审核索引全部生成。新旧权重为相同 LR-ASPP 架构、相同两次逐帧前向；同机顺序对照 tracking loop 为新权重 `6.5545 s`、旧权重 `9.1356 s`，未见推理速度回退。证据位于 `runs/experiments/semantic_degradation_aug_default_smoke/` 和 `runs/experiments/semantic_degradation_aug_runtime_old/`。
+真实 4K 30 帧按基线、候选、候选、基线顺序复验：基线 tracking loop 为 `6.1157/5.9688 s`，候选为 `6.1052/6.5805 s`；中位数 `6.04225 -> 6.34285 s`，吞吐约 `4.965 -> 4.730 FPS`。弱域在第 4757 帧触发并从第 4758 帧启用 `1440x816`，其运行代价约为 `4.7%`；普通场景不触发，不承担高分辨率代价。候选 run manifest 已确认记录 `alpha=0.50` 和 `adaptive_inference_scale=1.50`。证据位于 `runs/experiments/adaptive_scale_runtime_baseline/`、`runs/experiments/adaptive_scale_runtime_baseline_2/`、`runs/experiments/adaptive_scale_runtime_candidate/` 和 `runs/experiments/adaptive_scale_runtime_candidate_2/`。
 
 ## 连续视频追踪
 
@@ -80,21 +80,28 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 正式连续评估：`runs/experiments/semantic_calibrated_ensemble_a30_temporal_all/summary.json`。
 
-当前六组 552 帧使用退化增强弱域权重复验；颜色/Hough 在搜索前先将 `p>=0.10` 的 960x544 语义支持区映射到源 ROI，并以 31x31 核膨胀。两段池高宇区间仍触发弱域门控：
+当前六组 552 帧使用退化增强弱域权重复验；颜色/Hough 在搜索前先将 `p>=0.10` 的语义支持区映射到源 ROI，并以 31x31 核膨胀。普通域保持 `960x544 / alpha=0.30`，两段池高宇区间触发门控后使用 `1440x816 / alpha=0.50`：
 
 | sequence | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 周博文，72 帧 | **0.570148** | 0.668538 | **0.497004** | **19.0606** | 3.1806 |
-| 唐浩翔，100 帧 | **0.696003** | 0.798797 | **0.616649** | **23.4859** | 3.4500 |
-| DSCF7145，95 帧 | **0.495249** | 0.585347 | **0.429188** | **81.8179** | 3.4211 |
-| 池高宇，67 帧 | **0.221440** | 0.584703 | **0.136584** | 95.8935 | 2.6567 |
-| 池高宇前场，120 帧 | **0.329529** | 0.575559 | **0.230849** | **40.4620** | 2.3750 |
-| 华南赛，98 帧 | **0.621008** | 0.792823 | **0.510398** | **16.2471** | 1.3061 |
-| 六组 pooled | **0.495466** | **0.676090** | **0.391005** | **44.3452** | - |
+| 周博文，72 帧 | 0.570308 | 0.668309 | 0.497373 | 18.9776 | 3.2083 |
+| 唐浩翔，100 帧 | 0.696128 | 0.798462 | 0.617045 | 23.4401 | 3.4900 |
+| DSCF7145，95 帧 | 0.495102 | 0.584312 | 0.429525 | 81.9063 | 3.5579 |
+| 池高宇，67 帧 | **0.260956** | **0.654623** | **0.162958** | **90.0565** | **3.5075** |
+| 池高宇前场，120 帧 | **0.370708** | **0.620159** | **0.264369** | **35.3013** | **2.8583** |
+| 华南赛，98 帧 | 0.622334 | 0.794035 | 0.511688 | 16.1745 | 1.3265 |
+| 六组 pooled | **0.507089** | **0.684068** | **0.402863** | **42.4851** | - |
 
-池高宇仍是当前最弱域，主要瓶颈是复杂多段绳线召回。相对旧默认，六组 pooled F1/Recall/Precision 均上升，帧均 Chamfer 下降；两个弱域区间的 F1 和 Recall 也都上升。67 帧区间的 Chamfer 从 `90.8411` 波动到 `95.8935 px`，因此该权重仍保持 review-only。当前正式复验：`runs/experiments/semantic_degradation_aug_full_a08/summary.json`。
+运行时对齐 A/B 的 pooled 指标如下；HD95 也由 `133.4217` 降至 `130.1858 px`：
 
-弱域滑动门控仍只在两个池高宇区间触发，周博文、唐浩翔、DSCF7145 和华南赛四组均不触发且逐组指标与旧默认完全一致；12 帧联合门控和下一帧单向激活规则保持不变。
+| 运行策略 | Precision@8 | Recall@8 | F1@8 | 帧均 Chamfer |
+| --- | ---: | ---: | ---: | ---: |
+| 旧弱域策略：960x544 / alpha=0.80 | 0.675421 | 0.391818 | 0.495938 | 44.0450 px |
+| **当前弱域策略：1440x816 / alpha=0.50** | **0.684068** | **0.402863** | **0.507089** | **42.4851 px** |
+
+池高宇仍是当前最弱域，瓶颈不是绳线存在性，而是多分支几何召回：67 帧和 120 帧区间的标注平均分别有约 `4.2`、`4.4` 个组件，同源训练数据却只有 12 张稀疏锚点；全帧缩到 `960x544` 后，靠近画面下缘且远离悠悠球的平行细线容易消失。提高弱域输入分辨率后，67 帧区间 F1/Recall 从 `0.222829/0.137734` 提升至 `0.260956/0.162958`，Chamfer 从 `94.8499` 降至 `90.0565 px`，组件数从 `2.8060` 增至 `3.5075`；120 帧区间 F1/Recall 从 `0.331319/0.232594` 提升至 `0.370708/0.264369`，Chamfer 从 `39.7485` 降至 `35.3013 px`，组件数从 `2.4667` 增至 `2.8583`。正式 A/B：`runs/experiments/semantic_adaptive_scale_ab_baseline_552/summary.json` 和 `runs/experiments/semantic_adaptive_scale_fixed8_candidate_552/summary.json`。
+
+弱域滑动门控只在两个池高宇区间触发；周博文、唐浩翔、DSCF7145 和华南赛四组不触发，A/B 指标逐项完全不变。12 帧联合门控和下一帧单向激活规则保持不变。
 
 推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
 
@@ -185,7 +192,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 ## 验证状态
 
 - `compileall` 通过。
-- `pytest -q`：158 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
+- `pytest -q`：160 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
 - 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令

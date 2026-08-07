@@ -187,14 +187,22 @@ flowchart TD
     A[视频帧] --> B[YOLO11s 悠悠球检测]
     B --> C[ByteTrack ID 跟踪]
 
-    A --> D[双路 LR-ASPP 绳线分割]
-    D --> E[概率校准融合与语义中心线]
+    A --> V{弱域已激活?}
+    V -->|否| D[常规双路 LR-ASPP<br/>960x544 / alpha 0.30]
+    V -->|是| U[弱域双路 LR-ASPP<br/>1440x816 / alpha 0.50]
+    D --> E[概率校准融合与语义中心线<br/>最小组件 8 输入像素]
+    U --> E
     A --> L[颜色 ROI]
     E --> M[p&gt;=0.10 语义支持区<br/>映射并膨胀 31x31]
     L --> N[语义邻域预筛 Hough]
     M --> N
     N --> O[沿线概率门控与组件并集]
     E --> O
+    O --> S[最近 12 次语义观测]
+    S --> T{颜色通过为 0<br/>mean conf &lt; 0.82<br/>mean distance ratio &gt; 0.018?}
+    T -->|否| W[保持当前模式]
+    T -->|是| X[记录触发<br/>下一帧单向锁定弱域]
+    X -. 状态 .-> V
     O --> Q{当前帧有新鲜观测?}
     Q -->|是| F[直接保留当前观测]
     Q -->|否| R[Lucas-Kanade 前后向光流]

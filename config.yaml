@@ -66,7 +66,10 @@ tracking:
   # Switch the primary model once a persistent weak-domain window has no
   # accepted color support, low semantic confidence, and distant geometry.
   string_adaptive_weights_path: "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/adaptive.pt"
-  string_adaptive_ensemble_alpha: 0.80
+  # Weak-domain strings contain several thin parallel branches. A balanced
+  # ensemble at 1.5x input scale preserves them without slowing normal scenes.
+  string_adaptive_ensemble_alpha: 0.50
+  string_adaptive_inference_scale: 1.50
   string_adaptive_window_frames: 12
   string_adaptive_max_color_accepts: 0
   string_adaptive_max_mean_confidence: 0.82
@@ -74,7 +77,7 @@ tracking:
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20
-  # Match the input scale used for independent test evaluation.
+  # Normal domains keep the original independent-test input scale.
   string_inference_scale: 1.0
   # Reacquire the multi-segment centerline on every frame. This is slower than
   # optical-flow propagation alone, but the reviewed sequence showed a large

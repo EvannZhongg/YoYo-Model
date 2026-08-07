@@ -166,7 +166,14 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_ENSEMBLE_ALPHA",
             "tracking.string_adaptive_ensemble_alpha",
-            0.80,
+            0.50,
+        )
+    )
+    string_adaptive_inference_scale: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_INFERENCE_SCALE",
+            "tracking.string_adaptive_inference_scale",
+            1.50,
         )
     )
     string_adaptive_window_frames: int = int(

@@ -407,7 +407,7 @@ def _predict_string_model(
         model_device = model["device"]
         model_config = checkpoint["model_config"]
         scale = float(semantic_inference_scale)
-        input_width, input_height, component_area_scale = _semantic_inference_parameters(model_config, scale)
+        input_width, input_height, _ = _semantic_inference_parameters(model_config, scale)
         if prepared_letterbox is None:
             tensor, meta = prepare_letterboxed_input(
                 frame,
@@ -458,7 +458,7 @@ def _predict_string_model(
             meta,
             threshold=threshold,
             yoyo=yoyo,
-            min_component_pixels=max(1, int(round(8 * component_area_scale))),
+            min_component_pixels=8,
             hand_points=[
                 [float(wrist["x"]), float(wrist["y"])]
                 for wrist in (wrists or [])
@@ -1047,6 +1047,7 @@ def track_video(
     string_ensemble_candidate_threshold: float = TRACKING_CONFIG.string_ensemble_candidate_threshold,
     string_adaptive_weights_path: str | Path | None = TRACKING_CONFIG.string_adaptive_weights_path,
     string_adaptive_ensemble_alpha: float = TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+    string_adaptive_inference_scale: float = TRACKING_CONFIG.string_adaptive_inference_scale,
     string_adaptive_window_frames: int = TRACKING_CONFIG.string_adaptive_window_frames,
     string_adaptive_max_color_accepts: int = TRACKING_CONFIG.string_adaptive_max_color_accepts,
     string_adaptive_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_max_mean_confidence,
@@ -1096,6 +1097,8 @@ def track_video(
         raise ValueError("string_ensemble_candidate_threshold must be between 0 and 1")
     if not 0.0 <= float(string_adaptive_ensemble_alpha) <= 1.0:
         raise ValueError("string_adaptive_ensemble_alpha must be between 0 and 1")
+    if not 0.5 <= float(string_adaptive_inference_scale) <= 2.0:
+        raise ValueError("string_adaptive_inference_scale must be between 0.5 and 2.0")
     if int(string_adaptive_window_frames) < 1 or int(string_adaptive_max_color_accepts) < 0:
         raise ValueError("adaptive window must be positive and maximum color accepts non-negative")
     if not 0.0 <= float(string_adaptive_max_mean_confidence) <= 1.0:
@@ -1241,6 +1244,11 @@ def track_video(
             string_model["adaptive_enabled"] = True
             string_adaptive_activation_frame = frame_index
             string_adaptive_pending = False
+        active_string_inference_scale = (
+            float(string_adaptive_inference_scale)
+            if isinstance(string_model, dict) and string_model.get("adaptive_enabled")
+            else float(string_inference_scale)
+        )
         scheduled_string_inference = bool(
             string_model is not None and processed_frames % string_inference_interval == 0
         )
@@ -1249,7 +1257,7 @@ def track_video(
                 _prepare_semantic_letterbox,
                 string_model,
                 frame,
-                string_inference_scale,
+                active_string_inference_scale,
             )
             if scheduled_string_inference and semantic_preprocess_executor is not None
             else None
@@ -1329,7 +1337,7 @@ def track_video(
                 imgsz,
                 device,
                 yoyo_division,
-                string_inference_scale,
+                active_string_inference_scale,
                 wrists,
                 string_color_probability_augment,
                 string_color_probability_min_mean,
@@ -1399,7 +1407,7 @@ def track_video(
                 imgsz,
                 device,
                 yoyo_division,
-                string_inference_scale,
+                active_string_inference_scale,
                 wrists,
                 string_color_probability_augment,
                 string_color_probability_min_mean,
@@ -1739,6 +1747,7 @@ def track_video(
             "string_ensemble_candidate_threshold": float(string_ensemble_candidate_threshold),
             "string_adaptive_weights": str(string_adaptive_weights_path or ""),
             "string_adaptive_ensemble_alpha": float(string_adaptive_ensemble_alpha),
+            "string_adaptive_inference_scale": float(string_adaptive_inference_scale),
             "string_adaptive_window_frames": int(string_adaptive_window_frames),
             "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
             "string_adaptive_max_mean_confidence": float(string_adaptive_max_mean_confidence),
@@ -1932,6 +1941,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.string_adaptive_ensemble_alpha,
     )
     parser.add_argument(
+        "--string-adaptive-inference-scale",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_inference_scale,
+        help="Semantic input scale after the weak-domain gate activates.",
+    )
+    parser.add_argument(
         "--string-adaptive-window-frames",
         type=int,
         default=TRACKING_CONFIG.string_adaptive_window_frames,
@@ -2083,6 +2098,7 @@ def main() -> int:
         string_ensemble_candidate_threshold=args.string_ensemble_candidate_threshold,
         string_adaptive_weights_path=string_adaptive_weights or None,
         string_adaptive_ensemble_alpha=args.string_adaptive_ensemble_alpha,
+        string_adaptive_inference_scale=args.string_adaptive_inference_scale,
         string_adaptive_window_frames=args.string_adaptive_window_frames,
         string_adaptive_max_color_accepts=args.string_adaptive_max_color_accepts,
         string_adaptive_max_mean_confidence=args.string_adaptive_max_mean_confidence,
