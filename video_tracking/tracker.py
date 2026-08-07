@@ -317,6 +317,28 @@ def _should_reacquire_string(
     )
 
 
+def _should_run_scheduled_string_model(
+    scheduled_inference: bool,
+    yoyo: dict[str, Any] | None,
+    previous_string: dict[str, Any] | None,
+    last_seen_frame: int | None,
+    frame_index: int,
+    unanchored_grace_frames: int,
+) -> bool:
+    """Avoid semantic inference when no current or recent track can consume it."""
+    return bool(
+        scheduled_inference
+        and (
+            yoyo is not None
+            or previous_string is not None
+            or (
+                last_seen_frame is not None
+                and frame_index - last_seen_frame <= max(0, int(unanchored_grace_frames))
+            )
+        )
+    )
+
+
 def _can_seed_previous_string(string: dict[str, Any] | None) -> bool:
     return bool(
         string is not None
@@ -1339,6 +1361,18 @@ def track_video(
             selected_track_frame = frame_index
         center = tuple(yoyo["center"]) if yoyo else None
         speed = 0.0 if center is None or previous_center is None else math.hypot(center[0] - previous_center[0], center[1] - previous_center[1]) * fps
+        run_scheduled_string_inference = _should_run_scheduled_string_model(
+            scheduled_string_inference,
+            yoyo,
+            previous_string,
+            last_seen_frame,
+            frame_index,
+            unanchored_semantic_grace_frames,
+        )
+        if scheduled_string_inference and not run_scheduled_string_inference:
+            if semantic_preprocess_future is not None:
+                semantic_preprocess_future.cancel()
+            semantic_preprocess_future = None
         pose_reference_age = (
             frame_index - selected_pose_frame if selected_pose_frame is not None else None
         )
@@ -1364,7 +1398,7 @@ def track_video(
         if center and wrists:
             distance_to_hand = min(math.hypot(item["x"] - center[0], item["y"] - center[1]) for item in wrists)
         model_string = None
-        if scheduled_string_inference:
+        if run_scheduled_string_inference:
             model_string = _predict_string_model(
                 string_model,
                 frame,
@@ -1430,7 +1464,7 @@ def track_video(
             previous_frame=previous_frame,
         )
         reacquired_string = _should_reacquire_string(
-            scheduled_string_inference,
+            run_scheduled_string_inference,
             string_model is not None,
             yoyo,
             previous_string,
@@ -1592,7 +1626,9 @@ def track_video(
             "string_model_inference": {
                 "status": (
                     "ran"
-                    if scheduled_string_inference or reacquired_string
+                    if run_scheduled_string_inference or reacquired_string
+                    else "skipped_unanchored"
+                    if scheduled_string_inference
                     else "skipped_interval"
                     if string_model is not None
                     else "disabled_or_unavailable"
@@ -1601,6 +1637,8 @@ def track_video(
                 "interval_frames": int(string_inference_interval),
                 "reason": (
                     "scheduled"
+                    if run_scheduled_string_inference
+                    else "no_current_or_recent_anchor"
                     if scheduled_string_inference
                     else "flow_reacquire"
                     if reacquired_string

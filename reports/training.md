@@ -80,7 +80,7 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 正式连续评估：`runs/experiments/semantic_calibrated_ensemble_a30_temporal_all/summary.json`。
 
-当前连续集扩展为七组 652 帧。新增 `池高宇-fef6c7bcb0--run-00004200-00004349` 的 `f4200-f4299` 共 100 帧，全部为 `string_review_status=approved`、`bbox_review_status=reviewed`；训练视图只包含该区间之后的 `f4336/f4345/f4349` 三张锚点，因此这 100 帧不参与训练。
+当前连续集扩展为八组 757 帧。`池高宇-fef6c7bcb0--run-00004200-00004349` 的 `f4200-f4299` 共 100 帧全部为 `string_review_status=approved`、`bbox_review_status=reviewed`；训练视图只包含该区间之后的 `f4336/f4345/f4349` 三张锚点，因此这 100 帧不参与训练。最新数据重建另加入 `namdongxun-72f4a04fb5--run-00003121-00003270` 的 105 帧；该 source group 存在于训练 split，因此只作为当前行为检查，不作为独立晋升证据。
 
 该片段的基线 F1@8/Recall@8 仅 `0.101836/0.063694`，37 帧完全无绳线预测。96 个有绳真值帧平均有 `2.95` 个组件；真值线像素的 HSV 饱和度中位数均值约 `49.1`，约 76% 满足 `S<70,V>=120`，而旧颜色分支要求 `S>=70`。局部 11x11 top-hat 在线上中位响应约 `7`、邻域中位约 `2`，确认主要域差异是低饱和亮绳而非悠悠球定位。
 
@@ -99,6 +99,8 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 | 池高宇 f4200-f4299，100 帧 | 0.253846 / 0.063694 / 0.101836 | **0.318856 / 0.077319 / 0.124459** | 534.2288 -> **532.2312** |
 
 Pooled Precision/Recall/F1 从 `0.676094/0.382865/0.488881` 提升到 `0.697974/0.434477/0.535570`；帧均 Chamfer 从 `92.1143` 降至 `86.3637 px`，HD95 从 `195.2501` 降至 `183.6507 px`。七组的 Precision、Recall、F1 和 Chamfer 均无回退；DSCF7145 严格不变。正式证据为 `runs/experiments/semantic_bright_ridge_ab_off_strict_652/summary.json` 和 `runs/experiments/semantic_bright_ridge_tiered_gate_final_652/summary.json`。
+
+对最新八组 757 帧重跑当前默认生产流程后，新增 namdongxun 组的 Precision/Recall/F1@8 为 `0.889906/0.518684/0.655378`，Chamfer 为 `22.7764 px`，presence F1 为 `0.990385`；八组 pooled Precision/Recall/F1@8 为 `0.705401/0.438289/0.540653`。前七组结果与上表当前候选逐组一致，证据位于 `runs/experiments/semantic_current_default_bright_757/summary.json`。
 
 Workbench 默认配置在池高宇视频 `84.0 s` 起点完成 30 帧 smoke：悠悠球 30/30 帧存在，弱域于 `f4227` 触发并在 `f4228` 启用，tracking loop 为 `6.7253 s / 4.4608 FPS`；MP4、JSONL、审核总览和逐帧审核图均成功生成。`run.json` 记录亮脊默认开启、普通域门槛 `0.70` 以及当前三份语义权重，证据位于 `runs/experiments/bright_ridge_default_workbench_smoke/`。
 
@@ -125,6 +127,8 @@ Workbench 默认配置在池高宇视频 `84.0 s` 起点完成 30 帧 smoke：�
 Workbench 的 MP4 编码现由容量为两帧的单后台线程严格按序写入，与下一帧模型推理重叠；结束计时前会等待队列清空并释放同一个 OpenCV writer，CLI 可用 `--no-async-video-write` 回到同步路径。同步/异步按正反顺序各跑一轮默认 30 帧片段，两轮的 `frames.jsonl` 和 `tracked.mp4` 均分别逐字节一致；同步与异步 tracking loop 中位数为 `5.2632 -> 4.7387 s`（约 `9.97%`），中位吞吐 `5.7022 -> 6.3333 FPS`（约 `11.1%`）。队列有界，不会随长视频累积未编码帧。证据位于 `runs/experiments/async_writer_workbench_ab_sync_1/`、`runs/experiments/async_writer_workbench_ab_async_1/`、`runs/experiments/async_writer_workbench_ab_async_2/` 和 `runs/experiments/async_writer_workbench_ab_sync_2/`。
 
 语义模型的 `INTER_AREA` letterbox 现由单工作线程在 YOLO 检测期间提前计算，主线程随后仍执行原 CUDA 传输、归一化、模型前向和全部几何后处理；低 cadence 下的非计划重捕获仍使用同步路径。10 帧真实 4K 微基准中，相同 letterbox 像素逐点一致，检测加缩放的组合中位耗时 `0.2415 -> 0.1308 s`。默认 30 帧片段按正反顺序各跑一轮，两轮 `frames.jsonl` 与 `tracked.mp4` 均逐字节一致；同步与重叠预处理中位 tracking loop 为 `5.0119 -> 4.6846 s`（约 `6.53%`），中位吞吐 `5.9861 -> 6.4053 FPS`（约 `7.0%`）。CLI 可用 `--no-parallel-semantic-preprocess` 执行同步对照。证据位于 `runs/experiments/semantic_preprocess_overlap_ab_sync_1/`、`runs/experiments/semantic_preprocess_overlap_ab_parallel_1/`、`runs/experiments/semantic_preprocess_overlap_ab_parallel_2/` 和 `runs/experiments/semantic_preprocess_overlap_ab_sync_2/`。
+
+语义前向现增加可消费锚点门控：当前帧没有悠悠球、没有可延续绳线且已超出最近悠悠球宽限时，跳过本来必然会被丢弃的双 LR-ASPP 推理；悠悠球出现、短时遮挡或已有绳线轨迹时保持原流程。真实视频开头 60 帧的严格 A/B 中，两侧悠悠球、绳线、方向、bad-case、可见性和质量字段零差异，`tracked.mp4` SHA-256 相同；语义前向从 60 次降到 0 次，tracking loop `4.1395 -> 3.0401 s`，吞吐 `14.4946 -> 19.7359 FPS`。活跃段 30 帧 smoke 中悠悠球 29/30、绳线 30/30，语义前向仍执行 30 次，所有视频、JSONL 和审核产物成功生成。证据位于 `runs/experiments/semantic_unanchored_skip_ab_baseline/`、`runs/experiments/semantic_unanchored_skip_ab_candidate/` 和 `runs/experiments/semantic_unanchored_skip_active_smoke/`。
 
 历史基准曾对追踪结束后的源视频和权重执行 SHA-256，并尝试与审核产物重叠；当前追踪默认已移除这组非必要的整文件读取，`run.json` 只记录输入路径和参数。需要发布归档时，模型注册表可显式使用 `--include-hashes` 恢复摘要生成。原始重叠实验数据仍保留在 `runs/experiments/input_hash_overlap_*`，仅作为历史性能记录。
 
@@ -195,7 +199,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 ## 验证状态
 
 - `compileall` 通过。
-- `pytest -q`：161 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
+- `pytest -q`：162 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
 - 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令

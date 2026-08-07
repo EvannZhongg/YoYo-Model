@@ -35,11 +35,38 @@ from video_tracking.tracker import (
     _predict_string_model,
     _select_pose_person,
     _should_reacquire_string,
+    _should_run_scheduled_string_model,
     _visualization_size,
 )
 
 
 class StringTrackerTemporalTests(unittest.TestCase):
+    def test_scheduled_string_model_requires_a_consumable_anchor(self):
+        self.assertFalse(
+            _should_run_scheduled_string_model(True, None, None, None, 20, 8)
+        )
+        self.assertTrue(
+            _should_run_scheduled_string_model(
+                True, {"center": [1.0, 1.0]}, None, None, 20, 8,
+            )
+        )
+        self.assertTrue(
+            _should_run_scheduled_string_model(
+                True, None, {"points": [[0.0, 0.0], [1.0, 1.0]]}, None, 20, 8,
+            )
+        )
+        self.assertTrue(
+            _should_run_scheduled_string_model(True, None, None, 13, 20, 8)
+        )
+        self.assertFalse(
+            _should_run_scheduled_string_model(True, None, None, 11, 20, 8)
+        )
+        self.assertFalse(
+            _should_run_scheduled_string_model(
+                False, {"center": [1.0, 1.0]}, None, None, 20, 8,
+            )
+        )
+
     def test_async_video_writer_preserves_order_and_releases_backend(self):
         class FakeWriter:
             def __init__(self):
