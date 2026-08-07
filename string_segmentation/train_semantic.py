@@ -130,6 +130,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=SEMANTIC_STRING_CONFIG.seed)
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--initial-weights", default="")
+    parser.add_argument(
+        "--degradation-augment",
+        action="store_true",
+        help="Apply video-resolution, blur, contrast, and JPEG degradation to training images.",
+    )
     parser.add_argument("--early-stopping-patience", type=int, default=0)
     parser.add_argument("--early-stopping-min-epochs", type=int, default=10)
     parser.add_argument("--exist-ok", action="store_true")
@@ -187,6 +192,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         args.input_height,
         args.min_mask_width_px,
         augment=True,
+        degradation_augment=args.degradation_augment,
     )
     val_dataset = ReviewedStringDataset(
         dataset_dir,
@@ -369,6 +375,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
             "negative_sample_weight": float(args.negative_sample_weight),
+            "degradation_augment": bool(args.degradation_augment),
             "early_stopping_patience": int(args.early_stopping_patience),
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
             **model_config,

@@ -135,14 +135,14 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/primary.pt",
+            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/primary.pt",
         )
     )
     string_ensemble_weights_path: Path = _as_path(
         _env_or_config(
             "TRACKING_STRING_ENSEMBLE_WEIGHTS_PATH",
             "tracking.string_ensemble_weights_path",
-            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/secondary.pt",
+            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/secondary.pt",
         )
     )
     string_ensemble_alpha: float = float(
@@ -159,14 +159,14 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_WEIGHTS_PATH",
             "tracking.string_adaptive_weights_path",
-            "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/adaptive.pt",
+            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/adaptive.pt",
         )
     )
     string_adaptive_ensemble_alpha: float = float(
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_ENSEMBLE_ALPHA",
             "tracking.string_adaptive_ensemble_alpha",
-            0.50,
+            0.80,
         )
     )
     string_adaptive_window_frames: int = int(

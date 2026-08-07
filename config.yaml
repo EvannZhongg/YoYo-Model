@@ -57,16 +57,16 @@ tracking:
   enable_pose: false
   # Validation-calibrated LR-ASPP model soup. Predictions remain review-only
   # and never become label truth.
-  string_weights_path: "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/primary.pt"
+  string_weights_path: "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/primary.pt"
   # Calibrated probability ensemble. The secondary model was fine-tuned on
   # reviewed consecutive frames; thresholds are aligned before logit blending.
-  string_ensemble_weights_path: "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/secondary.pt"
+  string_ensemble_weights_path: "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/secondary.pt"
   string_ensemble_alpha: 0.30
   string_ensemble_candidate_threshold: 0.50
   # Switch the primary model once a persistent weak-domain window has no
   # accepted color support, low semantic confidence, and distant geometry.
-  string_adaptive_weights_path: "runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/weights/adaptive.pt"
-  string_adaptive_ensemble_alpha: 0.50
+  string_adaptive_weights_path: "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/adaptive.pt"
+  string_adaptive_ensemble_alpha: 0.80
   string_adaptive_window_frames: 12
   string_adaptive_max_color_accepts: 0
   string_adaptive_max_mean_confidence: 0.82

@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -15,6 +16,7 @@ from string_segmentation.semantic_model import (
     PreparedCalibratedEnsemblePredictor,
     ReviewedStringDataset,
     TinyUNet,
+    augment_video_degradation,
     build_string_model,
     focal_dice_loss,
     fuse_calibrated_probabilities,
@@ -35,6 +37,25 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_video_degradation_augmentation_preserves_tensor_contract(self):
+        image = np.tile(np.arange(96, dtype=np.uint8), (64, 1))
+        image = np.repeat(image[:, :, None], 3, axis=2)
+        with (
+            patch("string_segmentation.semantic_model.random.random", return_value=0.0),
+            patch(
+                "string_segmentation.semantic_model.random.uniform",
+                side_effect=[0.5, 0.5, 0.7],
+            ),
+            patch("string_segmentation.semantic_model.random.choice", return_value=3),
+            patch("string_segmentation.semantic_model.random.randint", return_value=55),
+        ):
+            degraded = augment_video_degradation(image)
+
+        self.assertEqual(degraded.shape, image.shape)
+        self.assertEqual(degraded.dtype, np.uint8)
+        self.assertTrue(degraded.flags.c_contiguous)
+        self.assertFalse(np.array_equal(degraded, image))
+
     def test_consecutive_artifact_names_are_unique_per_group(self):
         first = _group_artifact_stem("performer--run:10-20")
         second = _group_artifact_stem("performer--run/10-20")

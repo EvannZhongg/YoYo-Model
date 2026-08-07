@@ -230,6 +230,7 @@ class ReviewedStringDataset(Dataset):
         input_height: int,
         min_mask_width_px: int = 2,
         augment: bool = False,
+        degradation_augment: bool = False,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
@@ -237,6 +238,7 @@ class ReviewedStringDataset(Dataset):
         self.input_height = int(input_height)
         self.min_mask_width_px = max(1, int(min_mask_width_px))
         self.augment = bool(augment)
+        self.degradation_augment = bool(degradation_augment)
         self.pairs = image_label_pairs(self.dataset_dir, split)
         if not self.pairs:
             raise RuntimeError(f"No reviewed semantic samples found for split={split}: {self.dataset_dir}")
@@ -263,6 +265,8 @@ class ReviewedStringDataset(Dataset):
             gain = random.uniform(0.88, 1.12)
             bias = random.uniform(-10.0, 10.0)
             image = np.clip(image.astype(np.float32) * gain + bias, 0, 255).astype(np.uint8)
+        if self.augment and self.degradation_augment:
+            image = augment_video_degradation(image)
         return {
             "image": normalize_image(image),
             "mask": torch.from_numpy(mask.astype(np.float32)[None, ...]),
@@ -270,6 +274,48 @@ class ReviewedStringDataset(Dataset):
             "label_path": str(label_path),
             "positive": bool(np.any(mask)),
         }
+
+
+def augment_video_degradation(image: np.ndarray) -> np.ndarray:
+    """Simulate common video degradations without changing string geometry."""
+    output = image
+    if random.random() < 0.35:
+        scale = random.uniform(0.45, 0.80)
+        height, width = output.shape[:2]
+        reduced = cv2.resize(
+            output,
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+        output = cv2.resize(reduced, (width, height), interpolation=cv2.INTER_LINEAR)
+    if random.random() < 0.30:
+        if random.random() < 0.5:
+            kernel_size = random.choice((3, 5))
+            output = cv2.GaussianBlur(output, (kernel_size, kernel_size), random.uniform(0.2, 1.0))
+        else:
+            kernel_size = random.choice((3, 5, 7))
+            kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
+            if random.random() < 0.5:
+                kernel[kernel_size // 2, :] = 1.0 / kernel_size
+            else:
+                kernel[:, kernel_size // 2] = 1.0 / kernel_size
+            output = cv2.filter2D(output, -1, kernel)
+    if random.random() < 0.35:
+        mean = output.mean(axis=(0, 1), keepdims=True)
+        contrast = random.uniform(0.65, 0.92)
+        output = np.clip(
+            (output.astype(np.float32) - mean) * contrast + mean,
+            0,
+            255,
+        ).astype(np.uint8)
+    if random.random() < 0.25:
+        quality = random.randint(45, 82)
+        ok, encoded = cv2.imencode(".jpg", output, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if ok:
+            decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+            if decoded is not None:
+                output = decoded
+    return np.ascontiguousarray(output)
 
 
 def focal_dice_loss(

@@ -1,0 +1,75 @@
+{
+  "schema_version": "yoyo_semantic_adaptive_candidate_v2",
+  "task": "semantic_string_segmentation_and_consecutive_tracking",
+  "created_at_utc": "2026-08-07T05:50:00Z",
+  "candidate_id": "yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1",
+  "dataset_manifest_sha256": "42086e82249dd8386f551a51eb621fd6023e82a40e4b7e1adbbc2a7ee533851a",
+  "models": {
+    "default_primary": {
+      "path": "weights/primary.pt",
+      "sha256": "72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3"
+    },
+    "secondary": {
+      "path": "weights/secondary.pt",
+      "sha256": "640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df"
+    },
+    "adaptive_primary": {
+      "path": "weights/adaptive.pt",
+      "sha256": "ce6e07e9abf689adbd49fdc74702809d24c433cc827e3535ee0970efd16c9a0f"
+    }
+  },
+  "training": {
+    "run": "runs/experiments/semantic_degradation_aug_lr5e6_v1",
+    "initial_weights_sha256": "72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3",
+    "lineage_manifest": "runs/candidates/yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1/run_manifest.json",
+    "evaluation_source_overlap": {"val": [], "test": []},
+    "mode": "warm_start_with_video_degradation_augmentation",
+    "learning_rate": 0.000005,
+    "requested_epochs": 20,
+    "selected_epoch": 19,
+    "validation_threshold": 0.2991,
+    "seed": 20260807,
+    "augmentations": ["resolution_resampling", "gaussian_or_linear_motion_blur", "contrast_reduction", "jpeg_compression"]
+  },
+  "runtime_policy": {
+    "default_ensemble_alpha": 0.3,
+    "adaptive_ensemble_alpha": 0.8,
+    "secondary_candidate_threshold": 0.5,
+    "gate": {
+      "window_semantic_observations": 12,
+      "maximum_color_accepts": 0,
+      "maximum_mean_semantic_confidence": 0.82,
+      "minimum_mean_distance_to_yoyo_over_frame_diagonal": 0.018,
+      "transition": "one_way_after_joint_condition"
+    },
+    "inference_models_per_frame": 2,
+    "resident_models": 3
+  },
+  "canonical_test": {
+    "sample_count": 65,
+    "baseline_adaptive_ensemble": {"dice": 0.598920, "tolerant_f1_at_3px": 0.873985, "presence_f1": 0.983333, "negative_mean_false_positive_pixels": 6.167},
+    "candidate_adaptive_ensemble": {"dice": 0.599546, "tolerant_f1_at_3px": 0.877097, "presence_f1": 0.983333, "negative_mean_false_positive_pixels": 4.333},
+    "evaluation": "runs/experiments/semantic_degradation_aug_test_a08/test_semantic_metrics.json"
+  },
+  "consecutive_evaluation": {
+    "dataset": "datasets/1Ayoyo_consecutive",
+    "frame_count": 552,
+    "baseline": {"precision_at_8px": 0.670162, "recall_at_8px": 0.386274, "f1_at_8px": 0.490075, "chamfer_mean_px": 45.2064},
+    "candidate": {"precision_at_8px": 0.676090, "recall_at_8px": 0.391005, "f1_at_8px": 0.495466, "chamfer_mean_px": 44.3452},
+    "weak_domain_groups": [
+      {"frames": 67, "baseline_f1_at_8px": 0.219108, "candidate_f1_at_8px": 0.221440, "baseline_recall_at_8px": 0.136065, "candidate_recall_at_8px": 0.136584},
+      {"frames": 120, "baseline_f1_at_8px": 0.299817, "candidate_f1_at_8px": 0.329529, "baseline_recall_at_8px": 0.208095, "candidate_recall_at_8px": 0.230849}
+    ],
+    "non_triggered_groups_unchanged": 4,
+    "evaluation": "runs/experiments/semantic_degradation_aug_full_a08/summary.json"
+  },
+  "promotion": {
+    "status": "promoted",
+    "rule": "Promoted because independent static Dice, tolerant F1, and negative-image false positives improved; both weak-domain sequences improved F1 and recall; and all four non-triggered sequences remained unchanged."
+  },
+  "limitations": [
+    "The adaptive gate is validated on six reviewed intervals and must be rechecked as new domains are added.",
+    "The first 67-frame weak-domain interval improves F1 and recall but has higher mean Chamfer, so review remains required.",
+    "Semantic output remains review assistance and never overwrites annotation truth."
+  ]
+}

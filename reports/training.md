@@ -26,13 +26,13 @@
 
 ## 绳线分割
 
-当前生产候选：`runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/`。
+当前生产候选：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/`。
 
 该候选为自包含的三权重、双路逐帧 LR-ASPP 概率融合：
 
 - 主权重：`weights/primary.pt`，SHA-256 `72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3`。
 - 副权重：`weights/secondary.pt`，SHA-256 `640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df`。
-- 弱域主权重：`weights/adaptive.pt`，SHA-256 `690f3e653c837fe92afcb814d01d55f5ba77c45fae0c85636a4f837459fd8c70`；由原主权重以 `lr=5e-6` 温启动训练，选择 epoch 15。
+- 弱域主权重：`weights/adaptive.pt`，SHA-256 `ce6e07e9abf689adbd49fdc74702809d24c433cc827e3535ee0970efd16c9a0f`；由原主权重以 `lr=5e-6` 温启动训练，选择 epoch 19。
 - 主模型验证阈值 `0.3985`，副模型校准阈值 `0.50`。
 - 两路概率先转为相对各自阈值原点的 logit，再按主 `0.7`、副 `0.3` 融合，融合候选阈值为 `0.50`。
 - 融合后的概率图继续进入语义中心线、多组件提取和颜色/Hough 几何候选概率门控。双语义模型不使用显式绳色色相标签；颜色/Hough 分支只作为受语义概率约束的补充几何候选。
@@ -43,15 +43,18 @@
 | --- | ---: | ---: | ---: | ---: |
 | 单 LR-ASPP | 0.583385 | 0.859735 | 0.983333 | 14.167 px |
 | 默认校准双模型融合 | 0.592413 | 0.868790 | **0.983333** | 10.0 px |
-| 弱域主模型 + 原副模型，alpha=0.50 | **0.598920** | **0.873985** | **0.983333** | **6.167 px** |
+| 旧弱域主模型 + 原副模型，alpha=0.50 | 0.598920 | 0.873985 | **0.983333** | 6.167 px |
+| 退化增强弱域主模型 + 原副模型，alpha=0.80 | **0.599546** | **0.877097** | **0.983333** | **4.333 px** |
 
-正式候选 manifest：`runs/candidates/yoyo_unified_0ff7d829e127_semantic_string_adaptive-lr5e6-v1/run_manifest.json`。
+新弱域模型在 330 张训练图上加入分辨率重采样、轻度高斯/线性运动模糊、对比度降低和 JPEG 压缩；验证与 test 保持原图。它与旧权重架构完全相同，不增加参数、每帧前向次数或输入尺寸。正式候选 manifest：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/run_manifest.json`。
 
-当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_current_2b0cfca_adaptive_ensemble_a050/test_semantic_metrics_external_42086e82249d.json`。
+当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_degradation_aug_test_a08/test_semantic_metrics.json`。
 
-弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型，并与原副模型按 `alpha=0.50` 融合。每帧仍只推理一个主模型和一个副模型；代价是第三个 checkpoint 常驻显存。
+弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型，并与原副模型按 `alpha=0.80` 融合。每帧仍只推理一个主模型和一个副模型；代价仍是第三个同架构 checkpoint 常驻显存。
 
 Workbench 默认选择该候选主权重时自动启用配套副权重和弱域主权重；手动选择其他绳线模型时两者均关闭，避免混用不匹配 checkpoint。
+
+默认 4K 30 帧 smoke 已确认 Workbench/CLI 加载新弱域 SHA-256 和 `alpha=0.80`，MP4、JSONL、审核图和审核索引全部生成。新旧权重为相同 LR-ASPP 架构、相同两次逐帧前向；同机顺序对照 tracking loop 为新权重 `6.5545 s`、旧权重 `9.1356 s`，未见推理速度回退。证据位于 `runs/experiments/semantic_degradation_aug_default_smoke/` 和 `runs/experiments/semantic_degradation_aug_runtime_old/`。
 
 ## 连续视频追踪
 
@@ -77,21 +80,21 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 正式连续评估：`runs/experiments/semantic_calibrated_ensemble_a30_temporal_all/summary.json`。
 
-当前六组 552 帧使用未改动的生产权重复验；颜色/Hough 在搜索前先将 `p>=0.10` 的 960x544 语义支持区映射到源 ROI，并以 31x31 核膨胀。两段池高宇区间仍触发弱域门控：
+当前六组 552 帧使用退化增强弱域权重复验；颜色/Hough 在搜索前先将 `p>=0.10` 的 960x544 语义支持区映射到源 ROI，并以 31x31 核膨胀。两段池高宇区间仍触发弱域门控：
 
 | sequence | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 周博文，72 帧 | **0.570148** | 0.668538 | **0.497004** | **19.0606** | 3.1806 |
 | 唐浩翔，100 帧 | **0.696003** | 0.798797 | **0.616649** | **23.4859** | 3.4500 |
 | DSCF7145，95 帧 | **0.495249** | 0.585347 | **0.429188** | **81.8179** | 3.4211 |
-| 池高宇，67 帧 | **0.219108** | 0.562262 | **0.136065** | **90.8411** | 2.7015 |
-| 池高宇前场，120 帧 | **0.299817** | 0.536124 | **0.208095** | **47.2157** | 2.2750 |
+| 池高宇，67 帧 | **0.221440** | 0.584703 | **0.136584** | 95.8935 | 2.6567 |
+| 池高宇前场，120 帧 | **0.329529** | 0.575559 | **0.230849** | **40.4620** | 2.3750 |
 | 华南赛，98 帧 | **0.621008** | 0.792823 | **0.510398** | **16.2471** | 1.3061 |
-| 六组 pooled | **0.490075** | **0.670162** | **0.386274** | **45.2064** | - |
+| 六组 pooled | **0.495466** | **0.676090** | **0.391005** | **44.3452** | - |
 
-池高宇仍是当前最弱域，主要瓶颈是复杂多段绳线召回。当前正式复验：`runs/experiments/semantic_color_prefilter_d31_552/summary.json`。
+池高宇仍是当前最弱域，主要瓶颈是复杂多段绳线召回。相对旧默认，六组 pooled F1/Recall/Precision 均上升，帧均 Chamfer 下降；两个弱域区间的 F1 和 Recall 也都上升。67 帧区间的 Chamfer 从 `90.8411` 波动到 `95.8935 px`，因此该权重仍保持 review-only。当前正式复验：`runs/experiments/semantic_degradation_aug_full_a08/summary.json`。
 
-弱域滑动门控仍只在两个池高宇区间触发，周博文、唐浩翔、DSCF7145 和华南赛四组均不触发；语义邻域预筛选没有改变主模型切换范围。弱域权重、12 帧联合门控和下一帧单向激活规则均保持不变。
+弱域滑动门控仍只在两个池高宇区间触发，周博文、唐浩翔、DSCF7145 和华南赛四组均不触发且逐组指标与旧默认完全一致；12 帧联合门控和下一帧单向激活规则保持不变。
 
 推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
 
@@ -182,7 +185,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 ## 验证状态
 
 - `compileall` 通过。
-- `pytest -q`：147 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
+- `pytest -q`：158 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
 - 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令
@@ -192,6 +195,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 .\.venv\Scripts\python.exe -m training_v3.strip_pose_annotations
 .\.venv\Scripts\python.exe -m training_v3.orientation_view --dataset-dir datasets\1Ayoyo_dataset --clear
 .\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1 --device 0
+.\.venv\Scripts\python.exe -m cli.training.train_semantic --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --project runs\experiments --name semantic_degradation_aug_lr5e6_v1 --epochs 20 --input-width 960 --input-height 544 --batch 2 --lr 0.000005 --architecture lraspp_mobilenet_v3 --initial-weights runs\candidates\yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1\weights\best.pt --degradation-augment --early-stopping-patience 5 --early-stopping-min-epochs 6 --device cuda
 .\.venv\Scripts\python.exe -m cli.tracking.evaluate_orientation --output-dir runs\experiments\orientation_temporal_adaptive_20260807 --device 0
 .\.venv\Scripts\python.exe -m pytest -q
 ```
