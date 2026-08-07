@@ -1047,6 +1047,11 @@ def _orientation_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _hash_run_inputs(paths: dict[str, Path | None]) -> dict[str, str]:
+    """Legacy helper kept for callers that explicitly request an audit digest.
+
+    Normal tracking no longer calls this function because hashing a source
+    video and several checkpoints after every run is not part of inference.
+    """
     return {
         name: sha256_file(path) if path is not None else ""
         for name, path in paths.items()
@@ -1111,7 +1116,7 @@ def track_video(
     max_frames: int = 0,
     async_video_write: bool = True,
     parallel_semantic_preprocess: bool = True,
-    parallel_run_input_hashing: bool = True,
+    parallel_run_input_hashing: bool = True,  # Deprecated; retained for API compatibility.
     orientation_direct_inference: bool = True,
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
@@ -1656,41 +1661,6 @@ def track_video(
         metadata_file.close()
     loop_seconds = max(0.0, time.perf_counter() - loop_started)
     loop_fps = float(processed_frames / loop_seconds) if loop_seconds > 0.0 else 0.0
-    run_input_paths = {
-        "source_video_sha256": source_video_path,
-        "weights_sha256": weights_path,
-        "string_weights_sha256": (
-            Path(string_weights_path or TRACKING_CONFIG.string_weights_path)
-            if string_model is not None else None
-        ),
-        "string_ensemble_weights_sha256": (
-            Path(string_model["ensemble_path"])
-            if isinstance(string_model, dict)
-            and string_model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}
-            else None
-        ),
-        "string_adaptive_weights_sha256": (
-            Path(string_model["adaptive_path"])
-            if isinstance(string_model, dict)
-            and string_model.get("kind") == "semantic_adaptive_ensemble"
-            else None
-        ),
-        "pose_weights_sha256": pose_model.pose_path if pose_model is not None else None,
-        "pose_detector_sha256": pose_model.detector_path if pose_model is not None else None,
-        "orientation_weights_sha256": (
-            resolved_orientation_weights
-            if orientation_model is not None and resolved_orientation_weights.is_file()
-            else None
-        ),
-    }
-    hash_executor = None
-    hash_future = None
-    if parallel_run_input_hashing:
-        hash_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="tracking-input-hash",
-        )
-        hash_future = hash_executor.submit(_hash_run_inputs, run_input_paths)
     try:
         review_sheet_path = make_tracking_review_sheet(
             run_dir,
@@ -1699,15 +1669,6 @@ def track_video(
     except Exception as exc:
         logger.warning("Could not create tracking review sheet: %s", exc)
         review_sheet_path = None
-    try:
-        run_input_hashes = (
-            hash_future.result()
-            if hash_future is not None
-            else _hash_run_inputs(run_input_paths)
-        )
-    finally:
-        if hash_executor is not None:
-            hash_executor.shutdown(wait=True)
     bad_case_counts = Counter(flag for record in records for flag in record["bad_case"])
     component_selection_counts = Counter(
         str(record["string"].get("component_selection"))
@@ -1734,22 +1695,14 @@ def track_video(
         ),
     }
     run_manifest = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "run_id": run_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_video": str(source_video_path.resolve()),
-        "source_video_sha256": run_input_hashes["source_video_sha256"],
         "weights": str(weights_path.resolve()),
-        "weights_sha256": run_input_hashes["weights_sha256"],
         "string_model_kind": (
             string_model.get("kind", "yolo_segmentation") if isinstance(string_model, dict) else "yolo_segmentation"
         ) if string_model is not None else "disabled_or_unavailable",
-        "string_weights_sha256": run_input_hashes["string_weights_sha256"],
-        "string_ensemble_weights_sha256": run_input_hashes["string_ensemble_weights_sha256"],
-        "string_adaptive_weights_sha256": run_input_hashes["string_adaptive_weights_sha256"],
-        "pose_weights_sha256": run_input_hashes["pose_weights_sha256"],
-        "pose_detector_sha256": run_input_hashes["pose_detector_sha256"],
-        "orientation_weights_sha256": run_input_hashes["orientation_weights_sha256"],
         "parameters": {
             "confidence": confidence,
             "iou": iou,
@@ -1770,7 +1723,6 @@ def track_video(
             "visualization_max_width": int(visualization_max_width),
             "async_video_write": bool(async_video_write),
             "parallel_semantic_preprocess": bool(parallel_semantic_preprocess),
-            "parallel_run_input_hashing": bool(parallel_run_input_hashing),
             "pose_enabled": enable_pose,
             "pose_backend": pose_model.backend_name if pose_model is not None else "unavailable",
             "pose_weights": str(pose_model.pose_path) if pose_model is not None else str(pose_weights_path or ""),
@@ -1941,7 +1893,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--parallel-run-input-hashing",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Overlap run-input SHA-256 hashing with review artifact generation.",
+        help="Deprecated compatibility option; run-input hashing is no longer automatic.",
     )
     parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
     parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))

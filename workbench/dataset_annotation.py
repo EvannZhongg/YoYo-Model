@@ -125,20 +125,31 @@ def _dataset_reviews(document: dict[str, Any], dataset_path: Path) -> dict[str, 
     return dataset["samples"]
 
 
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _file_revision(path: Path) -> tuple[int, int]:
+    """Return a cheap revision marker for review invalidation.
+
+    Review status is local UI state, so reading the complete JSON file just to
+    compare a SHA-256 digest is unnecessary.  Size plus nanosecond mtime still
+    invalidates normal edits while avoiding one full-file read per sample.
+    """
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def _review_summary(label_path: Path, review: object) -> dict[str, Any]:
-    valid = (
-        isinstance(review, dict)
-        and review.get("label_sha256") == _file_sha256(label_path)
-        and bool(review.get("confirmed"))
-    )
+    valid = isinstance(review, dict) and bool(review.get("confirmed"))
+    if valid and "label_size_bytes" in review and "label_mtime_ns" in review:
+        try:
+            size, mtime_ns = _file_revision(label_path)
+            valid = (
+                int(review.get("label_size_bytes")) == size
+                and int(review.get("label_mtime_ns")) == mtime_ns
+            )
+        except (OSError, TypeError, ValueError):
+            valid = False
+    # Older maps contain only a SHA field.  Keep those confirmations readable
+    # without reintroducing a full-file hash scan; edits made through this UI
+    # always clear the review and new confirmations use the stat marker above.
     return {
         "reviewed": valid,
         "reviewed_at_utc": str(review.get("confirmed_at_utc") or "") if valid else "",
@@ -286,11 +297,13 @@ def set_annotation_sample_reviewed(
                 document["datasets"][dataset_key] = dataset
             elif not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
                 raise ValueError(f"review status dataset entry is invalid: {REVIEW_MAP_PATH}")
+            label_size_bytes, label_mtime_ns = _file_revision(label_path)
             dataset["samples"][key] = {
                 "confirmed": True,
                 "confirmed_at_utc": _utc_now(),
                 "reviewer": reviewer_name,
-                "label_sha256": _file_sha256(label_path),
+                "label_size_bytes": label_size_bytes,
+                "label_mtime_ns": label_mtime_ns,
             }
         elif dataset is not None:
             if not isinstance(dataset, dict) or not isinstance(dataset.get("samples"), dict):
@@ -334,12 +347,13 @@ def set_all_annotation_samples_reviewed(
         updated_count = 0
         for label_path in label_paths:
             key = label_path.relative_to(labels_root).as_posix()
-            label_sha256 = _file_sha256(label_path)
+            label_size_bytes, label_mtime_ns = _file_revision(label_path)
             existing = samples.get(key)
             if (
                 isinstance(existing, dict)
                 and existing.get("confirmed") is True
-                and existing.get("label_sha256") == label_sha256
+                and existing.get("label_size_bytes") == label_size_bytes
+                and existing.get("label_mtime_ns") == label_mtime_ns
                 and existing.get("reviewer") == reviewer_name
             ):
                 continue
@@ -347,7 +361,8 @@ def set_all_annotation_samples_reviewed(
                 "confirmed": True,
                 "confirmed_at_utc": confirmed_at,
                 "reviewer": reviewer_name,
-                "label_sha256": label_sha256,
+                "label_size_bytes": label_size_bytes,
+                "label_mtime_ns": label_mtime_ns,
             }
             updated_count += 1
         if updated_count or removed_orphan_count:

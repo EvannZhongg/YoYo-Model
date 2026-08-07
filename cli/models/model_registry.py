@@ -57,7 +57,17 @@ def _metric_summary(metrics: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if value is not None}
 
 
-def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> dict[str, Any]:
+def build_registry(
+    base_dir: Path = BASE_DIR,
+    runs_dir: Path | None = None,
+    *,
+    include_hashes: bool = False,
+) -> dict[str, Any]:
+    """Build a lightweight model index.
+
+    Checkpoint hashing is useful for release audits but is unnecessarily slow
+    for normal registry refreshes, so it is explicit opt-in.
+    """
     runs_dir = (runs_dir or base_dir / "runs").resolve()
     default_yoyo = TRACKING_CONFIG.weights_path.resolve()
     default_string = TRACKING_CONFIG.string_weights_path.resolve()
@@ -74,7 +84,11 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
         represented_weights.add(weights)
         dataset_manifest = _resolve(manifest.get("dataset_manifest"), base_dir)
         recorded_dataset_sha = str(manifest.get("dataset_manifest_sha256", ""))
-        current_dataset_sha = sha256_file(dataset_manifest) if dataset_manifest and dataset_manifest.exists() else ""
+        current_dataset_sha = (
+            sha256_file(dataset_manifest)
+            if include_hashes and dataset_manifest and dataset_manifest.exists()
+            else ""
+        )
         metrics_path = next((run_dir / name for name in metric_names if (run_dir / name).exists()), None)
         metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path else {}
         warnings = []
@@ -82,7 +96,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
             warnings.append("best_weights_missing")
         if dataset_manifest is None or not dataset_manifest.exists():
             warnings.append("dataset_manifest_missing")
-        elif recorded_dataset_sha and current_dataset_sha != recorded_dataset_sha:
+        elif include_hashes and recorded_dataset_sha and current_dataset_sha != recorded_dataset_sha:
             warnings.append("dataset_manifest_sha256_drift")
         if not metrics_path:
             warnings.append("independent_test_metrics_missing")
@@ -99,9 +113,9 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
                 "task": manifest.get("task", "unknown"),
                 "created_at_utc": manifest.get("created_at_utc"),
                 "run_manifest": str(manifest_path.resolve()),
-                "run_manifest_sha256": sha256_file(manifest_path),
+                "run_manifest_sha256": sha256_file(manifest_path) if include_hashes else "",
                 "weights": str(weights),
-                "weights_sha256": sha256_file(weights) if weights.exists() else "",
+                "weights_sha256": sha256_file(weights) if include_hashes and weights.exists() else "",
                 "dataset_manifest": str(dataset_manifest.resolve()) if dataset_manifest and dataset_manifest.exists() else str(dataset_manifest or ""),
                 "dataset_manifest_sha256_recorded": recorded_dataset_sha,
                 "dataset_manifest_sha256_current": current_dataset_sha,
@@ -132,7 +146,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
                 "task": "unknown",
                 "run_manifest": "",
                 "weights": str(weights),
-                "weights_sha256": sha256_file(weights),
+                "weights_sha256": sha256_file(weights) if include_hashes else "",
                 "roles": roles,
                 "warnings": ["run_manifest_missing"],
                 "complete": False,
@@ -141,6 +155,7 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
     entries.sort(key=lambda item: item["model_id"])
     return {
         "schema_version": "yoyo_model_registry_v1",
+        "hashes_included": bool(include_hashes),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "runs_dir": str(runs_dir.resolve()),
         "default_yoyo_weights": str(default_yoyo),
@@ -153,11 +168,16 @@ def build_registry(base_dir: Path = BASE_DIR, runs_dir: Path | None = None) -> d
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build a hash-verified model version registry.")
+    parser = argparse.ArgumentParser(description="Build a model version registry.")
     parser.add_argument("--runs-dir", default=str(BASE_DIR / "runs"))
     parser.add_argument("--output", default=str(BASE_DIR / "runs" / "model_registry.json"))
+    parser.add_argument(
+        "--include-hashes",
+        action="store_true",
+        help="Compute SHA-256 digests for release/audit output (slower).",
+    )
     args = parser.parse_args()
-    registry = build_registry(BASE_DIR, Path(args.runs_dir))
+    registry = build_registry(BASE_DIR, Path(args.runs_dir), include_hashes=args.include_hashes)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
