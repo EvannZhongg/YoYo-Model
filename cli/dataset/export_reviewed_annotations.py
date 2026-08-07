@@ -1,4 +1,4 @@
-"""Export only SHA-bound, human-confirmed workbench annotations."""
+"""Export human-confirmed Workbench annotations."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from typing import Any
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 APPROVAL_SCOPES = ("visible_geometry", "yoyo_bbox", "trick_orientation")
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 
 
 def sha256_file(path: Path) -> str:
@@ -23,6 +24,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -66,7 +72,6 @@ def approved_annotation(
     *,
     dataset_key: str,
     sample_key: str,
-    source_label_sha256: str,
     review: dict[str, Any],
 ) -> dict[str, Any]:
     value = json.loads(json.dumps(annotation))
@@ -95,17 +100,13 @@ def approved_annotation(
             "model": "human-workbench",
             "decision": "approve",
             "review_scope": list(APPROVAL_SCOPES),
-            "notes": (
-                f"Imported from SHA-bound Workbench confirmation for {dataset_key}; "
-                f"source_label_sha256={source_label_sha256}"
-            ),
+            "notes": f"Imported from Workbench confirmation for {dataset_key}",
             "created_at_utc": confirmed_at,
         }
     )
     value["workbench_review_import"] = {
         "source_dataset": dataset_key,
         "source_sample_key": sample_key,
-        "source_label_sha256": source_label_sha256,
         "confirmed": True,
         "confirmed_at_utc": confirmed_at,
         "reviewer": reviewer,
@@ -128,6 +129,8 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
         raise FileExistsError(f"report already exists: {args.report}")
 
     review_map = read_json(args.review_map)
+    if review_map.get("schema_version") != REVIEW_SCHEMA_VERSION:
+        raise ValueError(f"unsupported review map schema: {review_map.get('schema_version')!r}")
     datasets = review_map.get("datasets")
     if not isinstance(datasets, dict) or args.dataset_key not in datasets:
         raise KeyError(f"dataset not present in review map: {args.dataset_key}")
@@ -158,10 +161,12 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
             if label_path is None:
                 raise FileNotFoundError(f"confirmed label not found: {normalized_key}")
             review = confirmed[raw_key]
-            label_digest = sha256_file(label_path)
-            declared_label_digest = str(review.get("label_sha256") or "").lower()
-            if label_digest != declared_label_digest:
-                raise ValueError(f"review label SHA mismatch: {normalized_key}")
+            label_size_bytes, label_mtime_ns = file_revision(label_path)
+            if (
+                review.get("label_size_bytes") != label_size_bytes
+                or review.get("label_mtime_ns") != label_mtime_ns
+            ):
+                raise ValueError(f"review label revision mismatch: {normalized_key}")
 
             annotation = read_json(label_path)
             image_path = resolve_image(canonical_root, label_path, annotation)
@@ -185,7 +190,6 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
                 annotation,
                 dataset_key=args.dataset_key,
                 sample_key=normalized_key,
-                source_label_sha256=label_digest,
                 review=review,
             )
             exported["source_image"] = (Path("images") / relative.with_suffix(image_path.suffix.lower())).as_posix()
@@ -195,9 +199,7 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
                     "source_sample_key": normalized_key,
                     "source_group": str(annotation.get("source_group") or ""),
                     "image_sha256": image_digest,
-                    "source_label_sha256": label_digest,
                     "exported_label": str((args.output / "labels" / relative).resolve()),
-                    "exported_label_sha256": sha256_file(target_label),
                     "image_materialization": image_materialization,
                     "reviewer": str(review.get("reviewer") or "workbench-reviewer"),
                     "confirmed_at_utc": str(review.get("confirmed_at_utc") or ""),
@@ -212,16 +214,15 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
         raise
 
     excluded = [
-        {"source_sample_key": key, "reason": "not_confirmed_in_sha_bound_review_map"}
+        {"source_sample_key": key, "reason": "not_confirmed_in_review_map"}
         for key in sorted(set(source_keys) - set(confirmed))
     ]
     report = {
-        "schema_version": "reviewed_annotation_selection_v1",
+        "schema_version": "reviewed_annotation_selection_v2",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_dataset": str(source_dataset),
+        "source_dataset_key": args.dataset_key,
         "export_root": str(args.output.resolve()),
-        "source_manifest_sha256": sha256_file(source_manifest),
-        "review_map_sha256": sha256_file(args.review_map),
         "source_sample_count": len(source_keys),
         "confirmed_review_count": len(selected),
         "excluded_unreviewed_count": len(excluded),

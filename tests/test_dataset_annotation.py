@@ -189,7 +189,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
 
             self.assertFalse(opened["samples"][0]["reviewed"])
 
-    def test_bulk_review_rebinds_current_label_hash_without_changing_label(self):
+    def test_bulk_review_rebinds_current_label_revision_without_changing_label(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             dataset, key = make_annotation_dataset(root)

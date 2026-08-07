@@ -140,6 +140,11 @@ manifest 校验仍然启用。需要生成发布归档哈希时，可运行模�
 - 悠悠球计分事件标注（五轨剪辑式时间轴，含三条计分轨、场景轨、不可标记轨，以及 Anchor、Evidence interval、自动续标与 JSON 元数据）
 - 完整视频追踪和逐帧审核
 
+数据集人工确认状态独立保存在 `workbench_state/dataset_review_status.json`。
+当前 `yoyo_dataset_review_v3` 使用标签文件大小和纳秒修改时间使编辑后的确认失效，
+不再保存标签 SHA-256。该映射不属于 `agent_yoyo_string_annotation_v4/v5`
+标签 schema，因此无需升级或重建已有训练标签。
+
 计分标注每次修订都会原子写入 `annotations/score_annotations/`。每个 JSON 的 `video.source_path` 指向 `videos/` 下对应的受控源视频；`Score Annotation` 页签中的会话管理抽屉可直接加载视频并继续标注，也可修改组别/裁判、导出或删除会话。该目录属于独立的计分模型 pipeline，目前仅用于数据标注，不接入当前训练。
 
 ## 测试

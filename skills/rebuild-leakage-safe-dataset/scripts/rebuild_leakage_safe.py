@@ -22,6 +22,7 @@ SPLITS = ("train", "val", "test")
 MODES = ("append-isolated", "strict-eval")
 BASELINE_TOKEN = "{baseline_manifest}"
 PROTECTED_CANONICAL_TOKEN = "{protected_canonical}"
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 LEGACY_NON_TASK_FIELDS = {
     "hands",
@@ -55,6 +56,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -498,6 +504,8 @@ def _load_protected_reviews(
     dataset_root: Path,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     document = _read_json(review_map_path)
+    if document.get("schema_version") != REVIEW_SCHEMA_VERSION:
+        raise ContractError(f"unsupported review map schema: {document.get('schema_version')!r}")
     datasets = document.get("datasets")
     if not isinstance(datasets, dict):
         raise ContractError("review map datasets must be an object")
@@ -518,9 +526,11 @@ def _load_protected_reviews(
         if image_hash is None:
             raise ContractError(f"review entry has no manifest record: {key}")
         label_path = labels_by_hash[image_hash]
-        expected = str(raw_review.get("label_sha256", "")).lower()
-        actual = sha256_file(label_path)
-        if expected != actual:
+        label_size_bytes, label_mtime_ns = file_revision(label_path)
+        if (
+            raw_review.get("label_size_bytes") != label_size_bytes
+            or raw_review.get("label_mtime_ns") != label_mtime_ns
+        ):
             raise ContractError(f"review entry is stale before rebuild: {key}")
         reviews_by_hash[image_hash] = dict(raw_review)
     return document, reviews_by_hash
@@ -572,7 +582,7 @@ def _rebind_reviews(
         if label_path is None:
             raise ContractError(f"reviewed image is missing after rebuild: {image_hash}")
         updated = dict(review)
-        updated["label_sha256"] = sha256_file(label_path)
+        updated["label_size_bytes"], updated["label_mtime_ns"] = file_revision(label_path)
         rebound[_label_key(label_path, dataset_root)] = updated
     datasets = document.setdefault("datasets", {})
     if reviews_by_hash:

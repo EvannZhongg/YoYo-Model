@@ -32,6 +32,12 @@ CONTENT_DIGEST_FIELDS = (
     "notes",
 )
 DIGEST_REFERENCE_FIELDS = {"before_sha256", "after_sha256", "content_sha256"}
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
+
+
+def _file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -144,7 +150,7 @@ def strip_pose_fields(
     labels_root: Path,
     *,
     dry_run: bool = False,
-    file_hash_changes: dict[Path, tuple[str, str]] | None = None,
+    file_revision_changes: dict[Path, tuple[tuple[int, int], tuple[int, int]]] | None = None,
 ) -> dict[str, Any]:
     labels_root = labels_root.resolve()
     try:
@@ -156,6 +162,7 @@ def strip_pose_fields(
     removed_counts: Counter[str] = Counter()
     anchor_counts: Counter[str] = Counter()
     for path in labels:
+        original_revision = _file_revision(path)
         original_bytes = path.read_bytes()
         annotation = json.loads(original_bytes.decode("utf-8"))
         if not isinstance(annotation, dict):
@@ -171,15 +178,13 @@ def strip_pose_fields(
             unchanged += 1
             continue
         output_bytes = _serialized(cleaned)
-        if file_hash_changes is not None:
-            file_hash_changes[path] = (
-                hashlib.sha256(original_bytes).hexdigest(),
-                hashlib.sha256(output_bytes).hexdigest(),
-            )
         if not dry_run:
             temporary = path.with_suffix(path.suffix + ".tmp")
             temporary.write_bytes(output_bytes)
             temporary.replace(path)
+        if file_revision_changes is not None:
+            output_revision = _file_revision(path) if not dry_run else (len(output_bytes), original_revision[1])
+            file_revision_changes[path] = (original_revision, output_revision)
         updated += 1
     result = {
         "labels_root": labels_root_display,
@@ -214,17 +219,19 @@ def _dataset_key(labels_root: Path) -> tuple[str, Path] | None:
     return key, dataset_root
 
 
-def refresh_review_hashes(
+def refresh_review_revisions(
     review_map_path: Path,
     labels_roots: list[Path],
-    file_hash_changes: dict[Path, tuple[str, str]],
+    file_revision_changes: dict[Path, tuple[tuple[int, int], tuple[int, int]]],
     *,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Keep SHA-bound Workbench confirmations attached to mechanical migrations."""
+    """Keep Workbench confirmations attached to mechanical migrations."""
     if not review_map_path.is_file():
         return {"path": str(review_map_path), "updated": 0, "stale": 0, "missing": True}
     document = json.loads(review_map_path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("schema_version") != REVIEW_SCHEMA_VERSION:
+        raise ValueError(f"Invalid Workbench review map schema: {review_map_path}")
     datasets = document.get("datasets") if isinstance(document, dict) else None
     if not isinstance(datasets, dict):
         raise ValueError(f"Invalid Workbench review map: {review_map_path}")
@@ -237,7 +244,7 @@ def refresh_review_hashes(
         samples = (datasets.get(key) or {}).get("samples")
         if not isinstance(samples, dict):
             continue
-        for path, (old_hash, new_hash) in file_hash_changes.items():
+        for path, (old_revision, new_revision) in file_revision_changes.items():
             try:
                 relative = path.relative_to(labels_root.resolve()).as_posix()
             except ValueError:
@@ -245,10 +252,14 @@ def refresh_review_hashes(
             review = samples.get(relative)
             if not isinstance(review, dict):
                 continue
-            if review.get("label_sha256") != old_hash:
+            if (
+                review.get("label_size_bytes") != old_revision[0]
+                or review.get("label_mtime_ns") != old_revision[1]
+            ):
                 stale += 1
                 continue
-            review["label_sha256"] = new_hash
+            review["label_size_bytes"] = new_revision[0]
+            review["label_mtime_ns"] = new_revision[1]
             updated += 1
     if updated and not dry_run:
         temporary = review_map_path.with_suffix(review_map_path.suffix + ".tmp")
@@ -275,7 +286,7 @@ def main() -> int:
     parser.add_argument(
         "--review-map",
         default=str(BASE_DIR / "workbench_state" / "dataset_review_status.json"),
-        help="Workbench SHA-bound review map to migrate; pass an empty value to skip.",
+        help="Workbench review map to migrate; pass an empty value to skip.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report changes without writing labels or reviews.")
     args = parser.parse_args()
@@ -284,18 +295,18 @@ def main() -> int:
         BASE_DIR / "datasets" / "1Ayoyo_consecutive" / "canonical" / "labels",
         BASE_DIR / "datasets" / "2023SouthChina1A_Final_2nd_YangYunfan_consecutive_200" / "canonical" / "labels",
     ]
-    file_hash_changes: dict[Path, tuple[str, str]] = {}
+    file_revision_changes: dict[Path, tuple[tuple[int, int], tuple[int, int]]] = {}
     result = {
         "schema_version": "pose_annotation_cleanup_v2",
         "policy": "remove all hand/pose annotations; preserve yoyo and string geometry",
         "datasets": [
-            strip_pose_fields(root, dry_run=args.dry_run, file_hash_changes=file_hash_changes)
+            strip_pose_fields(root, dry_run=args.dry_run, file_revision_changes=file_revision_changes)
             for root in roots
         ],
     }
     if args.review_map:
-        result["workbench_review_map"] = refresh_review_hashes(
-            Path(args.review_map).resolve(), roots, file_hash_changes, dry_run=args.dry_run
+        result["workbench_review_map"] = refresh_review_revisions(
+            Path(args.review_map).resolve(), roots, file_revision_changes, dry_run=args.dry_run
         )
     report = Path(args.report)
     if not args.dry_run:

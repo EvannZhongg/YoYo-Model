@@ -1,6 +1,6 @@
 ---
 name: rebuild-leakage-safe-dataset
-description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage while transactionally preserving workbench-edited canonical labels and SHA-bound human review mappings. Use when adding annotations to an existing train/val/test dataset, keeping existing split membership stable, protecting manual edits and verification state, optionally freezing evaluation content for metric comparability, auditing a rebuilt manifest, or creating split-lineage evidence before training.
+description: Rebuild or expand a manifest-driven machine-learning dataset without source-group or image leakage while transactionally preserving workbench-edited canonical labels and human review mappings. Use when adding annotations to an existing train/val/test dataset, keeping existing split membership stable, protecting manual edits and verification state, optionally freezing evaluation content for metric comparability, auditing a rebuilt manifest, or creating split-lineage evidence before training.
 ---
 
 # Rebuild Leakage-Safe Dataset
@@ -29,12 +29,12 @@ Use `protected-run` for every active dataset that exposes editable
 `canonical/labels` or has a human review map. Never use plain `run` for that
 dataset. The protected action:
 
-- validates every existing review SHA before changing the dataset;
+- validates every existing review's label size and modification time before changing the dataset;
 - atomically moves the complete active dataset to a unique backup;
 - requires `{protected_canonical}` in the builder command so manual labels are
   included as a source;
 - normalizes canonical labels to the current task contract and rejects any other existing canonical JSON change except `dataset_management`;
-- rebinds review entries by image SHA to the rebuilt label paths and hashes;
+- rebinds review entries by image SHA to rebuilt label paths and file revisions;
 - restores the original dataset automatically if build or validation fails.
 
 Keep the dataset backup and review-map snapshot after success. Do not delete a

@@ -88,14 +88,15 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         review_map.write_text(
             json.dumps(
                 {
-                    "schema_version": "review-test",
+                    "schema_version": "yoyo_dataset_review_v3",
                     "datasets": {
                         "dataset": {
                             "samples": {
                                 "label-1.json": {
                                     "confirmed": True,
                                     "reviewer": "human",
-                                    "label_sha256": sha256_file(labels / "label-1.json"),
+                                    "label_size_bytes": (labels / "label-1.json").stat().st_size,
+                                    "label_mtime_ns": (labels / "label-1.json").stat().st_mtime_ns,
                                 }
                             }
                         }
@@ -287,7 +288,8 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertNotIn("hands_2d", rebuilt)
         rebound = json.loads(review_map.read_text(encoding="utf-8"))
         review = rebound["datasets"]["dataset"]["samples"]["label-1.json"]
-        self.assertEqual(review["label_sha256"], sha256_file(edited_label))
+        self.assertEqual(review["label_size_bytes"], edited_label.stat().st_size)
+        self.assertEqual(review["label_mtime_ns"], edited_label.stat().st_mtime_ns)
         self.assertEqual(review["reviewer"], "human")
         saved_report = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(saved_report["review_entry_count_rebound"], 1)

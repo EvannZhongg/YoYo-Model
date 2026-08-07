@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -12,12 +11,13 @@ from pathlib import Path
 from typing import Any
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
+SELECTION_SCHEMA_VERSION = "reviewed_annotation_selection_v2"
+
+
+def file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -50,9 +50,16 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
     review_document = read_json(review_map_path)
     manifest = read_json(manifest_path)
     selection = read_json(selection_path)
+    if review_document.get("schema_version") != REVIEW_SCHEMA_VERSION:
+        raise ValueError(f"unsupported review map schema: {review_document.get('schema_version')!r}")
+    if selection.get("schema_version") != SELECTION_SCHEMA_VERSION:
+        raise ValueError(f"unsupported selection report schema: {selection.get('schema_version')!r}")
     selected = selection.get("selected")
     if not isinstance(selected, list) or not selected:
         raise ValueError("selection report has no selected records")
+    source_dataset_key = str(selection.get("source_dataset_key") or "")
+    if not source_dataset_key:
+        raise ValueError("selection report has no source_dataset_key")
 
     records_by_hash: dict[str, dict[str, Any]] = {}
     for record in manifest.get("records") or []:
@@ -84,10 +91,13 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
         if image_hash is None:
             raise ValueError(f"existing review entry has no rebuilt manifest record: {key}")
         label_path = Path(str(records_by_hash[image_hash]["canonical_label"]))
-        if sha256_file(label_path) != str(review.get("label_sha256") or "").lower():
+        label_size_bytes, label_mtime_ns = file_revision(label_path)
+        if (
+            review.get("label_size_bytes") != label_size_bytes
+            or review.get("label_mtime_ns") != label_mtime_ns
+        ):
             raise ValueError(f"existing review entry is stale: {key}")
 
-    selection_sha = sha256_file(selection_path)
     imported: list[dict[str, Any]] = []
     seen_hashes: set[str] = set()
     for item in selected:
@@ -104,19 +114,22 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"selected review would overwrite an existing review entry: {key}")
         annotation = read_json(label_path)
         review_import = annotation.get("workbench_review_import")
-        source_label_sha = str(item.get("source_label_sha256") or "").lower()
-        if not isinstance(review_import, dict) or str(review_import.get("source_label_sha256") or "").lower() != source_label_sha:
+        source_sample_key = str(item.get("source_sample_key") or "")
+        if (
+            not isinstance(review_import, dict)
+            or str(review_import.get("source_dataset") or "") != source_dataset_key
+            or str(review_import.get("source_sample_key") or "") != source_sample_key
+        ):
             raise ValueError(f"selected provenance mismatch in rebuilt label: {key}")
-        target_label_sha = sha256_file(label_path)
+        label_size_bytes, label_mtime_ns = file_revision(label_path)
         samples[key] = {
             "confirmed": True,
             "confirmed_at_utc": str(item.get("confirmed_at_utc") or ""),
             "reviewer": str(item.get("reviewer") or "workbench-reviewer"),
-            "label_sha256": target_label_sha,
-            "source_dataset": str(selection.get("source_dataset") or ""),
-            "source_sample_key": str(item.get("source_sample_key") or ""),
-            "source_label_sha256": source_label_sha,
-            "selection_report_sha256": selection_sha,
+            "label_size_bytes": label_size_bytes,
+            "label_mtime_ns": label_mtime_ns,
+            "source_dataset": source_dataset_key,
+            "source_sample_key": source_sample_key,
         }
         imported.append(
             {
@@ -124,9 +137,7 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
                 "split": str(record.get("split") or ""),
                 "source_group": str(record.get("source_group") or ""),
                 "target_key": key,
-                "target_label_sha256": target_label_sha,
-                "source_sample_key": str(item.get("source_sample_key") or ""),
-                "source_label_sha256": source_label_sha,
+                "source_sample_key": source_sample_key,
                 "reviewer": str(item.get("reviewer") or "workbench-reviewer"),
                 "confirmed_at_utc": str(item.get("confirmed_at_utc") or ""),
             }
@@ -135,19 +146,14 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
     review_document["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(review_map_path, snapshot_path)
-    before_sha = sha256_file(review_map_path)
     write_json_atomic(review_map_path, review_document)
     result = {
-        "schema_version": "yoyo_review_import_v1",
+        "schema_version": "yoyo_review_import_v2",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "review_map": str(review_map_path),
         "review_snapshot": str(snapshot_path),
-        "review_map_before_sha256": before_sha,
-        "review_map_after_sha256": sha256_file(review_map_path),
         "selection_report": str(selection_path),
-        "selection_report_sha256": selection_sha,
         "rebuilt_manifest": str(manifest_path),
-        "rebuilt_manifest_sha256": sha256_file(manifest_path),
         "review_count_before": review_count_before,
         "imported_review_count": len(imported),
         "review_count_after": len(samples),

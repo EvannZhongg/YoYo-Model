@@ -31,7 +31,7 @@ SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 DATASET_SCHEMA_VERSION = "yoyo_blank_annotation_dataset_v1"
 HASH_CACHE_SCHEMA_VERSION = "agent_video_sha256_cache_v1"
 FRAME_CACHE_SCHEMA_VERSION = "agent_video_frame_jpeg_cache_v1"
-REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 
 
 def utc_now() -> str:
@@ -48,6 +48,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def quick_file_fingerprint(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -234,8 +239,8 @@ class ProtectedDataset:
     root: Path
     manifest: dict[str, Any]
     manifest_bytes: bytes
-    label_hashes: dict[str, str]
-    image_hashes: dict[str, str]
+    label_revisions: dict[str, tuple[int, int]]
+    image_revisions: dict[str, tuple[int, int]]
     review_map_path: Path
     review_map_bytes: bytes | None
     review_entry_count: int
@@ -280,8 +285,8 @@ def load_protected_dataset(output: Path, review_map_path: Path, dataset_key: str
     records = manifest.get("records")
     if not isinstance(records, list) or len(records) != len(labels) or len(images) != len(labels):
         raise ValueError(f"existing manifest/image/label counts disagree: {output}")
-    label_hashes: dict[str, str] = {}
-    image_hashes: dict[str, str] = {}
+    label_revisions: dict[str, tuple[int, int]] = {}
+    image_revisions: dict[str, tuple[int, int]] = {}
     record_labels: set[str] = set()
     record_images: set[str] = set()
     for index, record in enumerate(records):
@@ -303,8 +308,8 @@ def load_protected_dataset(output: Path, review_map_path: Path, dataset_key: str
             raise ValueError(f"existing image hash differs from its label: {image_path}")
         if actual_image_hash != str(record.get("image_sha256") or "").lower():
             raise ValueError(f"existing image hash differs from manifest: {image_path}")
-        label_hashes[label_relative] = sha256_file(label_path)
-        image_hashes[image_relative] = actual_image_hash
+        label_revisions[label_relative] = file_revision(label_path)
+        image_revisions[image_relative] = file_revision(image_path)
         record_labels.add(label_relative)
         record_images.add(image_relative)
     actual_labels = {path.relative_to(labels_root).as_posix() for path in labels}
@@ -331,16 +336,19 @@ def load_protected_dataset(output: Path, review_map_path: Path, dataset_key: str
                 label_path = (labels_root / Path(str(key))).resolve()
                 if not label_path.is_relative_to(labels_root.resolve()) or not label_path.is_file():
                     raise ValueError(f"Workbench review points to a missing label: {key}")
-                expected = str(review.get("label_sha256") or "").lower()
-                if expected != sha256_file(label_path):
+                label_size_bytes, label_mtime_ns = file_revision(label_path)
+                if (
+                    review.get("label_size_bytes") != label_size_bytes
+                    or review.get("label_mtime_ns") != label_mtime_ns
+                ):
                     raise ValueError(f"Workbench review is stale before append: {key}")
                 review_count += 1
     return ProtectedDataset(
         root=output,
         manifest=manifest,
         manifest_bytes=manifest_bytes,
-        label_hashes=label_hashes,
-        image_hashes=image_hashes,
+        label_revisions=label_revisions,
+        image_revisions=image_revisions,
         review_map_path=review_map_path,
         review_map_bytes=review_bytes,
         review_entry_count=review_count,
@@ -352,13 +360,13 @@ def assert_protected_unchanged(state: ProtectedDataset, check_manifest: bool = T
     if check_manifest and manifest_path.read_bytes() != state.manifest_bytes:
         raise ValueError("existing manifest changed during incremental generation")
     labels_root, images_root = annotation_roots(state.root)
-    for relative, expected in state.label_hashes.items():
+    for relative, expected in state.label_revisions.items():
         path = labels_root / Path(relative)
-        if not path.is_file() or sha256_file(path) != expected:
+        if not path.is_file() or file_revision(path) != expected:
             raise ValueError(f"protected Workbench label changed during append: {relative}")
-    for relative, expected in state.image_hashes.items():
+    for relative, expected in state.image_revisions.items():
         path = images_root / Path(relative)
-        if not path.is_file() or sha256_file(path) != expected:
+        if not path.is_file() or file_revision(path) != expected:
             raise ValueError(f"protected Workbench image changed during append: {relative}")
     current_review_bytes = state.review_map_path.read_bytes() if state.review_map_path.is_file() else None
     if current_review_bytes != state.review_map_bytes:
@@ -1024,8 +1032,8 @@ def publish_incremental(
             protected.review_map_path,
             output.relative_to(output.parent).as_posix(),
         )
-        for relative, expected in protected.label_hashes.items():
-            if postflight.label_hashes.get(relative) != expected:
+        for relative, expected in protected.label_revisions.items():
+            if postflight.label_revisions.get(relative) != expected:
                 raise ValueError(f"protected Workbench label changed after append: {relative}")
         assert_protected_unchanged(protected, check_manifest=False)
         return {
@@ -1034,7 +1042,7 @@ def publish_incremental(
             "operation": "append",
             "added_sample_count": int(addition_manifest["sample_count"]),
             "sample_count": int(merged["sample_count"]),
-            "protected_label_count": len(protected.label_hashes),
+            "protected_label_count": len(protected.label_revisions),
             "review_entry_count_preserved": protected.review_entry_count,
             "review_map_unchanged": True,
             "sampling_manifest": str(run_destination),

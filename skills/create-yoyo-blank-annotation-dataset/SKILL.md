@@ -1,6 +1,6 @@
 ---
 name: create-yoyo-blank-annotation-dataset
-description: Create or incrementally extend deduplicated blank agent_yoyo_string_annotation_v5 datasets from yoyo video frames for the Workbench data-annotation page while preserving every existing label edit and SHA-bound human verification record. Use when preparing or supplementing a manual yoyo/string annotation queue without VLM classification, agent geometry, model fine-tuning, or model-review approval.
+description: Create or incrementally extend deduplicated blank agent_yoyo_string_annotation_v5 datasets from yoyo video frames for the Workbench data-annotation page while preserving every existing label edit and human verification record. Use when preparing or supplementing a manual yoyo/string annotation queue without VLM classification, agent geometry, model fine-tuning, or model-review approval.
 ---
 
 # Create Yoyo Blank Annotation Dataset
@@ -38,7 +38,7 @@ the Workbench server stopped and pass `--append` with the same dataset name:
   --frames-per-video 12 --append
 ```
 
-Treat a missing `--append`, stale human-review SHA, missing old sample, path
+Treat a missing `--append`, stale human-review revision, missing old sample, path
 collision, or changed protected file as a hard failure. Do not bypass these
 checks and do not append directly to `datasets/1Ayoyo_dataset`.
 
@@ -97,8 +97,8 @@ debugging compatibility, deduplication, or provenance.
 ## Protect Existing Work
 
 Before an append, validate every existing image and label against the manifest,
-validate each Workbench review entry against the current label SHA-256, and
-snapshot all protected hashes in memory. Publish new image/label files with
+validate each Workbench review entry against the label size and modification
+time, and snapshot protected file revisions in memory. Publish new image/label files with
 exclusive creation and update only `manifest.json` after all new pairs exist.
 
 Never overwrite, rewrite, rename, delete, or normalize an existing image or

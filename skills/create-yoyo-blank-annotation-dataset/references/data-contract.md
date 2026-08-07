@@ -49,12 +49,12 @@ dataset.
 
 Treat every existing label as protected, whether it is blank, edited, reviewed,
 or human-verified. Before sampling, require the existing manifest, files, and
-hashes to agree. If the Workbench review map contains the target dataset, require
-every review key to resolve to an existing label and every `label_sha256` to
-match the current bytes.
+image identities to agree. If the Workbench review map contains the target dataset,
+require every review key to resolve to an existing label and its
+`label_size_bytes` and `label_mtime_ns` to match the current file revision.
 
 During publication, create only paths that do not exist. Never open an existing
-image or label for writing. Verify protected hashes and the complete review-map
+image or label for writing. Verify protected file revisions and the complete review-map
 bytes immediately before and after publication. On failure, restore the prior
 manifest and remove only the new files from that attempt. Stop the Workbench
 server during append because protection does not coordinate concurrent saves

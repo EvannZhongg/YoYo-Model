@@ -28,7 +28,7 @@ SUPPORTED_ANNOTATION_SCHEMA_VERSIONS = {
     "agent_yoyo_string_annotation_v4",
     ANNOTATION_SCHEMA_VERSION,
 }
-REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v2"
+REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 REVIEW_MAP_FILENAME = "dataset_review_status.json"
 REVIEW_MAP_PATH = BASE_DIR / "workbench_state" / REVIEW_MAP_FILENAME
 _STORAGE_LOCK = threading.Lock()
@@ -137,8 +137,13 @@ def _file_revision(path: Path) -> tuple[int, int]:
 
 
 def _review_summary(label_path: Path, review: object) -> dict[str, Any]:
-    valid = isinstance(review, dict) and bool(review.get("confirmed"))
-    if valid and "label_size_bytes" in review and "label_mtime_ns" in review:
+    valid = (
+        isinstance(review, dict)
+        and bool(review.get("confirmed"))
+        and "label_size_bytes" in review
+        and "label_mtime_ns" in review
+    )
+    if valid:
         try:
             size, mtime_ns = _file_revision(label_path)
             valid = (
@@ -147,9 +152,6 @@ def _review_summary(label_path: Path, review: object) -> dict[str, Any]:
             )
         except (OSError, TypeError, ValueError):
             valid = False
-    # Older maps contain only a SHA field.  Keep those confirmations readable
-    # without reintroducing a full-file hash scan; edits made through this UI
-    # always clear the review and new confirmations use the stat marker above.
     return {
         "reviewed": valid,
         "reviewed_at_utc": str(review.get("confirmed_at_utc") or "") if valid else "",
