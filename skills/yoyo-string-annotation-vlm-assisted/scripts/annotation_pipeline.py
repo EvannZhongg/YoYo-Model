@@ -1754,6 +1754,109 @@ def command_audit(args: argparse.Namespace) -> int:
     return 1 if args.strict and not report["ok"] else 0
 
 
+def command_upgrade_v5(args: argparse.Namespace) -> int:
+    label_path = Path(args.label).resolve()
+    source_image = Path(args.source_image).resolve()
+    before = read_json(label_path)
+    if before.get("schema_version") == SCHEMA_VERSION:
+        quality = before.setdefault("quality", {})
+        previous_required = int(quality.get("min_model_approvals", 2))
+        quality["min_model_approvals"] = max(2, previous_required)
+        gate = validate_label(before, check_image=True, check_reviews=False, label_path=label_path)
+        if gate["errors"]:
+            raise ValueError(f"existing v5 label is invalid: {gate['errors']}")
+        policy_updated = quality["min_model_approvals"] != previous_required
+        if policy_updated:
+            write_json(label_path, before)
+        print(
+            json.dumps(
+                {
+                    "label": str(label_path),
+                    "migrated": False,
+                    "schema_version": SCHEMA_VERSION,
+                    "approval_policy_updated": policy_updated,
+                    "min_model_approvals": quality["min_model_approvals"],
+                },
+                indent=2,
+            )
+        )
+        return 0
+    if before.get("schema_version") != "agent_yoyo_string_annotation_v4":
+        raise ValueError(f"unsupported source schema_version={before.get('schema_version')}")
+    if not source_image.is_file():
+        raise ValueError(f"source image does not exist: {source_image}")
+    expected_hash = str(before.get("image_sha256", "")).lower()
+    if not expected_hash or sha256_file(source_image) != expected_hash:
+        raise ValueError(f"source image hash mismatch: {source_image}")
+    expected_size = tuple(int(item) for item in before.get("image_size", []))
+    if image_info(source_image) != expected_size:
+        raise ValueError(f"source image size mismatch: {source_image}")
+
+    candidate = copy.deepcopy(before)
+    for path in (candidate.get("string_path") or {}).get("paths") or []:
+        for edge in path.get("edges") or []:
+            evidence = str(edge.get("evidence", "")).lower()
+            if evidence in {"propagated", "reviewed"}:
+                edge["evidence"] = "observed" if args.confirm_current_frame else "temporal"
+
+    after = copy.deepcopy(before)
+    after["schema_version"] = SCHEMA_VERSION
+    after["source_image"] = str(source_image)
+    after["video_id"] = str(after.get("source_group") or "")
+    for field in LEGACY_NON_TASK_FIELDS:
+        after.pop(field, None)
+    after = normalize_candidate(after, candidate)
+    before_digest = content_digest(before)
+    after_digest = content_digest(after)
+    quality = copy.deepcopy(before.get("quality") or {})
+    quality["min_model_approvals"] = max(2, int(quality.get("min_model_approvals", 2)))
+    quality.setdefault("history", [])
+    quality.setdefault("reviews", [])
+    quality["revision"] = int(quality.get("revision", 0)) + 1
+    quality["history"].append(
+        {
+            "revision": quality["revision"],
+            "created_at_utc": utc_now(),
+            "actor": args.actor,
+            "role": "schema-migrator",
+            "model": None,
+            "message": args.message,
+            "before_sha256": before_digest,
+            "after_sha256": after_digest,
+            "candidate_coordinate_frame": "original_pixel",
+            "previous_content": {key: before.get(key) for key in CORE_FIELDS},
+        }
+    )
+    after["quality"] = quality
+    after["updated_at_utc"] = utc_now()
+    after["string_review_status"] = "auto_labeled_needs_review"
+    after["review_status"] = (
+        "partially_reviewed"
+        if str(after.get("bbox_review_status", "")).lower() in ACCEPTED_REVIEW
+        else "auto_labeled_needs_review"
+    )
+    after["reviewed_at_utc"] = None
+    after["reviewer"] = None
+    gate = validate_label(after, check_image=True, check_reviews=False, label_path=label_path)
+    if gate["errors"]:
+        raise ValueError(f"migrated v5 label is invalid: {gate['errors']}")
+    write_json(label_path, after)
+    print(
+        json.dumps(
+            {
+                "label": str(label_path),
+                "migrated": True,
+                "schema_version": SCHEMA_VERSION,
+                "revision": quality["revision"],
+                "content_sha256": after_digest,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def command_rebase_sources(args: argparse.Namespace) -> int:
     labels_root = Path(args.labels).resolve()
     images_root = Path(args.images).resolve()
@@ -2157,6 +2260,21 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--require-approved", action="store_true", help="Treat every pending/rejected label as a final-gate error.")
     audit.add_argument("--strict", action="store_true")
     audit.set_defaults(func=command_audit)
+
+    upgrade_v5 = subparsers.add_parser(
+        "upgrade-v5",
+        help="Migrate one reviewed v4 label to v5 without changing its pixel geometry.",
+    )
+    upgrade_v5.add_argument("--label", required=True)
+    upgrade_v5.add_argument("--source-image", required=True)
+    upgrade_v5.add_argument("--actor", required=True)
+    upgrade_v5.add_argument("--message", default="migrate reviewed v4 annotation to v5")
+    upgrade_v5.add_argument(
+        "--confirm-current-frame",
+        action="store_true",
+        help="Treat legacy propagated edges as current-frame observed after human verification.",
+    )
+    upgrade_v5.set_defaults(func=command_upgrade_v5)
 
     rebase = subparsers.add_parser(
         "rebase-sources",
