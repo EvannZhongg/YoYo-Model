@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tempfile
+import secrets
 from collections.abc import Collection
 from pathlib import Path
 
@@ -36,20 +36,27 @@ def atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> N
     """Write text through a same-directory temporary file and atomic replace."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
+    descriptor: int | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding=encoding,
-            dir=path.parent,
-            prefix=f".{path.stem}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
+        mode = 0o666 if os.name == "nt" else 0o600
+        for _ in range(128):
+            candidate = path.parent / f".{path.stem}.{secrets.token_hex(8)}.tmp"
+            try:
+                descriptor = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+                temporary_path = candidate
+                break
+            except FileExistsError:
+                continue
+        if descriptor is None or temporary_path is None:
+            raise FileExistsError(f"could not allocate a temporary file beside {path}")
+        with os.fdopen(descriptor, mode="w", encoding=encoding) as handle:
+            descriptor = None
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-            temporary_path = Path(handle.name)
         os.replace(temporary_path, path)
     finally:
+        if descriptor is not None:
+            os.close(descriptor)
         if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()

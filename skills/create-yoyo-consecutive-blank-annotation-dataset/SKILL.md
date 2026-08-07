@@ -48,6 +48,11 @@ Require every command to finish with `"ok": true`. Confirm each source's
 `consecutive_groups.json` contains the same uninterrupted frames and Workbench
 sample keys.
 
+On Windows, require the published dataset to inherit the `datasets` directory
+ACL so the desktop user can open it without an elevation or "Continue to get
+access" prompt. Treat such a prompt as a generator defect, not a manual setup
+step. The bundled self-test checks this inheritance.
+
 The generator searches from the temporal middle outward. It preserves the root
 `datasets/1Ayoyo_dataset` exclusion baseline and all earlier compatible blank
 datasets. Provenance and exact image hashes remain unique within a run.

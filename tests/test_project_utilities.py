@@ -1,4 +1,6 @@
 import hashlib
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -45,6 +47,16 @@ class CommonFileTests(unittest.TestCase):
             atomic_write_text(path, "second\n")
 
             self.assertEqual(path.read_text(encoding="utf-8"), "second\n")
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    ["icacls", str(path)],
+                    capture_output=True,
+                    text=True,
+                    errors="replace",
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+                self.assertIn("(I)", result.stdout, f"atomic replacement lost inherited ACL:\n{result.stdout}")
 
 
 class ModelRegistryMetricTests(unittest.TestCase):

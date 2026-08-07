@@ -85,6 +85,11 @@ datasets/<dataset-name>/
 Open the Workbench data-annotation page and select the new dataset. It is
 discoverable without a separate import or copy step.
 
+On Windows, require the published dataset to inherit the `datasets` directory
+ACL so the desktop user can open it without an elevation or "Continue to get
+access" prompt. Treat such a prompt as a generator defect, not a manual setup
+step. The bundled self-test checks this inheritance.
+
 Do not hand-edit generated provenance, hashes, paths, or the manifest. Regenerate
 a failed batch under a new dataset name. Read `references/data-contract.md` when
 debugging compatibility, deduplication, or provenance.

@@ -11,6 +11,7 @@ import io
 import json
 import math
 import os
+import secrets
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -113,6 +114,26 @@ def validate_dataset_name(value: str) -> str:
     ):
         raise ValueError("dataset-name must start with a letter or digit and use only letters, digits, dots, underscores, or hyphens")
     return value
+
+
+def create_staging_directory(datasets_root: Path, dataset_name: str) -> Path:
+    """Create a private staging directory without breaking Windows ACL inheritance.
+
+    Python applies a restrictive owner-only DACL for ``0o700`` directories on
+    Windows. ``tempfile.mkdtemp`` uses that mode, and an atomic directory
+    rename would carry the restrictive DACL into the published dataset. Use
+    the normal inherited mode on Windows; keep staging private under POSIX
+    where the mode has the expected meaning.
+    """
+    mode = 0o777 if os.name == "nt" else 0o700
+    for _ in range(128):
+        candidate = datasets_root / f".{dataset_name}.building-{secrets.token_hex(8)}"
+        try:
+            candidate.mkdir(mode=mode)
+            return candidate
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"could not allocate a unique staging directory for {dataset_name}")
 
 
 def parse_time_seconds(value: str) -> float:
@@ -1152,7 +1173,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("frame cache must be outside the annotation dataset")
     args.frame_cache_root = frame_cache_root
     video_hashes, cache_stats = resolve_video_hashes(videos, cache_path, args.hash_workers)
-    staging = Path(tempfile.mkdtemp(prefix=f".{dataset_name}.building-", dir=datasets_root))
+    staging = create_staging_directory(datasets_root, dataset_name)
     try:
         records: list[dict[str, Any]] = []
         sources: list[dict[str, Any]] = []

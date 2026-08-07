@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 import sys
@@ -17,6 +18,20 @@ import create_blank_dataset as generator
 REPOSITORY = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPOSITORY))
 from workbench import dataset_annotation as workbench_annotation
+
+
+def assert_parent_permissions_inherited(path: Path) -> None:
+    if sys.platform != "win32":
+        return
+    result = subprocess.run(
+        ["icacls", str(path)],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "(I)" in result.stdout, f"published dataset did not inherit its parent ACL:\n{result.stdout}"
 
 
 def write_video(path: Path, frame_count: int = 40) -> None:
@@ -97,6 +112,7 @@ def run() -> None:
         ]
         assert generator.main([*common, "--dataset-name", "batch-one"]) == 0
         first = datasets / "batch-one"
+        assert_parent_permissions_inherited(first)
         create_manifest = json.loads((first / "manifest.json").read_text(encoding="utf-8"))
         create_sampling = json.loads((first / "sampling_manifest.json").read_text(encoding="utf-8"))
         source_metadata = create_sampling["sources"][0]
