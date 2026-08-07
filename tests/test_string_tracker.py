@@ -194,6 +194,29 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 cv2.bitwise_and(full, support),
             )
 
+    def test_bright_mask_cache_matches_independent_two_pass_processing(self):
+        rng = np.random.default_rng(7)
+        roi = rng.integers(0, 256, size=(112, 144, 3), dtype=np.uint8)
+        support = np.zeros(roi.shape[:2], dtype=np.uint8)
+        support[17:96, 23:131] = 1
+
+        cache = {}
+        cached_saturated = _saturated_line_mask(
+            roi, support, include_bright_lines=False, cache=cache,
+        )
+        cached_bright = _saturated_line_mask(
+            roi, support, include_bright_lines=True, cache=cache,
+        )
+
+        np.testing.assert_array_equal(
+            cached_saturated,
+            _saturated_line_mask(roi, support, include_bright_lines=False),
+        )
+        np.testing.assert_array_equal(
+            cached_bright,
+            _saturated_line_mask(roi, support, include_bright_lines=True),
+        )
+
     def test_estimate_string_reuses_precomputed_current_gray(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
         current_gray = np.zeros((80, 120), dtype=np.uint8)

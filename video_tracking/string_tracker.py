@@ -101,53 +101,75 @@ def _saturated_line_mask(
     roi: np.ndarray,
     semantic_support: np.ndarray | None = None,
     include_bright_lines: bool = False,
+    cache: dict[str, Any] | None = None,
 ) -> np.ndarray:
     """Build saturated-color and bright-ridge masks inside semantic support."""
-    crop_x1 = crop_y1 = 0
-    crop_x2, crop_y2 = roi.shape[1], roi.shape[0]
-    if semantic_support is not None:
-        if semantic_support.shape != roi.shape[:2]:
-            raise ValueError("semantic support must match the color ROI")
-        support_x, support_y, support_width, support_height = cv2.boundingRect(
-            semantic_support,
-        )
-        if support_width <= 0 or support_height <= 0:
-            return np.zeros(roi.shape[:2], dtype=np.uint8)
-        radius = _COLOR_MASK_DEPENDENCY_RADIUS
-        crop_x1 = max(0, support_x - radius)
-        crop_y1 = max(0, support_y - radius)
-        crop_x2 = min(roi.shape[1], support_x + support_width + radius)
-        crop_y2 = min(roi.shape[0], support_y + support_height + radius)
+    cached = cache if cache is not None else {}
+    if "saturated_mask" not in cached:
+        crop_x1 = crop_y1 = 0
+        crop_x2, crop_y2 = roi.shape[1], roi.shape[0]
+        if semantic_support is not None:
+            if semantic_support.shape != roi.shape[:2]:
+                raise ValueError("semantic support must match the color ROI")
+            support_x, support_y, support_width, support_height = cv2.boundingRect(
+                semantic_support,
+            )
+            if support_width <= 0 or support_height <= 0:
+                return np.zeros(roi.shape[:2], dtype=np.uint8)
+            radius = _COLOR_MASK_DEPENDENCY_RADIUS
+            crop_x1 = max(0, support_x - radius)
+            crop_y1 = max(0, support_y - radius)
+            crop_x2 = min(roi.shape[1], support_x + support_width + radius)
+            crop_y2 = min(roi.shape[0], support_y + support_height + radius)
 
-    color_roi = roi[crop_y1:crop_y2, crop_x1:crop_x2]
-    hsv = cv2.cvtColor(color_roi, cv2.COLOR_BGR2HSV)
-    color_mask = cv2.inRange(hsv, _COLOR_HSV_LOWER, _COLOR_HSV_UPPER)
-    color_mask = cv2.morphologyEx(
-        color_mask, cv2.MORPH_OPEN, _COLOR_MASK_KERNEL, iterations=1,
-    )
-    color_mask = cv2.morphologyEx(
-        color_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
-    )
-    if include_bright_lines:
-        gray = cv2.cvtColor(color_roi, cv2.COLOR_BGR2GRAY)
-        bright_ridge = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, _BRIGHT_STRING_TOPHAT_KERNEL)
-        bright_mask = cv2.bitwise_and(
-            cv2.inRange(hsv, _BRIGHT_STRING_HSV_LOWER, _BRIGHT_STRING_HSV_UPPER),
-            cv2.inRange(bright_ridge, _BRIGHT_STRING_TOPHAT_MIN, 255),
+        color_roi = roi[crop_y1:crop_y2, crop_x1:crop_x2]
+        hsv = cv2.cvtColor(color_roi, cv2.COLOR_BGR2HSV)
+        color_mask = cv2.inRange(hsv, _COLOR_HSV_LOWER, _COLOR_HSV_UPPER)
+        color_mask = cv2.morphologyEx(
+            color_mask, cv2.MORPH_OPEN, _COLOR_MASK_KERNEL, iterations=1,
         )
-        bright_mask = cv2.morphologyEx(
-            bright_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
+        color_mask = cv2.morphologyEx(
+            color_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
         )
-        color_mask = cv2.bitwise_or(color_mask, bright_mask)
-    if semantic_support is None:
-        return color_mask
+        support_crop = (
+            semantic_support[crop_y1:crop_y2, crop_x1:crop_x2]
+            if semantic_support is not None
+            else None
+        )
+        if support_crop is not None:
+            color_mask = cv2.bitwise_and(color_mask, support_crop)
+        saturated_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
+        saturated_mask[crop_y1:crop_y2, crop_x1:crop_x2] = color_mask
+        cached.update({
+            "saturated_mask": saturated_mask,
+            "color_roi": color_roi,
+            "hsv": hsv,
+            "support_crop": support_crop,
+            "crop": (crop_x1, crop_y1, crop_x2, crop_y2),
+        })
 
-    color_mask = cv2.bitwise_and(
-        color_mask,
-        semantic_support[crop_y1:crop_y2, crop_x1:crop_x2],
+    result = cached["saturated_mask"].copy()
+    if not include_bright_lines:
+        return result
+    color_roi = cached["color_roi"]
+    hsv = cached["hsv"]
+    gray = cv2.cvtColor(color_roi, cv2.COLOR_BGR2GRAY)
+    bright_ridge = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, _BRIGHT_STRING_TOPHAT_KERNEL)
+    bright_mask = cv2.bitwise_and(
+        cv2.inRange(hsv, _BRIGHT_STRING_HSV_LOWER, _BRIGHT_STRING_HSV_UPPER),
+        cv2.inRange(bright_ridge, _BRIGHT_STRING_TOPHAT_MIN, 255),
     )
-    result = np.zeros(roi.shape[:2], dtype=np.uint8)
-    result[crop_y1:crop_y2, crop_x1:crop_x2] = color_mask
+    bright_mask = cv2.morphologyEx(
+        bright_mask, cv2.MORPH_CLOSE, _COLOR_MASK_KERNEL, iterations=1,
+    )
+    support_crop = cached["support_crop"]
+    if support_crop is not None:
+        bright_mask = cv2.bitwise_and(bright_mask, support_crop)
+    crop_x1, crop_y1, crop_x2, crop_y2 = cached["crop"]
+    result[crop_y1:crop_y2, crop_x1:crop_x2] = cv2.bitwise_or(
+        result[crop_y1:crop_y2, crop_x1:crop_x2],
+        bright_mask,
+    )
     return result
 
 
@@ -161,6 +183,7 @@ def _color_line_observation(
     semantic_meta: Any | None = None,
     semantic_min_probability: float = 0.10,
     include_bright_lines: bool = False,
+    search_cache: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Find a saturated line segment in the yoyo-centered search region."""
     height, width = frame.shape[:2]
@@ -172,36 +195,43 @@ def _color_line_observation(
     ry1 = max(0, int(y1 - margin))
     rx2 = min(width, int(x2 + margin))
     ry2 = min(height, int(y2 + margin))
-    roi = frame[ry1:ry2, rx1:rx2]
-    if roi.size == 0:
-        return None
-    support = None
-    if semantic_probability is not None and semantic_meta is not None:
-        probability = np.asarray(semantic_probability, dtype=np.float32)
-        px1 = max(0, int(math.floor(rx1 * semantic_meta.scale + semantic_meta.pad_x)))
-        py1 = max(0, int(math.floor(ry1 * semantic_meta.scale + semantic_meta.pad_y)))
-        px2 = min(
-            probability.shape[1],
-            int(math.ceil(rx2 * semantic_meta.scale + semantic_meta.pad_x)),
-        )
-        py2 = min(
-            probability.shape[0],
-            int(math.ceil(ry2 * semantic_meta.scale + semantic_meta.pad_y)),
-        )
-        if px2 <= px1 or py2 <= py1:
+    cached = search_cache if search_cache is not None else {}
+    if "roi" not in cached:
+        roi = frame[ry1:ry2, rx1:rx2]
+        if roi.size == 0:
             return None
-        support = (probability[py1:py2, px1:px2] >= float(semantic_min_probability)).astype(
-            np.uint8
-        )
-        support = cv2.resize(
-            support, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_NEAREST,
-        )
-        # A 15 px source-space radius retains weak string edges while removing
-        # unrelated saturated stage lines before the expensive Hough search.
-        support = cv2.dilate(support, _COLOR_SEMANTIC_SUPPORT_KERNEL, iterations=1)
+        support = None
+        if semantic_probability is not None and semantic_meta is not None:
+            probability = np.asarray(semantic_probability, dtype=np.float32)
+            px1 = max(0, int(math.floor(rx1 * semantic_meta.scale + semantic_meta.pad_x)))
+            py1 = max(0, int(math.floor(ry1 * semantic_meta.scale + semantic_meta.pad_y)))
+            px2 = min(
+                probability.shape[1],
+                int(math.ceil(rx2 * semantic_meta.scale + semantic_meta.pad_x)),
+            )
+            py2 = min(
+                probability.shape[0],
+                int(math.ceil(ry2 * semantic_meta.scale + semantic_meta.pad_y)),
+            )
+            if px2 <= px1 or py2 <= py1:
+                return None
+            support = (probability[py1:py2, px1:px2] >= float(semantic_min_probability)).astype(
+                np.uint8
+            )
+            support = cv2.resize(
+                support, (roi.shape[1], roi.shape[0]), interpolation=cv2.INTER_NEAREST,
+            )
+            # A 15 px source-space radius retains weak string edges while removing
+            # unrelated saturated stage lines before the expensive Hough search.
+            support = cv2.dilate(support, _COLOR_SEMANTIC_SUPPORT_KERNEL, iterations=1)
+        cached.update({"roi": roi, "support": support, "mask": {}})
+    roi = cached["roi"]
+    support = cached["support"]
     # Strings are commonly saturated and brighter than the black stage. This
     # intentionally errs on the side of missing a line rather than inventing it.
-    mask = _saturated_line_mask(roi, support, include_bright_lines)
+    mask = _saturated_line_mask(
+        roi, support, include_bright_lines, cache=cached["mask"],
+    )
     diag = math.hypot(roi.shape[1], roi.shape[0])
     lines = cv2.HoughLinesP(
         mask,

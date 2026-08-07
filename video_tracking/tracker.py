@@ -373,6 +373,7 @@ def _augment_semantic_color_observation(
     color = None
     support: dict[str, float] = {}
     tried_points: set[tuple[tuple[float, float], ...]] = set()
+    color_search_cache: dict[str, Any] = {}
     for use_bright_lines in ([False, True] if include_bright_lines else [False]):
         candidate = _color_line_observation(
             frame,
@@ -383,6 +384,7 @@ def _augment_semantic_color_observation(
             semantic_probability=probability if semantic_prefilter else None,
             semantic_meta=meta if semantic_prefilter else None,
             include_bright_lines=use_bright_lines,
+            search_cache=color_search_cache,
         )
         if candidate is None:
             continue

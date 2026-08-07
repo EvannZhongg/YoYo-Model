@@ -262,6 +262,7 @@ def evaluate_consecutive_checkpoint(
                 color_support: dict[str, float] = {}
                 tried_points: set[tuple[tuple[float, float], ...]] = set()
                 had_color_candidate = False
+                color_search_cache: dict[str, Any] = {}
                 for use_bright_lines in ((False, True) if bright_line_augment else (False,)):
                     candidate = _color_line_observation(
                         image, yoyo, require_yoyo_proximity=False,
@@ -270,6 +271,7 @@ def evaluate_consecutive_checkpoint(
                         semantic_probability=probability if color_semantic_prefilter else None,
                         semantic_meta=meta if color_semantic_prefilter else None,
                         include_bright_lines=use_bright_lines,
+                        search_cache=color_search_cache,
                     )
                     if candidate is None:
                         continue
