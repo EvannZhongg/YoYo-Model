@@ -163,6 +163,15 @@ def run_video_tracking(
             string_adaptive_min_mean_distance_ratio=(
                 TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio
             ),
+            string_adaptive_single_max_mean_confidence=(
+                TRACKING_CONFIG.string_adaptive_single_max_mean_confidence
+            ),
+            string_adaptive_single_threshold=(
+                TRACKING_CONFIG.string_adaptive_single_threshold
+            ),
+            string_adaptive_single_max_components=(
+                TRACKING_CONFIG.string_adaptive_single_max_components
+            ),
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),

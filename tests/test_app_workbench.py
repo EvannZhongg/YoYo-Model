@@ -394,6 +394,18 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             kwargs["string_adaptive_inference_scale"],
             TRACKING_CONFIG.string_adaptive_inference_scale,
         )
+        self.assertEqual(
+            kwargs["string_adaptive_single_max_mean_confidence"],
+            TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
+        )
+        self.assertEqual(
+            kwargs["string_adaptive_single_threshold"],
+            TRACKING_CONFIG.string_adaptive_single_threshold,
+        )
+        self.assertEqual(
+            kwargs["string_adaptive_single_max_components"],
+            TRACKING_CONFIG.string_adaptive_single_max_components,
+        )
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
 
@@ -420,6 +432,18 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(
             default_kwargs["string_adaptive_inference_scale"],
             TRACKING_CONFIG.string_adaptive_inference_scale,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_single_max_mean_confidence"],
+            TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_single_threshold"],
+            TRACKING_CONFIG.string_adaptive_single_threshold,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_single_max_components"],
+            TRACKING_CONFIG.string_adaptive_single_max_components,
         )
         self.assertEqual(
             default_kwargs["string_color_semantic_prefilter"],

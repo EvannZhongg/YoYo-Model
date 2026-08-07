@@ -74,6 +74,11 @@ tracking:
   string_adaptive_max_color_accepts: 0
   string_adaptive_max_mean_confidence: 0.82
   string_adaptive_min_mean_distance_ratio: 0.018
+  # The lowest-confidence weak domain performs better and costs less with the
+  # adaptive primary alone, a stricter threshold, and a two-component cap.
+  string_adaptive_single_max_mean_confidence: 0.30
+  string_adaptive_single_threshold: 0.55
+  string_adaptive_single_max_components: 2
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20

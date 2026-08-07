@@ -1,7 +1,8 @@
 {
-  "schema_version": "yoyo_semantic_adaptive_candidate_v2",
+  "schema_version": "yoyo_semantic_adaptive_candidate_v3",
   "task": "semantic_string_segmentation_and_consecutive_tracking",
   "created_at_utc": "2026-08-07T05:50:00Z",
+  "runtime_policy_updated_at_utc": "2026-08-07T20:42:30Z",
   "candidate_id": "yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1",
   "dataset_manifest_sha256": "42086e82249dd8386f551a51eb621fd6023e82a40e4b7e1adbbc2a7ee533851a",
   "models": {
@@ -52,7 +53,17 @@
       "minimum_mean_distance_to_yoyo_over_frame_diagonal": 0.018,
       "transition": "one_way_after_joint_condition"
     },
-    "inference_models_per_frame": 2,
+    "ultraweak_single_primary": {
+      "enabled": true,
+      "maximum_triggered_gate_mean_confidence": 0.3,
+      "candidate_threshold": 0.55,
+      "maximum_semantic_components": 2,
+      "transition": "latched_with_adaptive_gate_for_the_next_frame"
+    },
+    "inference_models_per_frame": {
+      "normal_and_weak_ensemble": 2,
+      "ultraweak_single_primary": 1
+    },
     "resident_models": 3
   },
   "canonical_test": {
@@ -63,25 +74,26 @@
   },
   "consecutive_evaluation": {
     "dataset": "datasets/1Ayoyo_consecutive",
-    "frame_count": 652,
-    "baseline": {"precision_at_8px": 0.676094, "recall_at_8px": 0.382865, "f1_at_8px": 0.488881, "chamfer_mean_px": 92.1143, "hd95_mean_px": 195.2501},
-    "candidate": {"precision_at_8px": 0.697974, "recall_at_8px": 0.434477, "f1_at_8px": 0.535570, "chamfer_mean_px": 86.3637, "hd95_mean_px": 183.6507},
+    "frame_count": 757,
+    "baseline": {"precision_at_8px": 0.705401, "recall_at_8px": 0.438289, "f1_at_8px": 0.540653, "chamfer_mean_px": 99.8237, "hd95_mean_px": 196.3837},
+    "candidate": {"precision_at_8px": 0.706441, "recall_at_8px": 0.441152, "f1_at_8px": 0.543133, "chamfer_mean_px": 88.4406, "hd95_mean_px": 195.7562},
     "weak_domain_groups": [
-      {"frames": 67, "baseline_f1_at_8px": 0.260956, "candidate_f1_at_8px": 0.405558, "baseline_recall_at_8px": 0.162958, "candidate_recall_at_8px": 0.277451},
-      {"frames": 120, "baseline_f1_at_8px": 0.370708, "candidate_f1_at_8px": 0.514192, "baseline_recall_at_8px": 0.264369, "candidate_recall_at_8px": 0.405545},
-      {"frames": 100, "frame_range": "4200-4299", "baseline_f1_at_8px": 0.101836, "candidate_f1_at_8px": 0.124459, "baseline_recall_at_8px": 0.063694, "candidate_recall_at_8px": 0.077319}
+      {"frames": 67, "gate_mean_confidence": 0.663708, "single_primary": false, "baseline_f1_at_8px": 0.405558, "candidate_f1_at_8px": 0.405558},
+      {"frames": 120, "gate_mean_confidence": 0.736225, "single_primary": false, "baseline_f1_at_8px": 0.514192, "candidate_f1_at_8px": 0.514192},
+      {"frames": 100, "frame_range": "4200-4299", "gate_mean_confidence": 0.205067, "single_primary": true, "baseline_precision_at_8px": 0.318856, "candidate_precision_at_8px": 0.449351, "baseline_recall_at_8px": 0.077319, "candidate_recall_at_8px": 0.128170, "baseline_f1_at_8px": 0.124459, "candidate_f1_at_8px": 0.199450, "baseline_chamfer_mean_px": 532.2312, "candidate_chamfer_mean_px": 446.0609, "baseline_hd95_mean_px": 742.1346, "candidate_hd95_mean_px": 737.3849, "baseline_presence_f1": 0.767296, "candidate_presence_f1": 0.868571, "baseline_zero_prediction_frames": 37, "candidate_zero_prediction_frames": 21}
     ],
+    "unaffected_group_count": 7,
     "all_groups_non_regressing_precision_recall_f1_chamfer": true,
-    "baseline_evaluation": "runs/experiments/semantic_bright_ridge_ab_off_strict_652/summary.json",
-    "evaluation": "runs/experiments/semantic_bright_ridge_tiered_gate_final_652/summary.json"
+    "baseline_evaluation": "runs/experiments/semantic_current_default_bright_757/summary.json",
+    "evaluation": "runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json"
   },
   "promotion": {
     "status": "promoted",
-    "rule": "Promoted because the 652-frame evaluation improves pooled precision, recall, F1, Chamfer, and HD95; every group is non-regressing in precision, recall, F1, and Chamfer; and no additional neural forward pass is used."
+    "rule": "Promoted because the 757-frame evaluation improves pooled precision, recall, F1, Chamfer, and HD95; seven groups are exactly unchanged; every tracked metric improves in the routed ultraweak group; and that route removes one neural forward pass."
   },
   "limitations": [
-    "The adaptive and bright-ridge gates are validated on seven reviewed intervals and must be rechecked as new domains are added.",
-    "The new Chi Gaoyu 4200-4299 interval remains low recall because semantic support covers only a small fraction of the visible white string.",
+    "The adaptive and bright-ridge gates are validated on eight reviewed intervals and must be rechecked as new domains are added.",
+    "The Chi Gaoyu 4200-4299 interval remains the weakest reviewed group despite the single-primary route improving recall and reducing missing predictions.",
     "Semantic output remains review assistance and never overwrites annotation truth."
   ]
 }

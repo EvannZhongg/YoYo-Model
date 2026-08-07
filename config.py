@@ -204,6 +204,27 @@ class TrackingConfig:
             0.018,
         )
     )
+    string_adaptive_single_max_mean_confidence: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_SINGLE_MAX_MEAN_CONFIDENCE",
+            "tracking.string_adaptive_single_max_mean_confidence",
+            0.30,
+        )
+    )
+    string_adaptive_single_threshold: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_SINGLE_THRESHOLD",
+            "tracking.string_adaptive_single_threshold",
+            0.55,
+        )
+    )
+    string_adaptive_single_max_components: int = int(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_SINGLE_MAX_COMPONENTS",
+            "tracking.string_adaptive_single_max_components",
+            2,
+        )
+    )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
     string_confidence: float = float(_env_or_config("TRACKING_STRING_CONFIDENCE", "tracking.string_confidence", 0.20))
     string_inference_scale: float = float(

@@ -179,7 +179,7 @@ flowchart TD
     K --> L[tracked.mp4 / frames.jsonl / run.json]
 ```
 
-## 2026-08-07 版本6（当前默认 Pipeline）
+## 2026-08-07 版本6
 
 RTMPose-m WholeBody 保留为 Workbench 和 CLI 可选审核分支，默认关闭。当前悠悠球检测、
 绳线追踪和仅悠悠球 ROI 的方向分类均不依赖姿态输出。
@@ -223,4 +223,51 @@ flowchart TD
     P --> J
     H --> J
     J --> K[tracked.mp4 / frames.jsonl / run.json]
+```
+
+## 2026-08-08 版本7（当前默认 Pipeline）
+
+弱域门控仍在下一帧单向生效。触发窗口的平均语义 confidence 低于 `0.30` 时，
+弱域改为单主模型推理；其他弱域继续使用原双路融合。
+
+```mermaid
+flowchart TD
+    A[视频帧] --> B[YOLO11s 悠悠球检测]
+    B --> C[ByteTrack ID 跟踪]
+
+    C --> D{当前 / 最近悠悠球<br/>或已有绳线轨迹?}
+    D -->|否| E[跳过语义前向<br/>输出保持无绳线]
+    D -->|是| F{弱域已激活?}
+    F -->|否| G[常规双路 LR-ASPP<br/>960x544 / alpha 0.30]
+    F -->|是| H{触发窗口 mean conf &lt; 0.30?}
+    H -->|否| I[弱域双路 LR-ASPP<br/>1440x816 / alpha 0.50]
+    H -->|是| J[弱域单主 LR-ASPP<br/>1440x816 / threshold 0.55]
+    G --> K[校准概率与语义中心线<br/>最多 8 个组件]
+    I --> K
+    J --> L[语义中心线<br/>最多 2 个组件]
+
+    A --> M[语义邻域预筛颜色 / Hough]
+    K --> N[沿线概率门控与组件并集]
+    L --> N
+    M --> N
+    N --> O[最近 12 次语义观测]
+    O --> P{颜色通过为 0<br/>mean conf &lt; 0.82<br/>mean distance ratio &gt; 0.018?}
+    P -->|否| Q[保持当前模式]
+    P -->|是| R[记录触发与置信度分层<br/>下一帧单向锁定]
+    R -. 状态 .-> F
+
+    N --> S{当前帧有新鲜观测?}
+    S -->|是| T[直接保留当前观测]
+    S -->|否| U[Lucas-Kanade 前后向光流<br/>短时传播几何]
+
+    C --> V[仅悠悠球方形 ROI]
+    V --> W[三分类方向模型]
+    A -. 显式开启 .-> X[RTMPose-m WholeBody<br/>审核元数据]
+
+    C --> Y[逐帧结果]
+    T --> Y
+    U --> Y
+    W --> Y
+    X -.-> Y
+    Y --> Z[tracked.mp4 / frames.jsonl / run.json]
 ```

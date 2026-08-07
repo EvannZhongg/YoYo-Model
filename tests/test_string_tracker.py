@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -578,6 +578,69 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(after["semantic_probability_ensemble"]["alpha"], 0.5)
         self.assertTrue(after["semantic_probability_ensemble"]["adaptive_primary"])
 
+    def test_adaptive_single_route_skips_ensemble_and_caps_components(self):
+        meta = SimpleNamespace(
+            original_width=16, original_height=16, target_width=16, target_height=16,
+            resized_width=16, resized_height=16, pad_x=0, pad_y=0, scale=1.0,
+        )
+        adaptive = object()
+        adaptive_ensemble_predictor = Mock()
+        model = {
+            "kind": "semantic_adaptive_ensemble",
+            "model": object(),
+            "checkpoint": {
+                "threshold": 0.4,
+                "model_config": {"input_width": 16, "input_height": 16},
+            },
+            "adaptive_model": adaptive,
+            "adaptive_checkpoint": {
+                "threshold": 0.2991,
+                "model_config": {"input_width": 16, "input_height": 16},
+            },
+            "ensemble_model": object(),
+            "ensemble_alpha": 0.3,
+            "adaptive_ensemble_alpha": 0.5,
+            "ensemble_candidate_threshold": 0.5,
+            "adaptive_ensemble_predictor": adaptive_ensemble_predictor,
+            "adaptive_enabled": True,
+            "adaptive_single_enabled": True,
+            "adaptive_single_threshold": 0.55,
+            "adaptive_single_max_components": 2,
+            "device": "cpu",
+        }
+        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
+        with (
+            patch(
+                "video_tracking.tracker.prepare_letterboxed_input",
+                return_value=(object(), meta),
+            ),
+            patch(
+                "video_tracking.tracker.predict_prepared_probability",
+                return_value=np.full((16, 16), 0.5, dtype=np.float32),
+            ) as predict,
+            patch(
+                "video_tracking.tracker.predict_prepared_calibrated_ensemble"
+            ) as ensemble_fallback,
+            patch(
+                "video_tracking.tracker.semantic_mask_observation",
+                return_value=observation,
+            ) as geometry,
+        ):
+            result = _predict_string_model(
+                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
+            )
+
+        self.assertIs(predict.call_args.args[0], adaptive)
+        adaptive_ensemble_predictor.predict.assert_not_called()
+        ensemble_fallback.assert_not_called()
+        self.assertEqual(geometry.call_args.kwargs["threshold"], 0.55)
+        self.assertEqual(geometry.call_args.kwargs["max_components"], 2)
+        self.assertTrue(result["adaptive_single_primary"])
+        self.assertEqual(
+            result["semantic_probability_single"],
+            {"adaptive_primary": True, "threshold": 0.55, "max_components": 2},
+        )
+
     def test_load_string_model_builds_adaptive_ensemble(self):
         with TemporaryDirectory() as directory:
             paths = [Path(directory) / name for name in ("primary.pt", "secondary.pt", "adaptive.pt")]
@@ -597,13 +660,16 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 ]),
             ):
                 model, status = _load_string_model(
-                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5,
+                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5, 0.55, 2,
                 )
 
         self.assertEqual(model["kind"], "semantic_adaptive_ensemble")
         self.assertEqual(model["adaptive_model"], "adaptive")
         self.assertFalse(model["adaptive_enabled"])
+        self.assertFalse(model["adaptive_single_enabled"])
         self.assertEqual(model["adaptive_ensemble_alpha"], 0.5)
+        self.assertEqual(model["adaptive_single_threshold"], 0.55)
+        self.assertEqual(model["adaptive_single_max_components"], 2)
         self.assertIsInstance(
             model["ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
         )

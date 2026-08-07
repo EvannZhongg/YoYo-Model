@@ -159,6 +159,8 @@ def _load_string_model(
     ensemble_candidate_threshold: float = 0.5,
     adaptive_weights_path: str | Path | None = None,
     adaptive_ensemble_alpha: float = 0.0,
+    adaptive_single_threshold: float = 0.5,
+    adaptive_single_max_components: int = 0,
 ):
     if not enabled:
         return None, "disabled"
@@ -226,6 +228,11 @@ def _load_string_model(
                             "adaptive_path": str(adaptive_path),
                             "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
                             "adaptive_enabled": False,
+                            "adaptive_single_enabled": False,
+                            "adaptive_single_threshold": float(adaptive_single_threshold),
+                            "adaptive_single_max_components": int(
+                                adaptive_single_max_components
+                            ),
                         })
             if bundle["kind"] in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
                 bundle["ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
@@ -470,34 +477,61 @@ def _predict_string_model(
         primary_threshold = float(checkpoint.get("threshold", 0.5))
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
+        adaptive_single_metadata = None
+        max_components = 8
         if model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
-            active_alpha = float(
-                model["adaptive_ensemble_alpha"] if adaptive_enabled else model["ensemble_alpha"]
+            adaptive_single_enabled = bool(
+                adaptive_enabled and model.get("adaptive_single_enabled")
             )
-            secondary_threshold = float(model["ensemble_candidate_threshold"])
-            predictor = model.get(
-                "adaptive_ensemble_predictor" if adaptive_enabled else "ensemble_predictor"
-            )
-            probability = (
-                predictor.predict(tensor)
-                if predictor is not None
-                else predict_prepared_calibrated_ensemble(
-                    primary_model,
-                    model["ensemble_model"],
-                    tensor,
-                    active_alpha,
-                    primary_threshold,
-                    secondary_threshold,
+            if adaptive_single_enabled:
+                threshold = max(
+                    float(model.get("adaptive_single_threshold", primary_threshold)),
+                    float(confidence),
                 )
-            )
-            threshold = max(0.5, float(confidence))
-            ensemble_metadata = {
-                "alpha": round(active_alpha, 4),
-                "primary_threshold": round(primary_threshold, 4),
-                "secondary_threshold": round(secondary_threshold, 4),
-                "fused_threshold": round(threshold, 4),
-                "adaptive_primary": adaptive_enabled,
-            }
+                configured_max_components = int(
+                    model.get("adaptive_single_max_components", 0)
+                )
+                max_components = (
+                    configured_max_components if configured_max_components > 0 else 8
+                )
+                probability = predict_prepared_probability(primary_model, tensor)
+                adaptive_single_metadata = {
+                    "adaptive_primary": True,
+                    "threshold": round(threshold, 4),
+                    "max_components": max_components,
+                }
+            else:
+                active_alpha = float(
+                    model["adaptive_ensemble_alpha"]
+                    if adaptive_enabled
+                    else model["ensemble_alpha"]
+                )
+                secondary_threshold = float(model["ensemble_candidate_threshold"])
+                predictor = model.get(
+                    "adaptive_ensemble_predictor"
+                    if adaptive_enabled
+                    else "ensemble_predictor"
+                )
+                probability = (
+                    predictor.predict(tensor)
+                    if predictor is not None
+                    else predict_prepared_calibrated_ensemble(
+                        primary_model,
+                        model["ensemble_model"],
+                        tensor,
+                        active_alpha,
+                        primary_threshold,
+                        secondary_threshold,
+                    )
+                )
+                threshold = max(0.5, float(confidence))
+                ensemble_metadata = {
+                    "alpha": round(active_alpha, 4),
+                    "primary_threshold": round(primary_threshold, 4),
+                    "secondary_threshold": round(secondary_threshold, 4),
+                    "fused_threshold": round(threshold, 4),
+                    "adaptive_primary": adaptive_enabled,
+                }
         else:
             probability = predict_prepared_probability(primary_model, tensor)
         observation = semantic_mask_observation(
@@ -511,6 +545,7 @@ def _predict_string_model(
                 for wrist in (wrists or [])
                 if "x" in wrist and "y" in wrist
             ],
+            max_components=max_components,
         )
         if color_probability_augment:
             observation = _augment_semantic_color_observation(
@@ -529,6 +564,9 @@ def _predict_string_model(
         if observation is not None:
             if ensemble_metadata is not None:
                 observation["semantic_probability_ensemble"] = ensemble_metadata
+            if adaptive_single_metadata is not None:
+                observation["semantic_probability_single"] = adaptive_single_metadata
+                observation["adaptive_single_primary"] = True
             observation["inference_scale"] = round(scale, 4)
             observation["inference_size"] = [input_width, input_height]
         return observation
@@ -1106,6 +1144,9 @@ def track_video(
     string_adaptive_max_color_accepts: int = TRACKING_CONFIG.string_adaptive_max_color_accepts,
     string_adaptive_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_max_mean_confidence,
     string_adaptive_min_mean_distance_ratio: float = TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
+    string_adaptive_single_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
+    string_adaptive_single_threshold: float = TRACKING_CONFIG.string_adaptive_single_threshold,
+    string_adaptive_single_max_components: int = TRACKING_CONFIG.string_adaptive_single_max_components,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
@@ -1161,6 +1202,12 @@ def track_video(
         raise ValueError("adaptive maximum mean confidence must be between 0 and 1")
     if float(string_adaptive_min_mean_distance_ratio) < 0.0:
         raise ValueError("adaptive minimum mean distance ratio must be non-negative")
+    if not 0.0 <= float(string_adaptive_single_max_mean_confidence) <= 1.0:
+        raise ValueError("adaptive single-model confidence gate must be between 0 and 1")
+    if not 0.0 < float(string_adaptive_single_threshold) < 1.0:
+        raise ValueError("adaptive single-model threshold must be between 0 and 1")
+    if int(string_adaptive_single_max_components) < 1:
+        raise ValueError("adaptive single-model component limit must be positive")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -1197,6 +1244,8 @@ def track_video(
         string_ensemble_candidate_threshold,
         string_adaptive_weights_path,
         string_adaptive_ensemble_alpha,
+        string_adaptive_single_threshold,
+        string_adaptive_single_max_components,
     )
     resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
@@ -1284,6 +1333,7 @@ def track_video(
     string_adaptive_metrics: dict[str, float | int] = {}
     string_adaptive_trigger_frame: int | None = None
     string_adaptive_activation_frame: int | None = None
+    string_adaptive_single_activation_frame: int | None = None
     string_adaptive_pending = False
     orientation_inference_frames = 0
     last_orientation: dict[str, Any] | None = None
@@ -1301,6 +1351,8 @@ def track_video(
         if string_adaptive_pending and isinstance(string_model, dict):
             string_model["adaptive_enabled"] = True
             string_adaptive_activation_frame = frame_index
+            if string_model.get("adaptive_single_enabled"):
+                string_adaptive_single_activation_frame = frame_index
             string_adaptive_pending = False
         active_string_inference_scale = (
             float(string_adaptive_inference_scale)
@@ -1441,6 +1493,11 @@ def track_video(
                 )
                 if triggered:
                     string_adaptive_trigger_frame = frame_index
+                    string_model["adaptive_single_enabled"] = bool(
+                        float(string_adaptive_single_max_mean_confidence) > 0.0
+                        and float(string_adaptive_metrics.get("mean_confidence", 1.0))
+                        < float(string_adaptive_single_max_mean_confidence)
+                    )
                     string_adaptive_pending = True
         allow_unanchored_semantic = bool(
             yoyo is None
@@ -1777,6 +1834,13 @@ def track_video(
             "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
             "string_adaptive_max_mean_confidence": float(string_adaptive_max_mean_confidence),
             "string_adaptive_min_mean_distance_ratio": float(string_adaptive_min_mean_distance_ratio),
+            "string_adaptive_single_max_mean_confidence": float(
+                string_adaptive_single_max_mean_confidence
+            ),
+            "string_adaptive_single_threshold": float(string_adaptive_single_threshold),
+            "string_adaptive_single_max_components": int(
+                string_adaptive_single_max_components
+            ),
             "string_cuda_graph": {
                 "primary": bool(
                     isinstance(string_model, dict)
@@ -1829,6 +1893,10 @@ def track_video(
         "string_inference_frame_count": string_inference_frames,
         "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
         "string_adaptive_activation_frame": string_adaptive_activation_frame,
+        "string_adaptive_single_activated": bool(
+            string_adaptive_single_activation_frame is not None
+        ),
+        "string_adaptive_single_activation_frame": string_adaptive_single_activation_frame,
         "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
@@ -1886,6 +1954,10 @@ def track_video(
         "string_inference_frame_count": string_inference_frames,
         "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
         "string_adaptive_activation_frame": string_adaptive_activation_frame,
+        "string_adaptive_single_activated": bool(
+            string_adaptive_single_activation_frame is not None
+        ),
+        "string_adaptive_single_activation_frame": string_adaptive_single_activation_frame,
         "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
@@ -1992,6 +2064,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--string-adaptive-min-mean-distance-ratio",
         type=float,
         default=TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
+    )
+    parser.add_argument(
+        "--string-adaptive-single-max-mean-confidence",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
+        help="Use only the adaptive primary below this triggered-gate confidence; 0 disables.",
+    )
+    parser.add_argument(
+        "--string-adaptive-single-threshold",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_single_threshold,
+    )
+    parser.add_argument(
+        "--string-adaptive-single-max-components",
+        type=int,
+        default=TRACKING_CONFIG.string_adaptive_single_max_components,
     )
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
@@ -2142,6 +2230,11 @@ def main() -> int:
         string_adaptive_max_color_accepts=args.string_adaptive_max_color_accepts,
         string_adaptive_max_mean_confidence=args.string_adaptive_max_mean_confidence,
         string_adaptive_min_mean_distance_ratio=args.string_adaptive_min_mean_distance_ratio,
+        string_adaptive_single_max_mean_confidence=(
+            args.string_adaptive_single_max_mean_confidence
+        ),
+        string_adaptive_single_threshold=args.string_adaptive_single_threshold,
+        string_adaptive_single_max_components=args.string_adaptive_single_max_components,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
         string_inference_scale=args.string_inference_scale,

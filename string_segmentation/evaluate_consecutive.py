@@ -89,6 +89,9 @@ def evaluate_consecutive_checkpoint(
     adaptive_max_color_accepts: int = 0,
     adaptive_max_mean_confidence: float = 1.0,
     adaptive_min_mean_distance_ratio: float = 0.0,
+    adaptive_single_max_mean_confidence: float = 0.0,
+    adaptive_single_threshold: float | None = None,
+    adaptive_single_max_components: int = 0,
     cuda_graph: bool = True,
 ) -> dict[str, Any]:
     weights = weights.resolve()
@@ -127,6 +130,12 @@ def evaluate_consecutive_checkpoint(
             raise ValueError("Adaptive maximum mean confidence must be between 0 and 1")
         if float(adaptive_min_mean_distance_ratio) < 0.0:
             raise ValueError("Adaptive minimum mean distance ratio must be non-negative")
+        if not 0.0 <= float(adaptive_single_max_mean_confidence) <= 1.0:
+            raise ValueError("Adaptive single-model confidence gate must be between 0 and 1")
+        if adaptive_single_threshold is not None and not 0.0 < float(adaptive_single_threshold) < 1.0:
+            raise ValueError("Adaptive single-model threshold must be between 0 and 1")
+        if int(adaptive_single_max_components) < 0:
+            raise ValueError("Adaptive single-model component limit must be non-negative")
         if not 0.0 <= float(adaptive_ensemble_alpha) <= 1.0:
             raise ValueError("adaptive_ensemble_alpha must be between 0 and 1")
         if not 0.5 <= float(adaptive_inference_scale) <= 2.0:
@@ -176,6 +185,7 @@ def evaluate_consecutive_checkpoint(
         accepted_color_candidates = 0
         rejected_color_candidates = 0
         adaptive_enabled = False
+        adaptive_single_enabled = False
         adaptive_window: list[tuple[bool, float, float]] = []
         adaptive_gate_metrics: dict[str, float | int] = {}
         previous_frame: np.ndarray | None = None
@@ -199,7 +209,11 @@ def evaluate_consecutive_checkpoint(
             tensor, meta = prepare_letterboxed_input(
                 image, active_input_width, active_input_height, device,
             )
-            if ensemble_model is not None:
+            use_ensemble = bool(
+                ensemble_model is not None
+                and not (adaptive_enabled and adaptive_single_enabled)
+            )
+            if use_ensemble:
                 active_predictor = (
                     adaptive_ensemble_predictor if adaptive_enabled else ensemble_predictor
                 )
@@ -217,14 +231,30 @@ def evaluate_consecutive_checkpoint(
                 )
             else:
                 probability = predict_prepared_probability(active_model, tensor)
+            active_selected_threshold = (
+                float(
+                    active_primary_threshold
+                    if adaptive_single_threshold is None
+                    else adaptive_single_threshold
+                )
+                if adaptive_enabled and adaptive_single_enabled
+                else selected_threshold
+            )
             yoyo = _yoyo(annotation)
             observation = semantic_mask_observation(
                 probability,
                 meta,
-                selected_threshold,
+                active_selected_threshold,
                 yoyo=yoyo,
                 yoyo_division=str(annotation.get("yoyo_division") or "1A"),
                 min_component_pixels=8,
+                max_components=(
+                    int(adaptive_single_max_components)
+                    if adaptive_enabled
+                    and adaptive_single_enabled
+                    and int(adaptive_single_max_components) > 0
+                    else 8
+                ),
             )
             final_string = observation
             if color_augment and yoyo is not None:
@@ -251,7 +281,7 @@ def evaluate_consecutive_checkpoint(
                     tried_points.add(point_key)
                     had_color_candidate = True
                     candidate_support = polyline_probability_support(
-                        probability, meta, candidate["points"], selected_threshold,
+                        probability, meta, candidate["points"], active_selected_threshold,
                     )
                     candidate_min_mean = (
                         color_probability_min_mean
@@ -304,7 +334,7 @@ def evaluate_consecutive_checkpoint(
                     if color.get("line_features"):
                         final_string["color_line_features"] = color["line_features"]
             if adaptive_model is not None and not adaptive_enabled:
-                adaptive_window, adaptive_enabled, adaptive_gate_metrics = (
+                adaptive_window, triggered, adaptive_gate_metrics = (
                     update_adaptive_string_domain_gate(
                         adaptive_window,
                         final_string,
@@ -316,6 +346,13 @@ def evaluate_consecutive_checkpoint(
                         adaptive_min_mean_distance_ratio,
                     )
                 )
+                if triggered:
+                    adaptive_enabled = True
+                    adaptive_single_enabled = bool(
+                        float(adaptive_single_max_mean_confidence) > 0.0
+                        and float(adaptive_gate_metrics.get("mean_confidence", 1.0))
+                        < float(adaptive_single_max_mean_confidence)
+                    )
             if temporal:
                 frame_index = int(frame["frame_index"])
                 allow_unanchored_semantic = bool(
@@ -383,6 +420,7 @@ def evaluate_consecutive_checkpoint(
             "accepted_color_candidates": accepted_color_candidates,
             "rejected_color_candidates": rejected_color_candidates,
             "adaptive_enabled": adaptive_enabled,
+            "adaptive_single_enabled": adaptive_single_enabled,
             "adaptive_gate_metrics": adaptive_gate_metrics,
             "string": metrics["string"],
         })
@@ -420,6 +458,15 @@ def evaluate_consecutive_checkpoint(
         "adaptive_max_color_accepts": int(adaptive_max_color_accepts),
         "adaptive_max_mean_confidence": float(adaptive_max_mean_confidence),
         "adaptive_min_mean_distance_ratio": float(adaptive_min_mean_distance_ratio),
+        "adaptive_single_max_mean_confidence": float(
+            adaptive_single_max_mean_confidence
+        ),
+        "adaptive_single_threshold": (
+            float(adaptive_single_threshold)
+            if adaptive_single_threshold is not None
+            else None
+        ),
+        "adaptive_single_max_components": int(adaptive_single_max_components),
         "cuda_graph_requested": bool(cuda_graph),
         "cuda_graph_primary": bool(
             ensemble_predictor is not None and ensemble_predictor.uses_cuda_graph
@@ -486,6 +533,9 @@ def main() -> int:
     parser.add_argument("--adaptive-max-color-accepts", type=int, default=0)
     parser.add_argument("--adaptive-max-mean-confidence", type=float, default=1.0)
     parser.add_argument("--adaptive-min-mean-distance-ratio", type=float, default=0.0)
+    parser.add_argument("--adaptive-single-max-mean-confidence", type=float, default=0.0)
+    parser.add_argument("--adaptive-single-threshold", type=float, default=None)
+    parser.add_argument("--adaptive-single-max-components", type=int, default=0)
     parser.add_argument(
         "--cuda-graph",
         action=argparse.BooleanOptionalAction,
@@ -520,6 +570,9 @@ def main() -> int:
         adaptive_max_color_accepts=args.adaptive_max_color_accepts,
         adaptive_max_mean_confidence=args.adaptive_max_mean_confidence,
         adaptive_min_mean_distance_ratio=args.adaptive_min_mean_distance_ratio,
+        adaptive_single_max_mean_confidence=args.adaptive_single_max_mean_confidence,
+        adaptive_single_threshold=args.adaptive_single_threshold,
+        adaptive_single_max_components=args.adaptive_single_max_components,
         cuda_graph=args.cuda_graph,
     )
     compact = [{

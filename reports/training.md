@@ -28,7 +28,7 @@
 
 当前生产候选：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/`。
 
-该候选为自包含的三权重、双路逐帧 LR-ASPP 概率融合：
+该候选为自包含的三权重 LR-ASPP 路由：普通域与一般弱域使用双路概率融合，门控识别出的超低置信弱域只使用弱域主模型：
 
 - 主权重：`weights/primary.pt`，SHA-256 `72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3`。
 - 副权重：`weights/secondary.pt`，SHA-256 `640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df`。
@@ -50,7 +50,7 @@
 
 当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_degradation_aug_test_a08/test_semantic_metrics.json`。
 
-弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍以 `960x544` 使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型。触发后主/副输入提高到 `1440x816`，按 `alpha=0.50` 平衡融合，并固定使用 8 个输入像素的最小语义组件面积，避免面积阈值随分辨率放大后再次过滤细分支。每帧仍只推理一个主模型和一个副模型；第三个同架构 checkpoint 常驻显存。
+弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍以 `960x544` 使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型。一般弱域将主/副输入提高到 `1440x816`，按 `alpha=0.50` 平衡融合；若触发窗口的平均 confidence 进一步低于 `0.30`，则只执行弱域主模型，使用 `0.55` 阈值并最多保留 2 个语义组件。该超低置信分支把每帧 LR-ASPP 前向从 2 次降为 1 次；其余场景仍保持原双路结果。
 
 Workbench 默认选择该候选主权重时自动启用配套副权重和弱域主权重；手动选择其他绳线模型时两者均关闭，避免混用不匹配 checkpoint。
 
@@ -58,7 +58,7 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 ## 连续视频追踪
 
-连续帧评估使用 reviewed yoyo box 隔离绳线几何，不混入 detector 定位误差。当前 Pipeline 为：双模型校准融合、语义邻域预筛选后的概率门控颜色/Hough 补线、观测优先时序、仅在无新鲜观测时执行的 Lucas-Kanade 缺帧传播，以及最近悠悠球上下文宽限。
+连续帧评估使用 reviewed yoyo box 隔离绳线几何，不混入 detector 定位误差。当前 Pipeline 为：普通/一般弱域双模型校准融合、超低置信弱域单主模型、语义邻域预筛选后的概率门控颜色/Hough 补线、观测优先时序、仅在无新鲜观测时执行的 Lucas-Kanade 缺帧传播，以及最近悠悠球上下文宽限。
 
 | sequence | pipeline | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -100,13 +100,17 @@ Workbench 默认选择该候选主权重时自动启用配套副权重和弱域�
 
 Pooled Precision/Recall/F1 从 `0.676094/0.382865/0.488881` 提升到 `0.697974/0.434477/0.535570`；帧均 Chamfer 从 `92.1143` 降至 `86.3637 px`，HD95 从 `195.2501` 降至 `183.6507 px`。七组的 Precision、Recall、F1 和 Chamfer 均无回退；DSCF7145 严格不变。正式证据为 `runs/experiments/semantic_bright_ridge_ab_off_strict_652/summary.json` 和 `runs/experiments/semantic_bright_ridge_tiered_gate_final_652/summary.json`。
 
-对最新八组 757 帧重跑当前默认生产流程后，新增 namdongxun 组的 Precision/Recall/F1@8 为 `0.889906/0.518684/0.655378`，Chamfer 为 `22.7764 px`，presence F1 为 `0.990385`；八组 pooled Precision/Recall/F1@8 为 `0.705401/0.438289/0.540653`。前七组结果与上表当前候选逐组一致，证据位于 `runs/experiments/semantic_current_default_bright_757/summary.json`。
+对最新八组 757 帧重跑调整前生产流程后，新增 namdongxun 组的 Precision/Recall/F1@8 为 `0.889906/0.518684/0.655378`，Chamfer 为 `22.7764 px`，presence F1 为 `0.990385`；八组 pooled Precision/Recall/F1@8 为 `0.705401/0.438289/0.540653`。前七组结果与上表当前候选逐组一致，证据位于 `runs/experiments/semantic_current_default_bright_757/summary.json`。
+
+最终超低置信路由在 757 帧上只命中 `池高宇 f4200-f4299`：该组触发窗口 mean confidence 为 `0.205067`，其他三个会进入 adaptive 的组分别为 `0.663708/0.736225/0.752342`，因此继续使用原双路融合且七组指标逐项完全不变。命中组的 Precision/Recall/F1@8 从 `0.318856/0.077319/0.124459` 提升到 `0.449351/0.128170/0.199450`，Chamfer 从 `532.2312` 降至 `446.0609 px`，HD95 从 `742.1346` 降至 `737.3849 px`，presence F1 从 `0.767296` 升至 `0.868571`，零预测帧从 37 降至 21，平均预测组件从 `1.29` 升至 `1.63`。八组 pooled Precision/Recall/F1@8 为 `0.706441/0.441152/0.543133`，帧均 Chamfer 为 `88.4406 px`。两次完整运行除产物路径外指标逐项相同，最终证据位于 `runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json`。
 
 Workbench 默认配置在池高宇视频 `84.0 s` 起点完成 30 帧 smoke：悠悠球 30/30 帧存在，弱域于 `f4227` 触发并在 `f4228` 启用，tracking loop 为 `6.7253 s / 4.4608 FPS`；MP4、JSONL、审核总览和逐帧审核图均成功生成。`run.json` 记录亮脊默认开启、普通域门槛 `0.70` 以及当前三份语义权重，证据位于 `runs/experiments/bright_ridge_default_workbench_smoke/`。
 
+最终生产实现又在同一视频 `84.0 s` 起点执行 100 帧开关 A/B：两侧均于 `f4227` 触发、`f4228` 激活，门控 mean confidence 均为 `0.206208`；候选从激活帧开始跳过副模型前向。悠悠球与方向输出逐帧零差异，tracking loop 从 `14.3832 s / 6.9526 FPS` 改善为 `13.8434 s / 7.2236 FPS`。候选 `run.json` 记录单模型阈值 `0.55`、组件上限 2、实际激活状态与激活帧，证据位于 `runs/experiments/adaptive_ultraweak_production_ab_baseline/` 和 `runs/experiments/adaptive_ultraweak_production_ab_candidate/`。
+
 同一视频 `84.0 s` 起点另做 60 帧运行时 A/B，固定默认检测/绳线模型并关闭 pose 与方向分支，每侧独立复测两次：关闭亮脊的 tracking loop 平均 `9.393 s`，开启亮脊平均 `9.068 s`（`-3.46%`）。单次计时存在 GPU/编码波动，因此只据此判定没有可测的大幅减速，不主张亮脊本身会加速；证据位于 `runs/experiments/bright_ridge_runtime_audit_off*/` 和 `runs/experiments/bright_ridge_runtime_audit_on*/`。
 
-池高宇 `f4200-f4299` 仍是最弱区间：亮脊使 F1 相对提高约 22%，但绝对 Recall 仍只有 `0.077319`。当前剩余瓶颈是语义概率支持本身只覆盖局部白绳，导致亮脊候选在沿线概率验收前被裁掉；后续应增加同类场景的独立训练样本，而不是继续放宽几何门控。
+池高宇 `f4200-f4299` 仍是最弱区间：最终单主路由把 F1@8 相对提高约 60%，但绝对 Recall 仍只有 `0.128170`。当前剩余瓶颈是语义概率支持本身只覆盖局部白绳，导致部分亮脊候选在沿线概率验收前被裁掉；后续应增加同类场景的独立训练样本，而不是继续放宽几何门控。
 
 推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
 
@@ -199,7 +203,7 @@ RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选�
 ## 验证状态
 
 - `compileall` 通过。
-- `pytest -q`：162 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
+- `pytest -q`：163 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
 - 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令
