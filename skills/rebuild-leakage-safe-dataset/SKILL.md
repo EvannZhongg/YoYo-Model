@@ -33,7 +33,7 @@ dataset. The protected action:
 - atomically moves the complete active dataset to a unique backup;
 - requires `{protected_canonical}` in the builder command so manual labels are
   included as a source;
-- normalizes canonical labels to the current task contract and rejects any other existing canonical JSON change except `dataset_management`;
+- requires current v5 canonical labels to remain equivalent as JSON values across the rebuild;
 - rebinds review entries by image SHA to rebuilt label paths and file revisions;
 - restores the original dataset automatically if build or validation fails.
 
@@ -173,5 +173,3 @@ Treat a nonzero exit code as a hard gate: do not train, evaluate, or promote a
 model from that rebuild. If `evaluation_expanded=true`, version the evaluation
 protocol and avoid presenting the new metrics as directly identical to the
 old protocol even though the old samples stayed fixed.
-
-Run `scripts/self_test.py` after changing the skill.

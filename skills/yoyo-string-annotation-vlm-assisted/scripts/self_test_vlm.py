@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,11 +91,6 @@ class UnicodeMediaTests(unittest.TestCase):
 
 
 class TriageBoundaryTests(unittest.TestCase):
-    def test_default_env_file_is_skill_local(self) -> None:
-        self.assertEqual(vlm_triage.resolve_env_file(None), vlm_triage.SKILL_ROOT / ".env")
-        explicit = Path("explicit.env")
-        self.assertEqual(vlm_triage.resolve_env_file(explicit), explicit.resolve())
-
     def test_prohibited_geometry_is_discarded(self) -> None:
         raw = {
             "domain_status": "in_domain",

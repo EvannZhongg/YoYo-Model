@@ -26,6 +26,23 @@ Use `scripts/annotation_pipeline.py` for every label state change. Do not
 hand-edit labels, digests, revision history, approvals, exports, or cleanup
 reports.
 
+## Upgrade V4 Labels
+
+Upgrade a label tree in one pass. The command changes only fields whose v4
+values are invalid in v5, removes deprecated non-task fields recursively, and
+never creates migration history or other top-level annotation fields.
+
+```powershell
+& VENV_PYTHON "$SKILL_DIR\scripts\annotation_pipeline.py" upgrade-v5 `
+  --labels DATASET\canonical\labels `
+  --review-map PROJECT\workbench_state\dataset_review_status.json `
+  --dataset-key DATASET_NAME --dry-run
+```
+
+Remove `--dry-run` only after every label and review-map key validates. The
+write pass rebinds existing `yoyo_dataset_review_v3` entries to the migrated
+file revisions without changing reviewer decisions.
+
 ## Interpreter And Configuration
 
 Use a project virtual-environment interpreter that contains OpenCV, OpenAI,
@@ -174,25 +191,3 @@ iterative grid/detail renders and temporary review directories, but it must
 preserve `images/`, `labels/`, and `visualizations/` in a portable export.
 Preserve the triage manifest, normalized results, and agent handoff as model
 provenance evidence.
-
-## Verify The Workflow
-
-Run all bundled checks with the virtual-environment interpreter:
-
-```powershell
-& VENV_PYTHON "$SKILL_DIR\scripts\self_test.py"
-& VENV_PYTHON "$SKILL_DIR\scripts\self_test_vlm.py"
-& VENV_PYTHON "$SKILL_DIR\scripts\acceptance_suite.py" --output EMPTY_ACCEPTANCE_DIR
-```
-
-Validate five distinct video sources end to end:
-
-```powershell
-& VENV_PYTHON "$SKILL_DIR\scripts\validate_five_video_scenes.py" `
-  --videos VIDEO_1 VIDEO_2 VIDEO_3 VIDEO_4 VIDEO_5 `
-  --output VALIDATION_OUTPUT `
-  --hash-cache DATASET_ROOT\source_video_sha256_cache.json
-```
-
-Require `five_video_validation.json` to report `ok=true` and confirm its
-`python` field points to the intended virtual environment.

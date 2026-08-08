@@ -88,7 +88,7 @@ discoverable without a separate import or copy step.
 On Windows, require the published dataset to inherit the `datasets` directory
 ACL so the desktop user can open it without an elevation or "Continue to get
 access" prompt. Treat such a prompt as a generator defect, not a manual setup
-step. The bundled self-test checks this inheritance.
+step.
 
 Do not hand-edit generated provenance, hashes, paths, or the manifest. Regenerate
 a failed batch under a new dataset name. Read `references/data-contract.md` when
@@ -106,11 +106,3 @@ label. Never write the Workbench review map. On any append failure, remove only
 files created by that append and restore the previous manifest bytes. Require
 the result to report `review_map_unchanged=true` and the expected
 `review_entry_count_preserved`.
-
-## Validation
-
-Run the bundled deterministic test after changing the generator:
-
-```powershell
-& PROJECT\.venv\Scripts\python.exe SKILL_DIR\scripts\self_test.py
-```

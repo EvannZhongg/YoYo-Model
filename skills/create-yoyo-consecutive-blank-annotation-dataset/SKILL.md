@@ -1,6 +1,6 @@
 ---
 name: create-yoyo-consecutive-blank-annotation-dataset
-description: Create or incrementally extend Workbench-compatible blank yoyo/string annotation datasets from uninterrupted video frame runs, preferring runs near each video's temporal middle while preserving existing labels and SHA-bound human reviews. Use when a manual annotation queue needs consecutive frames, per-video runs, temporal clips, or different run lengths per source without VLM classification, model annotation, training, or approval.
+description: Create or incrementally extend Workbench-compatible agent_yoyo_string_annotation_v5 blank datasets from uninterrupted video frame runs, preferring runs near each video's temporal middle while preserving existing labels and revision-bound human reviews. Use when a manual annotation queue needs consecutive frames, per-video runs, temporal clips, or different run lengths per source without VLM classification, model annotation, training, or approval.
 ---
 
 # Create Yoyo Consecutive Blank Annotation Dataset
@@ -51,7 +51,7 @@ sample keys.
 On Windows, require the published dataset to inherit the `datasets` directory
 ACL so the desktop user can open it without an elevation or "Continue to get
 access" prompt. Treat such a prompt as a generator defect, not a manual setup
-step. The bundled self-test checks this inheritance.
+step.
 
 The generator searches from the temporal middle outward. It preserves the root
 `datasets/1Ayoyo_dataset` exclusion baseline and all earlier compatible blank
@@ -77,9 +77,3 @@ Never append directly to `datasets/1Ayoyo_dataset`. Never hand-edit generated
 manifests, hashes, paths, or provenance. During append, preserve every existing
 image, label, and Workbench review entry byte-for-byte. Read
 `references/data-contract.md` when debugging compatibility or deduplication.
-
-After changing the generator, run:
-
-```powershell
-& PROJECT\.venv\Scripts\python.exe SKILL_DIR\scripts\self_test.py
-```

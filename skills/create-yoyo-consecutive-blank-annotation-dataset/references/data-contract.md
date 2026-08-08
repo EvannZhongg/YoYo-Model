@@ -20,7 +20,7 @@ to later frames in the same active group only.
 
 ## Label State
 
-Every label uses `agent_yoyo_string_annotation_v4` and preserves the provenance
+Every label uses `agent_yoyo_string_annotation_v5` and preserves the provenance
 fields produced by `yoyo-string-annotation-vlm-assisted`: source video hash,
 source group, frame index, timestamp, sequence, image hash and size, and sampling
 manifest hash.
@@ -60,12 +60,12 @@ append-protection checks.
 
 Treat every existing label as protected, whether it is blank, edited, reviewed,
 or human-verified. Before sampling, require the existing manifest, files, and
-hashes to agree. If the Workbench review map contains the target dataset, require
-every review key to resolve to an existing label and every `label_sha256` to
-match the current bytes.
+revisions to agree. If the Workbench review map contains the target dataset,
+require every review key to resolve to an existing label and its recorded size
+and modification time to match.
 
 During publication, create only paths that do not exist. Never open an existing
-image or label for writing. Verify protected hashes and the complete review-map
+image or label for writing. Verify protected revisions and the complete review-map
 bytes immediately before and after publication. On failure, restore the prior
 manifest and remove only the new files from that attempt. Stop the Workbench
 server during append because protection does not coordinate concurrent saves

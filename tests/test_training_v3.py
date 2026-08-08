@@ -154,7 +154,7 @@ class TrainingV3Tests(unittest.TestCase):
             before_digest = _content_digest(previous)
             current_digest = _content_digest(current)
             current.update({
-                "schema_version": "agent_yoyo_string_annotation_v4",
+                "schema_version": "agent_yoyo_string_annotation_v5",
                 "quality": {
                     "history": [{
                         "before_sha256": before_digest,

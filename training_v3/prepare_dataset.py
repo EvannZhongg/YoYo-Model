@@ -23,8 +23,9 @@ from common.files import sha256_file
 from config import BASE_DIR
 
 
-SCHEMA_VERSION = "yoyo_multitask_dataset_v4_pose_excluded"
-SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; pose_annotations_excluded"
+SCHEMA_VERSION = "yoyo_multitask_dataset_v5"
+ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
+SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; annotation_schema_v5"
 POSE_ANNOTATION_FIELDS = {
     "hands", "hands_pixel", "hands_2d", "hands_normalized",
     "hand_landmarks_pixel", "hand_pose", "pose", "pose_person",
@@ -115,7 +116,13 @@ def _load_samples(source_roots: Iterable[Path]) -> tuple[list[Sample], list[dict
             string_visibility = str(annotation.get("string_visibility") or "").strip()
             scopes = _approved_scopes(annotation)
             reason = ""
-            if not group:
+            if annotation.get("schema_version") != ANNOTATION_SCHEMA_VERSION:
+                reason = f"unsupported_schema_version={annotation.get('schema_version')}"
+            elif POSE_ANNOTATION_FIELDS.intersection(annotation):
+                reason = "unsupported_pose_annotation_fields"
+            elif "dataset_management" in annotation:
+                reason = "unsupported_dataset_management_field"
+            elif not group:
                 reason = "missing_source_group"
             elif orientation not in VALID_ORIENTATIONS:
                 reason = f"invalid_trick_orientation={orientation}"
@@ -457,16 +464,6 @@ def build_training_dataset(
             orientation_train_images[sample.orientation].append(orientation_image)
         canonical_label.parent.mkdir(parents=True, exist_ok=True)
         canonical_annotation = dict(sample.annotation)
-        for field in POSE_ANNOTATION_FIELDS:
-            canonical_annotation.pop(field, None)
-        canonical_annotation["dataset_management"] = {
-            "dataset_id": dataset_id,
-            "split": split,
-            "source_dataset": sample.dataset,
-            "source_label": str(sample.label_path),
-            "canonical_image": str(canonical_image),
-            "image_sha256": sample.image_sha256,
-        }
         canonical_label.write_text(json.dumps(canonical_annotation, ensure_ascii=False, indent=2), encoding="utf-8")
         detection_label = detection_root / "labels" / split / relative.with_suffix(".txt")
         string_label = string_root / "labels" / split / relative.with_suffix(".txt")
@@ -539,6 +536,7 @@ def build_training_dataset(
     }
     manifest = {
         "schema_version": SCHEMA_VERSION,
+        "annotation_schema_version": ANNOTATION_SCHEMA_VERSION,
         "dataset_id": dataset_id,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "source_policy": SOURCE_POLICY,

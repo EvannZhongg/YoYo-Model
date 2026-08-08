@@ -477,16 +477,12 @@ def _record_label_paths(
 
 
 def _stable_label_value(path: Path) -> dict[str, Any]:
-    value = _read_json(path)
-    return {
-        key: item
-        for key, item in value.items()
-        if key != "dataset_management" and key not in LEGACY_NON_TASK_FIELDS
-    }
+    return _read_json(path)
 
 
 def _present_non_task_fields(path: Path) -> set[str]:
-    return LEGACY_NON_TASK_FIELDS.intersection(_read_json(path))
+    value = _read_json(path)
+    return LEGACY_NON_TASK_FIELDS.intersection(value) | ({"dataset_management"} if "dataset_management" in value else set())
 
 
 def _label_key(path: Path, dataset_root: Path) -> str:

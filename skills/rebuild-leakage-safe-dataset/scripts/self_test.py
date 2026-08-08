@@ -70,12 +70,9 @@ class LeakageSafeRebuildTests(unittest.TestCase):
             label.write_text(
                 json.dumps(
                     {
-                        "schema_version": "test",
+                        "schema_version": "agent_yoyo_string_annotation_v5",
                         "notes": "manual edit" if index == 1 else "",
                         "workbench_edits": [{"actor": "reviewer"}] if index == 1 else [],
-                        "hands_pixel": {"left": [10, 20], "right": None},
-                        "hands_2d": {"left": [16, 56], "right": None},
-                        "dataset_management": {"dataset_id": "old"},
                     },
                     indent=2,
                 ),
@@ -120,9 +117,7 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                     "for index,record in enumerate(value['records'],start=1):",
                     " old=protected/'labels'/f'label-{index}.json'",
                     " document=json.loads(old.read_text(encoding='utf-8'))",
-                    " if mode!='retain': document.pop('hands_pixel',None)",
-                    " if mode!='retain': document.pop('hands_2d',None)",
-                    " document['dataset_management']={'dataset_id':'new'}",
+                    " if mode=='retain': document['dataset_management']={'dataset_id':'unexpected'}",
                     " if mode=='mutate' and index==1: document['notes']='overwritten'",
                     " new=target/old.name",
                     " new.write_text(json.dumps(document,indent=2),encoding='utf-8')",
@@ -284,8 +279,8 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertTrue(review_snapshot.is_file())
         rebuilt = json.loads(edited_label.read_text(encoding="utf-8"))
         self.assertEqual(rebuilt["notes"], "manual edit")
-        self.assertNotIn("hands_pixel", rebuilt)
-        self.assertNotIn("hands_2d", rebuilt)
+        self.assertEqual(rebuilt["schema_version"], "agent_yoyo_string_annotation_v5")
+        self.assertNotIn("dataset_management", rebuilt)
         rebound = json.loads(review_map.read_text(encoding="utf-8"))
         review = rebound["datasets"]["dataset"]["samples"]["label-1.json"]
         self.assertEqual(review["label_size_bytes"], edited_label.stat().st_size)
@@ -293,7 +288,7 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertEqual(review["reviewer"], "human")
         saved_report = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(saved_report["review_entry_count_rebound"], 1)
-        self.assertEqual(saved_report["non_task_fields_removed_label_count"], 3)
+        self.assertEqual(saved_report["non_task_fields_removed_label_count"], 0)
         self.assertEqual(saved_report["non_task_field_residual_count"], 0)
 
     def test_plain_run_rejects_dataset_with_canonical_labels(self) -> None:

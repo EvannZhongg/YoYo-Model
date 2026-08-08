@@ -32,6 +32,9 @@ Required top-level fields:
 The schema has no `split` field. Downstream partitioning must keep whole
 `source_group` values together.
 
+Dataset identity, split, source-dataset, and canonical output paths belong in
+the dataset manifest. Never add a `dataset_management` object to a label.
+
 The schema also has no hand or body-pose fields. Do not store `hands_pixel`,
 `hands_2d`, hand landmarks, pose landmarks, or hand attachment anchors. A
 visible route ending at a hand occlusion uses an `unknown` anchor and records

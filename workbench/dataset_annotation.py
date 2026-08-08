@@ -18,16 +18,12 @@ from config import BASE_DIR
 DATASETS_DIR = BASE_DIR / "datasets"
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 VALID_YOYO_VISIBILITY = {
-    "visible", "partially_visible", "out_of_frame", "absent", "not_visible", "uncertain",
+    "visible", "partially_visible", "occluded", "out_of_frame", "absent", "uncertain",
 }
 VALID_TRICK_ORIENTATIONS = {"normal", "horizontal", "not_applicable"}
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
 VALID_REVIEW_STATUS = {"approved", "reviewed", "unresolved", "needs_review"}
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
-SUPPORTED_ANNOTATION_SCHEMA_VERSIONS = {
-    "agent_yoyo_string_annotation_v4",
-    ANNOTATION_SCHEMA_VERSION,
-}
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 REVIEW_MAP_FILENAME = "dataset_review_status.json"
 REVIEW_MAP_PATH = BASE_DIR / "workbench_state" / REVIEW_MAP_FILENAME
@@ -92,7 +88,7 @@ def _read_document(path: Path) -> dict[str, Any]:
         raise ValueError(f"invalid annotation JSON: {path}") from exc
     if not isinstance(document, dict):
         raise ValueError(f"annotation must be a JSON object: {path}")
-    if document.get("schema_version") not in SUPPORTED_ANNOTATION_SCHEMA_VERSIONS:
+    if document.get("schema_version") != ANNOTATION_SCHEMA_VERSION:
         raise ValueError(f"unsupported annotation schema: {document.get('schema_version')!r}")
     return document
 
@@ -204,7 +200,7 @@ def list_annotation_datasets(*, include_consecutive: bool = False) -> list[dict[
         if first_label is None:
             continue
         try:
-            if json.loads(first_label.read_text(encoding="utf-8")).get("schema_version") not in SUPPORTED_ANNOTATION_SCHEMA_VERSIONS:
+            if json.loads(first_label.read_text(encoding="utf-8")).get("schema_version") != ANNOTATION_SCHEMA_VERSION:
                 continue
         except (OSError, json.JSONDecodeError):
             continue
@@ -404,7 +400,15 @@ def _bbox(value: Any, width: int, height: int) -> list[float] | None:
 
 
 def _to_2d(points: list[list[float]], width: int, height: int) -> list[list[float]]:
-    return [[round(x / width * 1000, 3), round(y / height * 1000, 3)] for x, y in points]
+    return [[round(x / width * 999, 3), round(y / height * 999, 3)] for x, y in points]
+
+
+def _path_anchor(value: Any, endpoint: list[float], bbox: list[float] | None, width: int, height: int) -> str:
+    if value != "yoyo" or bbox is None:
+        return "unknown"
+    x, y = endpoint
+    distance = ((max(bbox[0] - x, 0, x - bbox[2])) ** 2 + (max(bbox[1] - y, 0, y - bbox[3])) ** 2) ** 0.5
+    return "yoyo" if distance <= max(8.0, (width * width + height * height) ** 0.5 * 0.08) else "unknown"
 
 
 def _content_digest(document: dict[str, Any]) -> str:
@@ -455,7 +459,7 @@ def save_annotation_sample(
         raise ValueError("string polylines must be a list")
     polylines = [[_point(point, width, height) for point in line] for line in raw_polylines]
     polylines = [line for line in polylines if len(line) >= 2]
-    if yoyo_visibility in {"not_visible", "absent", "out_of_frame"}:
+    if yoyo_visibility in {"absent", "out_of_frame"}:
         bbox = None
     elif yoyo_visibility == "visible" and bbox is None:
         raise ValueError("visible yoyo requires a bounding box")
@@ -468,8 +472,8 @@ def save_annotation_sample(
     bbox_2d = None
     if bbox is not None:
         bbox_2d = [
-            round(bbox[0] / width * 1000, 3), round(bbox[1] / height * 1000, 3),
-            round(bbox[2] / width * 1000, 3), round(bbox[3] / height * 1000, 3),
+            round(bbox[0] / width * 999, 3), round(bbox[1] / height * 999, 3),
+            round(bbox[2] / width * 999, 3), round(bbox[3] / height * 999, 3),
         ]
     polylines_2d = [_to_2d(line, width, height) for line in polylines]
     document["visibility"] = yoyo_visibility
@@ -498,17 +502,19 @@ def save_annotation_sample(
             previous = previous_paths[index] if index < len(previous_paths) and isinstance(previous_paths[index], dict) else {}
             path = dict(previous)
             path["path_id"] = str(path.get("path_id") or f"workbench-line-{index + 1}")
+            path["start_anchor"] = _path_anchor(path.get("start_anchor"), line[0], bbox, width, height)
+            path["end_anchor"] = _path_anchor(path.get("end_anchor"), line[-1], bbox, width, height)
             path["points_pixel"] = line
             path["points_2d"] = polylines_2d[index]
             path["edges"] = [
-                {"from": point_index, "to": point_index + 1, "evidence": "reviewed", "confidence": 1.0}
+                {"from": point_index, "to": point_index + 1, "evidence": "observed", "confidence": 1.0}
                 for point_index in range(len(line) - 1)
             ]
             updated_paths.append(path)
         string_path["paths"] = updated_paths
         if not polylines:
-            string_path["topology"] = "not_visible"
-            string_path["reconstruction_status"] = "not_visible"
+            string_path["topology"] = "uncertain"
+            string_path["reconstruction_status"] = "not_applicable"
 
     edit_event = {
         "created_at_utc": document["updated_at_utc"],
@@ -628,7 +634,7 @@ DATASET_ANNOTATION_HTML = r"""
       <fieldset id="yda-fields" disabled>
         <div class="yda__editor-scroll">
           <legend>悠悠球识别</legend>
-          <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">可见</option><option value="partially_visible">部分可见</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
+          <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">可见</option><option value="partially_visible">部分可见</option><option value="occluded">被遮挡</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option><option value="uncertain">不确定</option></select></label>
           <label>方向<select id="yda-trick-orientation"><option value="normal">常规（normal）</option><option value="horizontal">水平（horizontal）</option><option value="not_applicable">不适用（not_applicable）</option></select></label>
           <div class="yda__coords"><label>X1<input id="yda-x1" type="number" min="0" step="1"></label><label>Y1<input id="yda-y1" type="number" min="0" step="1"></label><label>X2<input id="yda-x2" type="number" min="0" step="1"></label><label>Y2<input id="yda-y2" type="number" min="0" step="1"></label></div>
           <button type="button" id="yda-clear-box">清除悠悠球框</button>
@@ -789,7 +795,7 @@ $("#yda-finish-line").onclick=finishLine; $("#yda-undo").onclick=()=>{const valu
 $("#yda-reset").onclick=resetUnsavedChanges;
 $("#yda-delete").onclick=()=>{if(state.selectedLine===null)return toast("请先选择一条绳线");pushHistory();state.lines.splice(state.selectedLine,1);state.selectedLine=null;markDirty();};
 $("#yda-toggle-annotations").onclick=toggleAnnotations;
-$("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="not_visible";markDirty();};
+$("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="uncertain";markDirty();};
 $("#yda-add-line").onclick=()=>startNewLine();
 $("#yda-redraw-lines").onclick=()=>{if(state.lines.length&&!window.confirm("清空现有绳线并重新绘制吗？可使用撤销恢复。"))return;pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="partial";startNewLine(false);markDirty();};
 $("#yda-clear-lines").onclick=()=>{pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="not_visible";markDirty();};

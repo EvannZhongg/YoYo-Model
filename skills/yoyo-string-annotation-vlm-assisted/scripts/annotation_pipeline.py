@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
+V4_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
@@ -33,7 +34,7 @@ EDGE_EVIDENCE = {"observed", "temporal", "inferred"}
 PATH_ANCHORS = {"yoyo", "unknown"}
 ACCEPTED_REVIEW = {"approved", "reviewed"}
 REQUIRED_APPROVAL_ROLES = {"geometry-critic", "semantic-critic"}
-REMOVED_FIELDS = {"".join(chr(item) for item in (118, 97, 114, 105, 97, 116, 105, 111, 110, 95, 116, 97, 103, 115))}
+REMOVED_FIELDS = {"variation_tags", "string_attachment_class", "dataset_management"}
 LEGACY_NON_TASK_FIELDS = {
     "hands",
     "hands_pixel",
@@ -43,6 +44,20 @@ LEGACY_NON_TASK_FIELDS = {
     "hand_pose",
     "pose",
     "pose_person",
+}
+ALLOWED_LABEL_FIELDS = {
+    "schema_version", "created_at_utc", "updated_at_utc", "source_image",
+    "source_image_original", "visualization", "image_sha256", "image_size",
+    "source_video", "source_video_sha256", "source_group", "video_id",
+    "frame_index", "timestamp_s", "sequence_id", "sampling_role",
+    "anchor_frame_index", "sampling_manifest_sha256", "visibility",
+    "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "string_visibility",
+    "string_polylines_pixel", "string_polylines_2d", "string_polyline_pixel",
+    "string_polyline_2d", "string_mask_polygons_pixel", "yoyo_division",
+    "scene_label", "trick_orientation", "string_path", "bad_case", "notes",
+    "review_status", "bbox_review_status", "string_review_status",
+    "reviewed_at_utc", "reviewer", "quality", "workbench_edits",
+    "workbench_review_import",
 }
 CORE_FIELDS = (
     "image_sha256",
@@ -1028,7 +1043,7 @@ def validate_points(
         if item is None:
             errors.append(f"{name}[{index}]: invalid point")
             continue
-        if not (0 <= item[0] < width and 0 <= item[1] < height):
+        if not (0 <= item[0] <= width and 0 <= item[1] <= height):
             errors.append(f"{name}[{index}]: point outside image")
         if parsed and distance(parsed[-1], item) < 0.5:
             errors.append(f"{name}[{index}]: consecutive duplicate point")
@@ -1083,6 +1098,9 @@ def validate_label(
     legacy_non_task_fields = sorted(LEGACY_NON_TASK_FIELDS.intersection(label))
     if legacy_non_task_fields:
         errors.append("unsupported non-task annotation fields: " + ", ".join(legacy_non_task_fields))
+    unexpected_fields = sorted(set(label) - ALLOWED_LABEL_FIELDS)
+    if unexpected_fields:
+        errors.append("unsupported top-level annotation fields: " + ", ".join(unexpected_fields))
     if label.get("schema_version") != SCHEMA_VERSION:
         errors.append(
             f"unsupported schema_version={label.get('schema_version')}; expected {SCHEMA_VERSION}"
@@ -1754,106 +1772,161 @@ def command_audit(args: argparse.Namespace) -> int:
     return 1 if args.strict and not report["ok"] else 0
 
 
-def command_upgrade_v5(args: argparse.Namespace) -> int:
-    label_path = Path(args.label).resolve()
-    source_image = Path(args.source_image).resolve()
-    before = read_json(label_path)
-    if before.get("schema_version") == SCHEMA_VERSION:
-        quality = before.setdefault("quality", {})
-        previous_required = int(quality.get("min_model_approvals", 2))
-        quality["min_model_approvals"] = max(2, previous_required)
-        gate = validate_label(before, check_image=True, check_reviews=False, label_path=label_path)
-        if gate["errors"]:
-            raise ValueError(f"existing v5 label is invalid: {gate['errors']}")
-        policy_updated = quality["min_model_approvals"] != previous_required
-        if policy_updated:
-            write_json(label_path, before)
-        print(
-            json.dumps(
-                {
-                    "label": str(label_path),
-                    "migrated": False,
-                    "schema_version": SCHEMA_VERSION,
-                    "approval_policy_updated": policy_updated,
-                    "min_model_approvals": quality["min_model_approvals"],
-                },
-                indent=2,
-            )
-        )
-        return 0
-    if before.get("schema_version") != "agent_yoyo_string_annotation_v4":
-        raise ValueError(f"unsupported source schema_version={before.get('schema_version')}")
-    if not source_image.is_file():
-        raise ValueError(f"source image does not exist: {source_image}")
-    expected_hash = str(before.get("image_sha256", "")).lower()
-    if not expected_hash or sha256_file(source_image) != expected_hash:
-        raise ValueError(f"source image hash mismatch: {source_image}")
-    expected_size = tuple(int(item) for item in before.get("image_size", []))
-    if image_info(source_image) != expected_size:
-        raise ValueError(f"source image size mismatch: {source_image}")
+def _remove_v4_fields(value: Any, removals: Counter[str]) -> None:
+    if isinstance(value, dict):
+        for key in list(value):
+            if key in REMOVED_FIELDS or key in LEGACY_NON_TASK_FIELDS:
+                removals[key] += 1
+                value.pop(key)
+            else:
+                _remove_v4_fields(value[key], removals)
+    elif isinstance(value, list):
+        for item in value:
+            _remove_v4_fields(item, removals)
 
-    candidate = copy.deepcopy(before)
-    for path in (candidate.get("string_path") or {}).get("paths") or []:
-        for edge in path.get("edges") or []:
-            evidence = str(edge.get("evidence", "")).lower()
-            if evidence in {"propagated", "reviewed"}:
-                edge["evidence"] = "observed" if args.confirm_current_frame else "temporal"
 
+def _upgrade_v5_document(before: dict[str, Any], removals: Counter[str]) -> dict[str, Any]:
+    version = before.get("schema_version")
+    if version not in {V4_SCHEMA_VERSION, SCHEMA_VERSION}:
+        raise ValueError(f"unsupported source schema_version={version}")
     after = copy.deepcopy(before)
+    _remove_v4_fields(after, removals)
     after["schema_version"] = SCHEMA_VERSION
-    after["source_image"] = str(source_image)
-    after["video_id"] = str(after.get("source_group") or "")
-    for field in LEGACY_NON_TASK_FIELDS:
-        after.pop(field, None)
-    after = normalize_candidate(after, candidate)
-    before_digest = content_digest(before)
-    after_digest = content_digest(after)
-    quality = copy.deepcopy(before.get("quality") or {})
-    quality["min_model_approvals"] = max(2, int(quality.get("min_model_approvals", 2)))
-    quality.setdefault("history", [])
-    quality.setdefault("reviews", [])
-    quality["revision"] = int(quality.get("revision", 0)) + 1
-    quality["history"].append(
-        {
-            "revision": quality["revision"],
-            "created_at_utc": utc_now(),
-            "actor": args.actor,
-            "role": "schema-migrator",
-            "model": None,
-            "message": args.message,
-            "before_sha256": before_digest,
-            "after_sha256": after_digest,
-            "candidate_coordinate_frame": "original_pixel",
-            "previous_content": {key: before.get(key) for key in CORE_FIELDS},
-        }
-    )
-    after["quality"] = quality
-    after["updated_at_utc"] = utc_now()
-    after["string_review_status"] = "auto_labeled_needs_review"
-    after["review_status"] = (
-        "partially_reviewed"
-        if str(after.get("bbox_review_status", "")).lower() in ACCEPTED_REVIEW
-        else "auto_labeled_needs_review"
-    )
-    after["reviewed_at_utc"] = None
-    after["reviewer"] = None
-    gate = validate_label(after, check_image=True, check_reviews=False, label_path=label_path)
-    if gate["errors"]:
-        raise ValueError(f"migrated v5 label is invalid: {gate['errors']}")
-    write_json(label_path, after)
-    print(
-        json.dumps(
-            {
-                "label": str(label_path),
-                "migrated": True,
-                "schema_version": SCHEMA_VERSION,
-                "revision": quality["revision"],
-                "content_sha256": after_digest,
-            },
-            ensure_ascii=False,
-            indent=2,
+    width, height = [int(item) for item in after["image_size"]]
+
+    if after.get("visibility") == "not_visible":
+        after["visibility"] = "uncertain"
+    box = bbox(after.get("yoyo_bbox_pixel"))
+    if "yoyo_bbox_2d" in after:
+        after["yoyo_bbox_2d"] = (
+            pixel_to_normalized(box[:2], width, height) + pixel_to_normalized(box[2:], width, height)
+            if box else None
         )
-    )
+    if "bbox" in after:
+        after["bbox"] = (
+            [{
+                "label": "yoyo",
+                "sub_label": "visible yoyo body",
+                "bbox_pixel": after.get("yoyo_bbox_pixel"),
+                "bbox_2d": after.get("yoyo_bbox_2d"),
+            }]
+            if box else []
+        )
+
+    strokes = after.get("string_polylines_pixel") or []
+    strokes_2d = [
+        [pixel_to_normalized(point_value, width, height) for point_value in stroke]
+        for stroke in strokes
+    ]
+    if "string_polylines_2d" in after:
+        after["string_polylines_2d"] = strokes_2d or None
+    if "string_polyline_pixel" in after:
+        after["string_polyline_pixel"] = strokes[0] if strokes else None
+    if "string_polyline_2d" in after:
+        after["string_polyline_2d"] = strokes_2d[0] if strokes else None
+
+    path_data = after.get("string_path")
+    if isinstance(path_data, dict):
+        if path_data.get("topology") == "not_visible":
+            path_data["topology"] = "uncertain"
+        if path_data.get("reconstruction_status") == "not_visible":
+            path_data["reconstruction_status"] = "not_applicable"
+        anchor_threshold = max(8.0, math.hypot(width, height) * 0.08)
+        for path_item in path_data.get("paths") or []:
+            if not isinstance(path_item, dict):
+                continue
+            points = path_item.get("points_pixel") or []
+            if "points_2d" in path_item:
+                path_item["points_2d"] = [pixel_to_normalized(item, width, height) for item in points]
+            for anchor_name, point_index in (("start_anchor", 0), ("end_anchor", -1)):
+                anchor = str(path_item.get(anchor_name) or "unknown")
+                if anchor not in PATH_ANCHORS:
+                    path_item[anchor_name] = "unknown"
+                elif anchor == "yoyo" and (
+                    not box or not points or point_box_distance(points[point_index], box) > anchor_threshold
+                ):
+                    path_item[anchor_name] = "unknown"
+            for edge in path_item.get("edges") or []:
+                if not isinstance(edge, dict):
+                    continue
+                evidence = str(edge.get("evidence") or "").lower()
+                if evidence == "reviewed":
+                    edge["evidence"] = "observed"
+                elif evidence == "propagated":
+                    edge["evidence"] = "temporal"
+                elif evidence not in EDGE_EVIDENCE:
+                    edge["evidence"] = "inferred"
+    added = set(after) - set(before)
+    if added:
+        raise ValueError(f"v5 migration unexpectedly added top-level fields: {sorted(added)}")
+    return after
+
+
+def command_upgrade_v5(args: argparse.Namespace) -> int:
+    labels_input = Path(args.labels).resolve()
+    labels_root = labels_input / "labels" if (labels_input / "labels").is_dir() else labels_input
+    files = label_files(labels_input)
+    if not files:
+        raise ValueError(f"no labels found: {labels_input}")
+
+    removals: Counter[str] = Counter()
+    writes: list[tuple[Path, dict[str, Any]]] = []
+    upgraded = normalized = unchanged = 0
+    for label_path in files:
+        before = read_json(label_path)
+        after = _upgrade_v5_document(before, removals)
+        gate = validate_label(after, check_image=False, check_reviews=False, label_path=label_path)
+        if gate["errors"]:
+            raise ValueError(f"migrated v5 label is invalid ({label_path}): {gate['errors']}")
+        if after == before:
+            unchanged += 1
+            continue
+        upgraded += int(before.get("schema_version") == V4_SCHEMA_VERSION)
+        normalized += int(before.get("schema_version") == SCHEMA_VERSION)
+        writes.append((label_path, after))
+
+    review_document = None
+    review_entries: dict[str, Any] = {}
+    review_map_path = Path(args.review_map).resolve() if args.review_map else None
+    if review_map_path is not None:
+        if not args.dataset_key:
+            raise ValueError("--dataset-key is required with --review-map")
+        review_document = read_json(review_map_path)
+        if review_document.get("schema_version") != "yoyo_dataset_review_v3":
+            raise ValueError(f"unsupported review map schema: {review_map_path}")
+        dataset_review = (review_document.get("datasets") or {}).get(args.dataset_key) or {}
+        review_entries = dataset_review.get("samples") or {}
+        if not isinstance(review_entries, dict):
+            raise ValueError(f"invalid review map dataset entry: {args.dataset_key}")
+        known_keys = {path.relative_to(labels_root).as_posix() for path in files}
+        orphaned = sorted(set(review_entries) - known_keys)
+        if orphaned:
+            raise ValueError(f"review map contains labels outside the upgrade set: {orphaned[:5]}")
+
+    if not args.dry_run:
+        for label_path, after in writes:
+            write_json(label_path, after)
+        if review_document is not None and review_map_path is not None:
+            files_by_key = {path.relative_to(labels_root).as_posix(): path for path in files}
+            for key, review in review_entries.items():
+                stat = files_by_key[key].stat()
+                review["label_size_bytes"] = int(stat.st_size)
+                review["label_mtime_ns"] = int(stat.st_mtime_ns)
+            write_json(review_map_path, review_document)
+    result = {
+        "ok": True,
+        "dry_run": bool(args.dry_run),
+        "schema_version": SCHEMA_VERSION,
+        "label_count": len(files),
+        "upgraded_v4_count": upgraded,
+        "normalized_v5_count": normalized,
+        "unchanged_count": unchanged,
+        "written_count": 0 if args.dry_run else len(writes),
+        "review_entry_count": len(review_entries),
+        "review_entries_rebound": 0 if args.dry_run else len(review_entries),
+        "removed_fields": dict(sorted(removals.items())),
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -2263,17 +2336,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     upgrade_v5 = subparsers.add_parser(
         "upgrade-v5",
-        help="Migrate one reviewed v4 label to v5 without changing its pixel geometry.",
+        help="Upgrade a v4 label tree to the exact v5 contract without adding annotation fields.",
     )
-    upgrade_v5.add_argument("--label", required=True)
-    upgrade_v5.add_argument("--source-image", required=True)
-    upgrade_v5.add_argument("--actor", required=True)
-    upgrade_v5.add_argument("--message", default="migrate reviewed v4 annotation to v5")
-    upgrade_v5.add_argument(
-        "--confirm-current-frame",
-        action="store_true",
-        help="Treat legacy propagated edges as current-frame observed after human verification.",
-    )
+    upgrade_v5.add_argument("--labels", required=True, help="One label, a labels tree, or a project containing labels/.")
+    upgrade_v5.add_argument("--review-map", default="", help="Optional yoyo_dataset_review_v3 map to rebind after writes.")
+    upgrade_v5.add_argument("--dataset-key", default="", help="Review-map dataset key, required with --review-map.")
+    upgrade_v5.add_argument("--dry-run", action="store_true")
     upgrade_v5.set_defaults(func=command_upgrade_v5)
 
     rebase = subparsers.add_parser(

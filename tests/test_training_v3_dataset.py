@@ -12,13 +12,13 @@ from training_v3.evaluate import (
     _detection_recall_from_confusion,
     _json_value,
 )
-from training_v3.prepare_dataset import POSE_ANNOTATION_FIELDS, SOURCE_POLICY, build_training_dataset, discover_annotation_sources
+from training_v3.prepare_dataset import ANNOTATION_SCHEMA_VERSION, SOURCE_POLICY, build_training_dataset, discover_annotation_sources
 from training_v3.orientation_view import build_orientation_view
 
 
 def _annotation(group: str, orientation: str, image_name: str, image_sha256: str) -> dict:
     return {
-        "schema_version": "yoyo_string_annotation_v5_rtmpose",
+        "schema_version": ANNOTATION_SCHEMA_VERSION,
         "source_image": f"../../images/{group}/{image_name}",
         "image_sha256": image_sha256,
         "image_size": [64, 48],
@@ -30,7 +30,6 @@ def _annotation(group: str, orientation: str, image_name: str, image_sha256: str
         "string_polylines_pixel": [[[8, 10], [30, 20], [45, 25]]],
         "string_review_status": "approved",
         "trick_orientation": orientation,
-        "hand_pose": {"source": "rtmpose-m_wholebody_onnx"},
         "quality": {
             "reviews": [
                 {"decision": "approve", "review_scope": ["visible_geometry", "yoyo_bbox"]},
@@ -82,6 +81,7 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                 first["source_policy"],
                 SOURCE_POLICY,
             )
+            self.assertEqual(first["annotation_schema_version"], ANNOTATION_SCHEMA_VERSION)
             self.assertEqual(first["distributions"]["by_source_dataset"]["NYPC1A"]["samples"], 9)
             self.assertEqual(first["distributions"]["by_source_dataset"]["world_final"]["samples"], 9)
             self.assertEqual(first["source_inventory"]["NYPC1A"]["labels_discovered"], 9)
@@ -101,7 +101,8 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(len(list((output / "canonical" / "labels").rglob("*.json"))), 18)
             for label in (output / "canonical" / "labels").rglob("*.json"):
                 annotation = json.loads(label.read_text(encoding="utf-8"))
-                self.assertFalse(POSE_ANNOTATION_FIELDS & set(annotation))
+                self.assertEqual(annotation["schema_version"], ANNOTATION_SCHEMA_VERSION)
+                self.assertNotIn("dataset_management", annotation)
             self.assertEqual(len((output / "canonical" / "index.jsonl").read_text(encoding="utf-8").splitlines()), 18)
             self.assertTrue((output / "detection" / "data.yaml").is_file())
             self.assertTrue((output / "string_segmentation" / "data.yaml").is_file())

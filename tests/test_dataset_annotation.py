@@ -30,6 +30,19 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 self.assertEqual(list_annotation_datasets(), [{"name": "review_set", "path": str(dataset.resolve())}])
 
+    def test_rejects_v4_annotation_schema(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = make_annotation_dataset(root)
+            label_path = dataset / "canonical" / "labels" / key
+            document = json.loads(label_path.read_text(encoding="utf-8"))
+            document["schema_version"] = "agent_yoyo_string_annotation_v4"
+            label_path.write_text(json.dumps(document), encoding="utf-8")
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                self.assertEqual(list_annotation_datasets(), [])
+                with self.assertRaisesRegex(ValueError, "unsupported annotation schema"):
+                    load_annotation_sample(str(dataset), key)
+
     def test_lists_every_annotation_dataset_under_datasets_root(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -178,7 +191,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             review_map = json.loads(review_path.read_text(encoding="utf-8"))
             self.assertNotIn("review_set", review_map["datasets"])
 
-    def test_save_preserves_original_pixel_coordinates_and_updates_1000_space(self):
+    def test_save_preserves_original_pixel_coordinates_and_updates_999_space(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             dataset, key = make_annotation_dataset(root)
@@ -199,9 +212,10 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             annotation = result["annotation"]
             self.assertEqual(annotation["yoyo_bbox_pixel"], [200.0, 25.0, 300.0, 75.0])
             self.assertEqual(annotation["trick_orientation"], "horizontal")
-            self.assertEqual(annotation["yoyo_bbox_2d"], [500.0, 125.0, 750.0, 375.0])
-            self.assertEqual(annotation["string_polylines_2d"][0], [[100.0, 100.0], [500.0, 500.0], [900.0, 900.0]])
+            self.assertEqual(annotation["yoyo_bbox_2d"], [499.5, 124.875, 749.25, 374.625])
+            self.assertEqual(annotation["string_polylines_2d"][0], [[99.9, 99.9], [499.5, 499.5], [899.1, 899.1]])
             self.assertIsNone(annotation["string_mask_polygons_pixel"])
+            self.assertEqual(annotation["string_path"]["paths"][0]["edges"][0]["evidence"], "observed")
             self.assertEqual(annotation["workbench_edits"][-1]["actor"], "tester")
             self.assertIn("trick_orientation", annotation["workbench_edits"][-1]["fields"])
 
