@@ -1,265 +1,41 @@
 # 悠悠球识别与追踪 Pipeline
 
-状态：持续更新，仅追加架构版本。
-
-## 2026-08-03 版本1
+状态：2026-08-08 当前生产架构。历史实验与失效分支不在此文档保留。
 
 ```mermaid
 flowchart TD
-    A[视频帧] --> B[YOLO 悠悠球检测]
-    B --> C[ByteTrack ID 跟踪]
-    A --> D[YOLO Pose 手腕与人体关键点]
-    A --> E[LR-ASPP 绳线语义分割<br/>960x544 / 每帧推理]
-    E --> F[语义中心线与多组件提取]
-    A --> G[颜色 / Hough 线候选]
-    E --> H[候选沿线语义概率门控<br/>mean >= 0.40<br/>P >= 0.10 覆盖率 >= 0.50]
-    G --> H
-    H --> I[语义 + 颜色组件并集]
-    F --> I
-    I --> J[端点桥接候选<br/>距离与切线方向门控]
-    J --> K[连续 2 帧确认后合并]
-    A --> L[Lucas-Kanade 光流传播<br/>前后向误差门控]
-    K --> M[当前观测与光流加权融合]
-    L --> M
-    C --> M
-    D --> N[审核元数据]
-    M --> N
-    N --> O[三分类方向识别]
-    O --> P[视频 / JSONL / 审核图 / run.json]
-```
-
-## 2026-08-04 版本1
-
-```mermaid
-flowchart TD
-    A[视频帧] --> B[YOLO 悠悠球检测]
-    B --> C[ByteTrack ID 跟踪]
-    A --> D[YOLO Pose 手腕与人体关键点]
-    A --> E[LR-ASPP 绳线语义分割<br/>960x544 / 每帧推理]
-    E --> F[语义中心线与多组件提取]
-    A --> G[颜色 / Hough 线候选]
-    E --> H[候选沿线语义概率门控<br/>mean >= 0.40<br/>P >= 0.10 覆盖率 >= 0.50]
-    G --> H
-    H --> I[语义 + 颜色组件并集]
-    F --> I
-    C --> J[最近悠悠球上下文<br/>0.25 s 宽限]
-    J --> K[允许非冷启动语义绳线重建状态]
-    I --> K
-    A --> L[Lucas-Kanade 光流传播<br/>前后向误差门控 / 最多 12 帧]
-    K --> M{当前帧是否有新鲜观测}
-    L --> M
-    M -->|是| N[保留当前语义几何<br/>光流仅记录一致性 / 冲突]
-    M -->|否| O[使用光流传播几何]
-    D --> P[审核元数据]
-    N --> P
-    O --> P
-    P --> Q[三分类方向识别]
-    Q --> R[视频 / JSONL / 审核图 / run.json]
-```
-
-## 2026-08-04 版本2
-
-```mermaid
-flowchart TD
-    A[视频帧] --> B[YOLO 悠悠球检测]
-    B --> C[ByteTrack ID 跟踪]
-    A --> D[YOLO Pose 手腕与人体关键点]
-    A --> E[主 LR-ASPP<br/>960x544 / 每帧推理]
-    A --> F[副 LR-ASPP<br/>960x544 / 每帧推理]
-    E --> G[主语义概率图<br/>阈值原点 0.3985]
-    F --> H[副语义概率图<br/>阈值原点 0.50]
-    G --> I[阈值相对 logit 校准]
-    H --> I
-    I --> J[校准 logit 加权融合<br/>主 0.7 / 副 0.3]
-    J --> K[融合语义概率图<br/>候选阈值 0.50]
-    K --> L[语义中心线与多组件提取]
-    A --> M[颜色 / Hough 线候选]
-    K --> N[候选沿线融合概率门控<br/>mean >= 0.40<br/>P >= 0.10 覆盖率 >= 0.50]
-    M --> N
-    L --> O[语义 + 颜色组件并集]
-    N --> O
-    C --> P[最近悠悠球上下文<br/>0.25 s 宽限]
-    O --> Q[非冷启动语义绳线观测]
-    P --> Q
-    A --> R[Lucas-Kanade 光流传播<br/>前后向误差门控 / 最多 12 帧]
-    Q --> S{当前帧是否有新鲜观测}
-    R --> S
-    S -->|是| T[保留当前观测几何<br/>光流仅记录一致性 / 冲突]
-    S -->|否| U[使用光流传播几何]
-    D --> V[审核元数据]
-    T --> V
-    U --> V
-    V --> W[三分类方向识别]
-    W --> X[视频 / JSONL / 审核图 / run.json]
-```
-
-## 2026-08-05 版本3
-
-图中“观测优先”表示新鲜语义分割几何不会被光流结果直接形变；光流只在没有新鲜观测时作为短时补全，并记录前后向一致性与冲突元数据供审核。
-
-```mermaid
-flowchart TD
-    A[视频帧<br/>保留源分辨率] --> B[YOLO11s 悠悠球常规检测<br/>imgsz 1024 / augment=false]
-    B --> E[常规检测候选]
-    E --> F[可信上一帧框 + 置信度联合选择<br/>多悠悠球时优先时间连续性]
-    F --> G[ByteTrack 稳定 track id]
-
-    A --> H[YOLO Pose<br/>人体与手腕关键点]
-    G --> I[悠悠球上下文<br/>最近可信框 / 0.25 s 宽限]
-    H --> J[时间连续的人体身份选择]
-
-    A --> K[默认主 LR-ASPP<br/>960x544]
-    A --> L[固定副 LR-ASPP<br/>960x544]
-    A --> KA[弱域主 LR-ASPP<br/>常驻 / 默认不推理]
-    K --> M[当前主概率图<br/>默认阈值原点 0.3985]
-    KA --> M
-    L --> N[副概率图<br/>阈值原点 0.50]
-    M --> O[相对阈值 logit 校准]
-    N --> O
-    O --> P[默认主 0.7 / 副 0.3 加权融合<br/>弱域主 0.5 / 副 0.5<br/>候选阈值 0.50]
-    F --> Q[语义 mask 观测<br/>中心线 / 多组件提取]
-    J --> Q
-    P --> Q
-    A --> R[饱和色 HSV / Hough 候选]
-    A --> RB[低饱和亮脊 / Hough 后备候选<br/>仅在饱和色候选失败后执行]
-    P --> S[沿线概率门控<br/>饱和色与 adaptive 亮脊 mean >= 0.40<br/>普通域亮脊 mean >= 0.70<br/>P >= 0.10 覆盖率 >= 0.50]
-    R --> S
-    RB --> S
-    S --> T[语义 + 颜色组件并集<br/>review-only]
-    Q --> T
-    T --> GA[最近 12 次语义观测门控<br/>饱和色通过=0 / 亮脊不计颜色成功<br/>mean conf&lt;0.82 / mean distance ratio&gt;0.018]
-    GA --> GB{联合条件满足?}
-    GB -->|否| K
-    GB -->|是| GC[记录触发帧<br/>下一帧单向切换弱域主]
-    GC --> KA
-
-    T --> U{当前帧有新鲜绳线观测?}
-    V[上一帧绳线 + 灰度帧] --> W[Lucas-Kanade 光流<br/>ROI / 全帧回退<br/>前后向误差 <= 4 px]
-    W --> U
-    U -->|是| X[保留新鲜观测几何<br/>记录 flow 一致性 / 冲突]
-    U -->|否| Y[使用光流传播几何<br/>最多 12 帧]
-    X --> Z[绳线状态与审核元数据]
-    Y --> Z
-    Z --> V
-
-    F --> AA[方向 ROI：悠悠球 + 手腕 + 绳线<br/>方形 union crop]
-    J --> AA
-    Z --> AA
-    AA --> AB[三分类方向模型<br/>每秒 5 帧 / imgsz 320]
-    AB --> AC[跨帧携带最近方向结果<br/>记录 carried / error]
-
-    G --> AD[帧级记录]
-    H --> AD
-    Z --> AD
-    AC --> AD
-    AD --> AE[tracked.mp4<br/>frames.jsonl<br/>审核图 / run.json]
-```
-
-## 2026-08-06 版本4
-
-```mermaid
-flowchart TD
-    A[视频帧] --> B[YOLO11s 悠悠球检测]
+    A[视频帧] --> B[YOLO11s 悠悠球检测<br/>imgsz 1024]
     B --> C[ByteTrack ID 跟踪]
 
-    A --> D[RTMPose-m WholeBody<br/>人体与 133 点姿态]
-    D --> E[时间连续的人体选择]
-
-    A --> F[双路 LR-ASPP 绳线分割]
-    F --> G[概率校准、颜色候选门控与中心线提取]
-    G --> H[观测优先时序与光流短时补全]
-
-    C --> I[仅悠悠球方形 ROI]
-    I --> J[三分类方向模型]
-
-    C --> K[逐帧结果]
-    E --> K
-    H --> K
-    J --> K
-    K --> L[tracked.mp4 / frames.jsonl / run.json]
-```
-
-## 2026-08-07 版本6
-
-```mermaid
-flowchart TD
-    A[视频帧] --> B[YOLO11s 悠悠球检测]
-    B --> C[ByteTrack ID 跟踪]
-
-    C --> K{当前 / 最近悠悠球<br/>或已有绳线轨迹?}
-    K -->|否| J[跳过双 LR-ASPP<br/>输出保持无绳线]
-    K -->|是| V{弱域已激活?}
-    V -->|否| D[常规双路 LR-ASPP<br/>960x544 / alpha 0.30]
-    V -->|是| U[弱域双路 LR-ASPP<br/>1440x816 / alpha 0.50]
-    D --> E[概率校准融合与语义中心线<br/>最小组件 8 输入像素]
-    U --> E
-    A --> L[颜色 ROI]
-    E --> M[p&gt;=0.10 语义支持区<br/>映射并膨胀 31x31]
-    L --> N[语义邻域预筛 Hough]
-    M --> N
-    N --> O[沿线概率门控与组件并集]
-    E --> O
-    O --> S[最近 12 次语义观测]
-    S --> T{颜色通过为 0<br/>mean conf &lt; 0.82<br/>mean distance ratio &gt; 0.018?}
-    T -->|否| W[保持当前模式]
-    T -->|是| X[记录触发<br/>下一帧单向锁定弱域]
-    X -. 状态 .-> V
-    O --> Q{当前帧有新鲜观测?}
-    Q -->|是| F[直接保留当前观测]
-    Q -->|否| R[Lucas-Kanade 前后向光流]
-    R --> P[短时传播几何]
-
-    C --> G[仅悠悠球方形 ROI]
-    G --> H[三分类方向模型]
-
-    A -. 显式开启 .-> I[RTMPose-m WholeBody]
-    I -. 人体与手部审核元数据 .-> J
-
-    C --> J[逐帧结果]
-    F --> J
-    P --> J
-    H --> J
-    J --> K[tracked.mp4 / frames.jsonl / run.json]
-```
-
-## 2026-08-08 版本7（当前默认 Pipeline）
-
-弱域门控仍在下一帧单向生效。触发窗口的平均语义 confidence 低于 `0.30` 时，
-弱域改为单主模型推理；其他弱域继续使用原双路融合。
-
-```mermaid
-flowchart TD
-    A[视频帧] --> B[YOLO11s 悠悠球检测]
-    B --> C[ByteTrack ID 跟踪]
-
-    C --> D{当前 / 最近悠悠球<br/>或已有绳线轨迹?}
-    D -->|否| E[跳过语义前向<br/>输出保持无绳线]
+    C --> D{存在当前/最近悠悠球<br/>或已有绳线轨迹?}
+    D -->|否| E[跳过语义前向]
     D -->|是| F{弱域已激活?}
-    F -->|否| G[常规双路 LR-ASPP<br/>960x544 / alpha 0.30]
-    F -->|是| H{触发窗口 mean conf &lt; 0.30?}
-    H -->|否| I[弱域双路 LR-ASPP<br/>1440x816 / alpha 0.50]
-    H -->|是| J[弱域单主 LR-ASPP<br/>1440x816 / threshold 0.55]
-    G --> K[校准概率与语义中心线<br/>最多 8 个组件]
-    I --> K
-    J --> L[语义中心线<br/>最多 2 个组件]
+    F -->|否| G[普通域双 LR-ASPP<br/>960x544 / alpha 0.30]
+    F -->|是| H{触发窗口 mean confidence}
+    H -->|小于 0.30| I[弱域单主 LR-ASPP<br/>1440x816 / threshold 0.55<br/>最多 2 组件]
+    H -->|0.30 到 0.74| J[弱域双 LR-ASPP<br/>1440x816 / alpha 0.50<br/>主校准原点 0.32]
+    H -->|大于等于 0.74| K[弱域双 LR-ASPP<br/>1440x816 / alpha 0.50<br/>主原生校准 0.2991]
 
-    A --> M[语义邻域预筛颜色 / Hough]
-    K --> N[沿线概率门控与组件并集]
-    L --> N
+    G --> L[校准概率与语义中心线]
+    I --> L
+    J --> L
+    K --> L
+    A --> M[语义支持邻域内<br/>饱和色/亮脊 Hough]
+    L --> N[沿线概率门控与组件并集]
     M --> N
     N --> O[最近 12 次语义观测]
-    O --> P{颜色通过为 0<br/>mean conf &lt; 0.82<br/>mean distance ratio &gt; 0.018?}
-    P -->|否| Q[保持当前模式]
-    P -->|是| R[记录触发与置信度分层<br/>下一帧单向锁定]
+    O --> P{颜色通过为 0<br/>mean confidence 小于 0.82<br/>mean distance ratio 大于 0.018?}
+    P -->|否| Q[保持普通域]
+    P -->|是| R[记录置信度分层<br/>下一帧单向锁定弱域]
     R -. 状态 .-> F
 
     N --> S{当前帧有新鲜观测?}
-    S -->|是| T[直接保留当前观测]
-    S -->|否| U[Lucas-Kanade 前后向光流<br/>短时传播几何]
+    S -->|是| T[直接保留当前几何]
+    S -->|否| U[Lucas-Kanade 前后向光流<br/>最多短时传播 12 帧]
 
     C --> V[仅悠悠球方形 ROI]
-    V --> W[三分类方向模型]
-    A -. 显式开启 .-> X[RTMPose-m WholeBody<br/>审核元数据]
+    V --> W[三分类方向模型<br/>5/25 FPS 自适应采样<br/>EMA 与切换滞回]
+    A -. 显式开启 .-> X[RTMPose-m WholeBody<br/>仅审核元数据]
 
     C --> Y[逐帧结果]
     T --> Y
@@ -268,3 +44,5 @@ flowchart TD
     X -.-> Y
     Y --> Z[tracked.mp4 / frames.jsonl / run.json]
 ```
+
+弱域门控在触发帧完成统计，从下一帧生效。自适应双路预测器和 CUDA Graph 仅在确定需要双路分支后创建；超弱单主分支不会承担这部分初始化和推理开销。Workbench 默认读取 `config.yaml` 中的同一候选权重与阈值策略。

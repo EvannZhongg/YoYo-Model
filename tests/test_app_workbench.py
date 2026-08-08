@@ -333,6 +333,14 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIsNone(kwargs["string_adaptive_weights_path"])
         self.assertEqual(kwargs["string_adaptive_ensemble_alpha"], 0.0)
         self.assertEqual(
+            kwargs["string_adaptive_threshold"],
+            TRACKING_CONFIG.string_adaptive_threshold,
+        )
+        self.assertEqual(
+            kwargs["string_adaptive_threshold_max_mean_confidence"],
+            TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
+        )
+        self.assertEqual(
             kwargs["string_adaptive_inference_scale"],
             TRACKING_CONFIG.string_adaptive_inference_scale,
         )
@@ -370,6 +378,14 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(
             default_kwargs["string_adaptive_ensemble_alpha"],
             TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_threshold"],
+            TRACKING_CONFIG.string_adaptive_threshold,
+        )
+        self.assertEqual(
+            default_kwargs["string_adaptive_threshold_max_mean_confidence"],
+            TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
         )
         self.assertEqual(
             default_kwargs["string_adaptive_inference_scale"],

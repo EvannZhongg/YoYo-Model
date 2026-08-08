@@ -169,6 +169,20 @@ class TrackingConfig:
             0.50,
         )
     )
+    string_adaptive_threshold: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_THRESHOLD",
+            "tracking.string_adaptive_threshold",
+            0.32,
+        )
+    )
+    string_adaptive_threshold_max_mean_confidence: float = float(
+        _env_or_config(
+            "TRACKING_STRING_ADAPTIVE_THRESHOLD_MAX_MEAN_CONFIDENCE",
+            "tracking.string_adaptive_threshold_max_mean_confidence",
+            0.74,
+        )
+    )
     string_adaptive_inference_scale: float = float(
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_INFERENCE_SCALE",

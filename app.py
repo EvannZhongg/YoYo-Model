@@ -154,6 +154,10 @@ def run_video_tracking(
                 TRACKING_CONFIG.string_adaptive_ensemble_alpha
                 if use_default_string_ensemble else 0.0
             ),
+            string_adaptive_threshold=TRACKING_CONFIG.string_adaptive_threshold,
+            string_adaptive_threshold_max_mean_confidence=(
+                TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence
+            ),
             string_adaptive_inference_scale=TRACKING_CONFIG.string_adaptive_inference_scale,
             string_adaptive_window_frames=TRACKING_CONFIG.string_adaptive_window_frames,
             string_adaptive_max_color_accepts=TRACKING_CONFIG.string_adaptive_max_color_accepts,

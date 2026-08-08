@@ -159,6 +159,8 @@ def _load_string_model(
     ensemble_candidate_threshold: float = 0.5,
     adaptive_weights_path: str | Path | None = None,
     adaptive_ensemble_alpha: float = 0.0,
+    adaptive_threshold: float = 0.5,
+    adaptive_threshold_max_mean_confidence: float = 1.0,
     adaptive_single_threshold: float = 0.5,
     adaptive_single_max_components: int = 0,
 ):
@@ -227,6 +229,10 @@ def _load_string_model(
                             "adaptive_checkpoint": adaptive_checkpoint,
                             "adaptive_path": str(adaptive_path),
                             "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
+                            "adaptive_threshold": float(adaptive_threshold),
+                            "adaptive_threshold_max_mean_confidence": float(
+                                adaptive_threshold_max_mean_confidence
+                            ),
                             "adaptive_enabled": False,
                             "adaptive_single_enabled": False,
                             "adaptive_single_threshold": float(adaptive_single_threshold),
@@ -243,13 +249,7 @@ def _load_string_model(
                     bundle["ensemble_candidate_threshold"],
                 )
                 if bundle["kind"] == "semantic_adaptive_ensemble":
-                    bundle["adaptive_ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
-                        bundle["adaptive_model"],
-                        bundle["ensemble_model"],
-                        bundle["adaptive_ensemble_alpha"],
-                        float(bundle["adaptive_checkpoint"].get("threshold", 0.5)),
-                        bundle["ensemble_candidate_threshold"],
-                    )
+                    bundle["adaptive_ensemble_predictor"] = None
             status = (
                 f"semantic_adaptive_ensemble:{path}+{bundle['ensemble_path']}+{bundle['adaptive_path']}"
                 if bundle["kind"] == "semantic_adaptive_ensemble"
@@ -273,6 +273,37 @@ def _load_string_model(
     except Exception as exc:
         logger.warning("String segmentation model unavailable (%s): %s", path, exc)
         return None, str(exc)
+
+
+def _activate_adaptive_string_route(
+    model: dict[str, Any],
+    gate_mean_confidence: float,
+    single_max_mean_confidence: float,
+) -> tuple[float, bool]:
+    """Select the weak-domain calibration and prepare only the route that will run."""
+    native_threshold = float(model["adaptive_checkpoint"].get("threshold", 0.5))
+    active_threshold = float(
+        model.get("adaptive_threshold", native_threshold)
+        if float(gate_mean_confidence)
+        < float(model.get("adaptive_threshold_max_mean_confidence", 1.0))
+        else native_threshold
+    )
+    single_enabled = bool(
+        float(single_max_mean_confidence) > 0.0
+        and float(gate_mean_confidence) < float(single_max_mean_confidence)
+    )
+    model["adaptive_active_threshold"] = active_threshold
+    model["adaptive_single_enabled"] = single_enabled
+    model["adaptive_ensemble_predictor"] = None
+    if not single_enabled:
+        model["adaptive_ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
+            model["adaptive_model"],
+            model["ensemble_model"],
+            model["adaptive_ensemble_alpha"],
+            active_threshold,
+            model["ensemble_candidate_threshold"],
+        )
+    return active_threshold, single_enabled
 
 
 def _polygon_centerline(polygon: np.ndarray) -> list[list[float]]:
@@ -476,7 +507,11 @@ def _predict_string_model(
             if (meta.target_width, meta.target_height) != (input_width, input_height):
                 raise ValueError("Prepared semantic letterbox has an unexpected size")
             tensor = normalize_image_for_inference(image, model_device)
-        primary_threshold = float(checkpoint.get("threshold", 0.5))
+        primary_threshold = float(
+            model.get("adaptive_active_threshold", checkpoint.get("threshold", 0.5))
+            if adaptive_enabled
+            else checkpoint.get("threshold", 0.5)
+        )
         threshold = max(primary_threshold, float(confidence))
         ensemble_metadata = None
         adaptive_single_metadata = None
@@ -1141,6 +1176,10 @@ def track_video(
     string_ensemble_candidate_threshold: float = TRACKING_CONFIG.string_ensemble_candidate_threshold,
     string_adaptive_weights_path: str | Path | None = TRACKING_CONFIG.string_adaptive_weights_path,
     string_adaptive_ensemble_alpha: float = TRACKING_CONFIG.string_adaptive_ensemble_alpha,
+    string_adaptive_threshold: float = TRACKING_CONFIG.string_adaptive_threshold,
+    string_adaptive_threshold_max_mean_confidence: float = (
+        TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence
+    ),
     string_adaptive_inference_scale: float = TRACKING_CONFIG.string_adaptive_inference_scale,
     string_adaptive_window_frames: int = TRACKING_CONFIG.string_adaptive_window_frames,
     string_adaptive_max_color_accepts: int = TRACKING_CONFIG.string_adaptive_max_color_accepts,
@@ -1196,6 +1235,12 @@ def track_video(
         raise ValueError("string_ensemble_candidate_threshold must be between 0 and 1")
     if not 0.0 <= float(string_adaptive_ensemble_alpha) <= 1.0:
         raise ValueError("string_adaptive_ensemble_alpha must be between 0 and 1")
+    if not 0.0 < float(string_adaptive_threshold) < 1.0:
+        raise ValueError("string_adaptive_threshold must be between 0 and 1")
+    if not 0.0 <= float(string_adaptive_threshold_max_mean_confidence) <= 1.0:
+        raise ValueError(
+            "string_adaptive_threshold_max_mean_confidence must be between 0 and 1"
+        )
     if not 0.5 <= float(string_adaptive_inference_scale) <= 2.0:
         raise ValueError("string_adaptive_inference_scale must be between 0.5 and 2.0")
     if int(string_adaptive_window_frames) < 1 or int(string_adaptive_max_color_accepts) < 0:
@@ -1246,6 +1291,8 @@ def track_video(
         string_ensemble_candidate_threshold,
         string_adaptive_weights_path,
         string_adaptive_ensemble_alpha,
+        string_adaptive_threshold,
+        string_adaptive_threshold_max_mean_confidence,
         string_adaptive_single_threshold,
         string_adaptive_single_max_components,
     )
@@ -1495,10 +1542,13 @@ def track_video(
                 )
                 if triggered:
                     string_adaptive_trigger_frame = frame_index
-                    string_model["adaptive_single_enabled"] = bool(
-                        float(string_adaptive_single_max_mean_confidence) > 0.0
-                        and float(string_adaptive_metrics.get("mean_confidence", 1.0))
-                        < float(string_adaptive_single_max_mean_confidence)
+                    gate_mean_confidence = float(
+                        string_adaptive_metrics.get("mean_confidence", 1.0)
+                    )
+                    _activate_adaptive_string_route(
+                        string_model,
+                        gate_mean_confidence,
+                        string_adaptive_single_max_mean_confidence,
                     )
                     string_adaptive_pending = True
         allow_unanchored_semantic = bool(
@@ -1831,6 +1881,10 @@ def track_video(
             "string_ensemble_candidate_threshold": float(string_ensemble_candidate_threshold),
             "string_adaptive_weights": str(string_adaptive_weights_path or ""),
             "string_adaptive_ensemble_alpha": float(string_adaptive_ensemble_alpha),
+            "string_adaptive_threshold": float(string_adaptive_threshold),
+            "string_adaptive_threshold_max_mean_confidence": float(
+                string_adaptive_threshold_max_mean_confidence
+            ),
             "string_adaptive_inference_scale": float(string_adaptive_inference_scale),
             "string_adaptive_window_frames": int(string_adaptive_window_frames),
             "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
@@ -2042,6 +2096,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.string_adaptive_ensemble_alpha,
     )
     parser.add_argument(
+        "--string-adaptive-threshold",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_threshold,
+    )
+    parser.add_argument(
+        "--string-adaptive-threshold-max-mean-confidence",
+        type=float,
+        default=TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
+    )
+    parser.add_argument(
         "--string-adaptive-inference-scale",
         type=float,
         default=TRACKING_CONFIG.string_adaptive_inference_scale,
@@ -2227,6 +2291,10 @@ def main() -> int:
         string_ensemble_candidate_threshold=args.string_ensemble_candidate_threshold,
         string_adaptive_weights_path=string_adaptive_weights or None,
         string_adaptive_ensemble_alpha=args.string_adaptive_ensemble_alpha,
+        string_adaptive_threshold=args.string_adaptive_threshold,
+        string_adaptive_threshold_max_mean_confidence=(
+            args.string_adaptive_threshold_max_mean_confidence
+        ),
         string_adaptive_inference_scale=args.string_adaptive_inference_scale,
         string_adaptive_window_frames=args.string_adaptive_window_frames,
         string_adaptive_max_color_accepts=args.string_adaptive_max_color_accepts,

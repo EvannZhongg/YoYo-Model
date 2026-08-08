@@ -26,6 +26,7 @@ from video_tracking.review_sheet import (
 )
 from video_tracking.tracker import (
     _AsyncVideoWriter,
+    _activate_adaptive_string_route,
     _augment_semantic_color_observation,
     _draw_frame,
     _can_seed_previous_string,
@@ -37,6 +38,7 @@ from video_tracking.tracker import (
     _should_reacquire_string,
     _should_run_scheduled_string_model,
     _visualization_size,
+    track_video,
 )
 
 
@@ -683,7 +685,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 ]),
             ):
                 model, status = _load_string_model(
-                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5, 0.55, 2,
+                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5,
+                    0.32, 0.74, 0.55, 2,
                 )
 
         self.assertEqual(model["kind"], "semantic_adaptive_ensemble")
@@ -691,15 +694,69 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertFalse(model["adaptive_enabled"])
         self.assertFalse(model["adaptive_single_enabled"])
         self.assertEqual(model["adaptive_ensemble_alpha"], 0.5)
+        self.assertEqual(model["adaptive_threshold"], 0.32)
+        self.assertEqual(model["adaptive_threshold_max_mean_confidence"], 0.74)
         self.assertEqual(model["adaptive_single_threshold"], 0.55)
         self.assertEqual(model["adaptive_single_max_components"], 2)
         self.assertIsInstance(
             model["ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
         )
-        self.assertIsInstance(
-            model["adaptive_ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
-        )
+        self.assertIsNone(model["adaptive_ensemble_predictor"])
         self.assertTrue(status.startswith("semantic_adaptive_ensemble:"))
+
+    @staticmethod
+    def _adaptive_route_model() -> dict:
+        return {
+            "adaptive_model": object(),
+            "adaptive_checkpoint": {"threshold": 0.2991},
+            "ensemble_model": object(),
+            "adaptive_ensemble_alpha": 0.5,
+            "ensemble_candidate_threshold": 0.5,
+            "adaptive_threshold": 0.32,
+            "adaptive_threshold_max_mean_confidence": 0.74,
+        }
+
+    def test_adaptive_route_uses_recalibration_only_below_confidence_gate(self):
+        low_model = self._adaptive_route_model()
+        high_model = self._adaptive_route_model()
+        predictors = [Mock(), Mock()]
+        with patch(
+            "video_tracking.tracker.PreparedCalibratedEnsemblePredictor",
+            side_effect=predictors,
+        ) as predictor_type:
+            low_route = _activate_adaptive_string_route(low_model, 0.663708, 0.30)
+            high_route = _activate_adaptive_string_route(high_model, 0.767642, 0.30)
+
+        self.assertEqual(low_route, (0.32, False))
+        self.assertEqual(high_route, (0.2991, False))
+        self.assertIs(low_model["adaptive_ensemble_predictor"], predictors[0])
+        self.assertIs(high_model["adaptive_ensemble_predictor"], predictors[1])
+        self.assertEqual(predictor_type.call_args_list[0].args[3], 0.32)
+        self.assertEqual(predictor_type.call_args_list[1].args[3], 0.2991)
+
+    def test_ultraweak_route_does_not_build_adaptive_ensemble(self):
+        model = self._adaptive_route_model()
+        with patch(
+            "video_tracking.tracker.PreparedCalibratedEnsemblePredictor"
+        ) as predictor_type:
+            route = _activate_adaptive_string_route(model, 0.205067, 0.30)
+
+        self.assertEqual(route, (0.32, True))
+        self.assertTrue(model["adaptive_single_enabled"])
+        self.assertIsNone(model["adaptive_ensemble_predictor"])
+        predictor_type.assert_not_called()
+
+    def test_track_video_rejects_invalid_adaptive_calibration(self):
+        for name, value, message in (
+            ("string_adaptive_threshold", 1.0, "string_adaptive_threshold"),
+            (
+                "string_adaptive_threshold_max_mean_confidence",
+                1.1,
+                "string_adaptive_threshold_max_mean_confidence",
+            ),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
+                track_video("missing.mp4", "missing.pt", **{name: value})
 
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)

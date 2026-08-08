@@ -1,8 +1,8 @@
 {
-  "schema_version": "yoyo_semantic_adaptive_candidate_v3",
+  "schema_version": "yoyo_semantic_adaptive_candidate_v4",
   "task": "semantic_string_segmentation_and_consecutive_tracking",
   "created_at_utc": "2026-08-07T05:50:00Z",
-  "runtime_policy_updated_at_utc": "2026-08-07T20:42:30Z",
+  "runtime_policy_updated_at_utc": "2026-08-08T05:45:19Z",
   "candidate_id": "yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1",
   "dataset_manifest_sha256": "42086e82249dd8386f551a51eb621fd6023e82a40e4b7e1adbbc2a7ee533851a",
   "models": {
@@ -37,6 +37,14 @@
     "adaptive_ensemble_alpha": 0.5,
     "adaptive_inference_scale": 1.5,
     "secondary_candidate_threshold": 0.5,
+    "adaptive_primary_calibration": {
+      "low_confidence_threshold_origin": 0.32,
+      "maximum_triggered_gate_mean_confidence": 0.74,
+      "higher_confidence_threshold_origin": 0.2991,
+      "higher_confidence_source": "adaptive checkpoint validation threshold",
+      "transition": "latched_with_adaptive_gate_for_the_next_frame",
+      "neural_forwards_added": 0
+    },
     "bright_line_augmentation": {
       "enabled": true,
       "proposal_order": ["saturated_hsv", "low_saturation_bright_ridge_fallback"],
@@ -64,7 +72,8 @@
       "normal_and_weak_ensemble": 2,
       "ultraweak_single_primary": 1
     },
-    "resident_models": 3
+    "resident_models": 3,
+    "adaptive_ensemble_predictor_initialization": "after_gate_and_route_selection"
   },
   "canonical_test": {
     "sample_count": 65,
@@ -75,21 +84,32 @@
   "consecutive_evaluation": {
     "dataset": "datasets/1Ayoyo_consecutive",
     "frame_count": 757,
-    "baseline": {"precision_at_8px": 0.705401, "recall_at_8px": 0.438289, "f1_at_8px": 0.540653, "chamfer_mean_px": 99.8237, "hd95_mean_px": 196.3837},
-    "candidate": {"precision_at_8px": 0.706441, "recall_at_8px": 0.441152, "f1_at_8px": 0.543133, "chamfer_mean_px": 88.4406, "hd95_mean_px": 195.7562},
+    "baseline": {"precision_at_8px": 0.706441, "recall_at_8px": 0.441152, "f1_at_8px": 0.543133, "chamfer_mean_px": 88.4406, "hd95_mean_px": 195.7562},
+    "candidate": {"precision_at_8px": 0.711532, "recall_at_8px": 0.443424, "f1_at_8px": 0.546359, "chamfer_mean_px": 88.2903, "hd95_mean_px": 195.6766},
     "weak_domain_groups": [
-      {"frames": 67, "gate_mean_confidence": 0.663708, "single_primary": false, "baseline_f1_at_8px": 0.405558, "candidate_f1_at_8px": 0.405558},
-      {"frames": 120, "gate_mean_confidence": 0.736225, "single_primary": false, "baseline_f1_at_8px": 0.514192, "candidate_f1_at_8px": 0.514192},
-      {"frames": 100, "frame_range": "4200-4299", "gate_mean_confidence": 0.205067, "single_primary": true, "baseline_precision_at_8px": 0.318856, "candidate_precision_at_8px": 0.449351, "baseline_recall_at_8px": 0.077319, "candidate_recall_at_8px": 0.128170, "baseline_f1_at_8px": 0.124459, "candidate_f1_at_8px": 0.199450, "baseline_chamfer_mean_px": 532.2312, "candidate_chamfer_mean_px": 446.0609, "baseline_hd95_mean_px": 742.1346, "candidate_hd95_mean_px": 737.3849, "baseline_presence_f1": 0.767296, "candidate_presence_f1": 0.868571, "baseline_zero_prediction_frames": 37, "candidate_zero_prediction_frames": 21}
+      {"frames": 67, "gate_mean_confidence": 0.663708, "single_primary": false, "threshold_origin": 0.32, "baseline_precision_at_8px": 0.753447, "candidate_precision_at_8px": 0.765255, "baseline_recall_at_8px": 0.277451, "candidate_recall_at_8px": 0.282884, "baseline_f1_at_8px": 0.405558, "candidate_f1_at_8px": 0.413072, "baseline_chamfer_mean_px": 65.4543, "candidate_chamfer_mean_px": 64.7856, "baseline_hd95_mean_px": 203.4791, "candidate_hd95_mean_px": 202.6353},
+      {"frames": 120, "gate_mean_confidence": 0.736225, "single_primary": false, "threshold_origin": 0.32, "baseline_precision_at_8px": 0.702356, "candidate_precision_at_8px": 0.726775, "baseline_recall_at_8px": 0.405545, "candidate_recall_at_8px": 0.413123, "baseline_f1_at_8px": 0.514192, "candidate_f1_at_8px": 0.526797, "baseline_chamfer_mean_px": 24.6535, "candidate_chamfer_mean_px": 24.0786, "baseline_hd95_mean_px": 83.6003, "candidate_hd95_mean_px": 83.5692},
+      {"frames": 100, "frame_range": "4200-4299", "gate_mean_confidence": 0.205067, "single_primary": true, "candidate_precision_at_8px": 0.449351, "candidate_recall_at_8px": 0.128170, "candidate_f1_at_8px": 0.199450, "candidate_chamfer_mean_px": 446.0609, "candidate_hd95_mean_px": 737.3849, "candidate_presence_f1": 0.868571, "candidate_zero_prediction_frames": 21},
+      {"frames": 105, "source_group": "namdongxun", "gate_mean_confidence": 0.752342, "single_primary": false, "threshold_origin": 0.2991, "candidate_f1_at_8px": 0.655378, "output_unchanged": true}
     ],
-    "unaffected_group_count": 7,
-    "all_groups_non_regressing_precision_recall_f1_chamfer": true,
-    "baseline_evaluation": "runs/experiments/semantic_current_default_bright_757/summary.json",
-    "evaluation": "runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json"
+    "unaffected_group_count": 6,
+    "unaffected_group_frame_jsonl_sha256_equal": true,
+    "all_groups_non_regressing_precision_recall_f1_chamfer_hd95": true,
+    "baseline_evaluation": "runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json",
+    "evaluation": "runs/experiments/round_adaptive_calibration_t032_conf074_production_757/summary.json"
+  },
+  "workbench_runtime_validation": {
+    "source": "videos/some_videos/namdongxun.mp4",
+    "start_frame": 3121,
+    "frame_count": 105,
+    "new_and_baseline_output_mp4_sha256": "4f0e620e18da3cdab68e4f3a768ca8c462aa493f31fe778f183d0bc8a256b914",
+    "baseline_fps_by_order": [7.8194, 8.3076],
+    "candidate_fps_by_order": [8.4648, 9.6136],
+    "interpretation": "identical output and no observed speed regression; sample count is insufficient to claim a stable speedup"
   },
   "promotion": {
     "status": "promoted",
-    "rule": "Promoted because the 757-frame evaluation improves pooled precision, recall, F1, Chamfer, and HD95; seven groups are exactly unchanged; every tracked metric improves in the routed ultraweak group; and that route removes one neural forward pass."
+    "rule": "Promoted because the 757-frame evaluation improves pooled precision, recall, F1, Chamfer, and HD95; both newly routed low-confidence weak groups improve all five geometry metrics; the other six groups are byte-identical; and no model or neural forward is added."
   },
   "limitations": [
     "The adaptive and bright-ridge gates are validated on eight reviewed intervals and must be rechecked as new domains are added.",

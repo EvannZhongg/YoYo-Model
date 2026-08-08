@@ -69,6 +69,11 @@ tracking:
   # Weak-domain strings contain several thin parallel branches. A balanced
   # ensemble at 1.5x input scale preserves them without slowing normal scenes.
   string_adaptive_ensemble_alpha: 0.50
+  # Current validation calibration for the weak-domain primary. The ultraweak
+  # single-model branch keeps its independent 0.55 decision threshold below;
+  # higher-confidence weak domains retain the checkpoint's native calibration.
+  string_adaptive_threshold: 0.32
+  string_adaptive_threshold_max_mean_confidence: 0.74
   string_adaptive_inference_scale: 1.50
   string_adaptive_window_frames: 12
   string_adaptive_max_color_accepts: 0
