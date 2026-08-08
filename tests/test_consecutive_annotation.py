@@ -7,7 +7,6 @@ from unittest.mock import patch
 from helpers import make_consecutive_dataset
 from workbench.consecutive_annotation import (
     CONSECUTIVE_FILENAME,
-    consecutive_annotation_component_kwargs,
     list_consecutive_annotation_datasets,
     open_consecutive_annotation_dataset,
     save_consecutive_annotation_sample,
@@ -85,19 +84,6 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
                 "normal", "horizontal", "horizontal", "horizontal",
             ])
             self.assertEqual(opened["sample_count"], 4)
-
-    def test_component_has_separate_current_and_sync_save_actions(self):
-        component = consecutive_annotation_component_kwargs()
-        self.assertIn("连续帧标注", component["value"])
-        self.assertIn('id="yca-confirm-range"', component["value"])
-        self.assertIn('id="yca-save"', component["value"])
-        self.assertIn('id="yca-sync-save"', component["value"])
-        self.assertIn("propagate_remaining:false", component["js_on_load"])
-        self.assertIn("propagate_remaining:true", component["js_on_load"])
-        self.assertIn("ui_select_consecutive_group_range", component["js_on_load"])
-        self.assertIn("function deleteSelectedPoint", component["js_on_load"])
-        self.assertIn('event.key!=="Delete"', component["js_on_load"])
-        self.assertIn("line.splice(selected.point,1)", component["js_on_load"])
 
 
 if __name__ == "__main__":

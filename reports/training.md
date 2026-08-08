@@ -1,219 +1,157 @@
 # 悠悠球模型与追踪报告：2026-08-08
 
-本报告只覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。所有训练、评估和测试均在 `.venv` 中执行；`runs/` 中保留 checkpoint、manifest 和评估 JSON，模型文件使用 SHA-256 标识。
+本报告只记录当前有效结论，覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。训练与评估均在 `.venv` 中执行；详细 checkpoint、manifest 和逐帧结果保留在 `runs/`。
+
+## 当前默认方案
+
+| 任务 | 当前方案 | 默认行为 |
+| --- | --- | --- |
+| 悠悠球检测 | YOLO11s，约 9.4M 参数 | `imgsz=1024`，常规单次推理 |
+| 绳线分割 | 三权重 LR-ASPP 路由 | 普通域双路融合，一般弱域高分辨率双路，超弱域单主模型 |
+| 绳线追踪 | 语义分割 + 概率门控颜色/Hough + 按需光流 | 新鲜观测优先，仅缺帧时传播 |
+| 方向识别 | 仅悠悠球 ROI 的三分类模型 | 5/25 FPS 自适应采样 + EMA/滞回 |
+| RTMPose | 可选审核分支 | 默认关闭，不参与上述四项主任务输出 |
+
+Workbench 默认模型和参数与 `config.yaml`、`config.py` 一致。
 
 ## 悠悠球检测
 
-当前生产权重：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt`。
+生产权重：
 
-- 权重 SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`；YOLO11s，约 9.4M 参数。
-- 当前扩展 test（65 张、57 个正样本）重评估为 Precision `0.9522`、Recall `0.8596`、mAP50 `0.9415`、mAP50-95 `0.5425`，固定 yoyo recall `0.8772`；结果位于候选目录的 `test_metrics_external_14e51d6c595f.json`。原生 60 张 test 的 mAP50-95 为 `0.5411`，扩展后保持稳定。
-- Workbench 默认输入尺寸为 `1024`。候选在 1280 的单图推理约 `12.1 ms`，降到 1024 约 `8.9 ms`；1024 test 仍为 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`，仍超过旧生产模型。
-- 1024 常规推理在 454 帧五段连续审核区间上 pooled Precision `1.0`、Recall `0.990544`、F1 `0.995249`、mean IoU `0.837197`，detector-only 汇总速度约 `5.9737 FPS`。
-- 当前 YOLO11s 的五段严格 A/B 中，低置信度 TTA 共尝试 41 帧、接受 9 帧，只净增 1 个 TP，却引入 3 个 FP；pooled Precision/Recall/F1 均为 `0.992908`，速度降到 `5.7466 FPS`。其 F1 和速度均低于常规推理，运行时 TTA 组件、配置、CLI 和元数据字段已全部移除。
-- 训练运行：`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/run_manifest.json`；最佳 epoch `16`，训练因 15 epoch 无改善于 epoch `31` 早停。`config.yaml`、`config.py` 和 Workbench 视频测试均已切换到该模型与 1024 输入。
+`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt`
 
-当前 detector-only 连续帧复验（reviewed yoyo box）：
+SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`。
 
-| sequence | Recall | F1 | mean IoU | p95 center error | FPS |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 周博文，72 帧 | 0.9722 | 0.9859 | 0.8303 | 9.75 px | 2.35 |
-| 唐浩翔，100 帧 | 1.0000 | 1.0000 | 0.8350 | 7.42 px | 7.68 |
-| DSCF7145，95 帧 | 1.0000 | 1.0000 | 0.8518 | 9.18 px | 7.83 |
-| 池高宇，67 帧 | 0.9851 | 0.9925 | 0.8473 | 28.21 px | 8.47 |
-| 池高宇前场，120 帧 | 0.9917 | 0.9958 | 0.8297 | 9.00 px | 9.72 |
-| 五段 pooled | **0.9905** | **0.9952** | **0.8372** | - | **5.97** |
+65 张扩展 test（57 个正样本）的最终结果：Precision `0.9522`、Recall `0.8596`、mAP50 `0.9415`、mAP50-95 `0.5425`。1024 输入下 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`；单图推理约 `8.9 ms`，因此生产输入由 1280 降为 1024。
+
+454 帧、五段 reviewed 连续区间的 detector-only 结果为：
+
+| 指标 | 结果 |
+| --- | ---: |
+| Precision / Recall / F1 | `1.000000 / 0.990544 / 0.995249` |
+| Mean IoU | `0.837197` |
+| Detector-only 吞吐 | `5.9737 FPS` |
+
+运行时低置信 TTA 已移除：它只净增 1 个 TP，却引入 3 个 FP，并将速度降至 `5.7466 FPS`。训练 manifest 位于候选目录，最佳 epoch 为 16。
 
 ## 绳线分割
 
-当前生产候选：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/`。
+生产候选：
 
-该候选为自包含的三权重 LR-ASPP 路由：普通域与一般弱域使用双路概率融合，门控识别出的超低置信弱域只使用弱域主模型：
+`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/`
 
-- 主权重：`weights/primary.pt`，SHA-256 `72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3`。
-- 副权重：`weights/secondary.pt`，SHA-256 `640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df`。
-- 弱域主权重：`weights/adaptive.pt`，SHA-256 `ce6e07e9abf689adbd49fdc74702809d24c433cc827e3535ee0970efd16c9a0f`；由原主权重以 `lr=5e-6` 温启动训练，选择 epoch 19。
-- 主模型验证阈值 `0.3985`，副模型校准阈值 `0.50`。
-- 两路概率先转为相对各自阈值原点的 logit，再按主 `0.7`、副 `0.3` 融合，融合候选阈值为 `0.50`。
-- 融合后的概率图继续进入语义中心线、多组件提取和颜色/Hough 几何候选概率门控。双语义模型不使用显式绳色色相标签；颜色/Hough 分支只作为受语义概率约束的补充几何候选。
+| 权重 | 用途 | SHA-256 |
+| --- | --- | --- |
+| `weights/primary.pt` | 普通域主模型 | `72bfa24275261248f69ada0325f81876067909468c30105a8f93c92bada508f3` |
+| `weights/secondary.pt` | 固定副模型 | `640c4ac5b59c2f70aee1c45ebca78774b78983e4251d03d065267576310223df` |
+| `weights/adaptive.pt` | 退化增强弱域主模型 | `ce6e07e9abf689adbd49fdc74702809d24c433cc827e3535ee0970efd16c9a0f` |
 
-当前 canonical test 共 65 张，其中 59 张有绳、6 张无绳：
+普通域以 `960x544` 输入，将主模型和副模型相对各自阈值校准后按 `0.7/0.3` 融合。最近 12 次观测同时满足颜色候选通过数为 0、平均 confidence `<0.82`、平均悠悠球距离比例 `>0.018` 时，从下一帧单向进入弱域：
 
-| pipeline | Pixel Dice | tolerant F1, 3 px | presence F1 | 负图平均误检 |
+- 一般弱域：`1440x816`，弱域主/副模型按 `0.5/0.5` 融合。
+- 超弱域：触发窗口平均 confidence `<0.30` 时，只运行弱域主模型，阈值 `0.55`，最多保留 2 个语义组件。
+
+65 张 canonical test（59 张有绳、6 张无绳）的代表性结果：
+
+| 方案 | Pixel Dice | Tolerant F1@3 | Presence F1 | 负图平均误检 |
 | --- | ---: | ---: | ---: | ---: |
 | 单 LR-ASPP | 0.583385 | 0.859735 | 0.983333 | 14.167 px |
-| 默认校准双模型融合 | 0.592413 | 0.868790 | **0.983333** | 10.0 px |
-| 旧弱域主模型 + 原副模型，alpha=0.50 | 0.598920 | 0.873985 | **0.983333** | 6.167 px |
-| 退化增强弱域主模型 + 原副模型，权重选择实验 alpha=0.80 | **0.599546** | **0.877097** | **0.983333** | **4.333 px** |
+| 普通域校准双路 | 0.592413 | 0.868790 | 0.983333 | 10.000 px |
+| 弱域权重选择结果 | **0.599546** | **0.877097** | 0.983333 | **4.333 px** |
 
-新弱域模型在 330 张训练图上加入分辨率重采样、轻度高斯/线性运动模糊、对比度降低和 JPEG 压缩；验证与 test 保持原图。它与旧权重架构完全相同，不增加参数或每帧前向次数。上表的 `alpha=0.80` 是权重选择阶段的 canonical test 结果，不是当前连续视频运行参数。正式候选 manifest：`runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/run_manifest.json`。
-
-当前 test 重评估：`runs/experiments/semantic_current_2b0cfca_default_ensemble_a030/test_semantic_metrics_external_42086e82249d.json` 和 `runs/experiments/semantic_degradation_aug_test_a08/test_semantic_metrics.json`。
-
-弱域主模型不能全局替换原主模型：直接用于所有连续序列会造成旧域回退。因此默认仍以 `960x544` 使用原主/副模型 `alpha=0.30`；最近 12 次语义观测同时满足颜色概率候选通过数为 0、平均语义 confidence `<0.82`、平均 `distance_to_yoyo_px / frame_diagonal >0.018` 时，才从下一帧单向切换到弱域主模型。一般弱域将主/副输入提高到 `1440x816`，按 `alpha=0.50` 平衡融合；若触发窗口的平均 confidence 进一步低于 `0.30`，则只执行弱域主模型，使用 `0.55` 阈值并最多保留 2 个语义组件。该超低置信分支把每帧 LR-ASPP 前向从 2 次降为 1 次；其余场景仍保持原双路结果。
-
-Workbench 默认选择该候选主权重时自动启用配套副权重和弱域主权重；手动选择其他绳线模型时两者均关闭，避免混用不匹配 checkpoint。
-
-真实 4K 30 帧按基线、候选、候选、基线顺序复验：基线 tracking loop 为 `6.1157/5.9688 s`，候选为 `6.1052/6.5805 s`；中位数 `6.04225 -> 6.34285 s`，吞吐约 `4.965 -> 4.730 FPS`。弱域在第 4757 帧触发并从第 4758 帧启用 `1440x816`，其运行代价约为 `4.7%`；普通场景不触发，不承担高分辨率代价。候选 run manifest 已确认记录 `alpha=0.50` 和 `adaptive_inference_scale=1.50`。证据位于 `runs/experiments/adaptive_scale_runtime_baseline/`、`runs/experiments/adaptive_scale_runtime_baseline_2/`、`runs/experiments/adaptive_scale_runtime_candidate/` 和 `runs/experiments/adaptive_scale_runtime_candidate_2/`。
+“弱域权重选择结果”使用 `alpha=0.80`，只用于 checkpoint 选择；生产连续视频仍使用上面的分域参数。Workbench 仅在选择该候选主权重时自动加载匹配的副权重和弱域权重。
 
 ## 连续视频追踪
 
-连续帧评估使用 reviewed yoyo box 隔离绳线几何，不混入 detector 定位误差。当前 Pipeline 为：普通/一般弱域双模型校准融合、超低置信弱域单主模型、语义邻域预筛选后的概率门控颜色/Hough 补线、观测优先时序、仅在无新鲜观测时执行的 Lucas-Kanade 缺帧传播，以及最近悠悠球上下文宽限。
+评估使用 `datasets/1Ayoyo_consecutive` 的 reviewed yoyo box，以隔离绳线策略和 detector 误差。当前流程包含：分域 LR-ASPP、语义支持邻域内的饱和色/亮脊 Hough、沿线概率门控、观测优先状态更新，以及只在缺少新鲜观测时执行的 Lucas-Kanade 前后向光流。
 
-| sequence | pipeline | F1@8 | Precision@8 | Recall@8 | Chamfer px | mean components |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 周博文，72 帧 | 旧生产单模型 | 0.455690 | 0.661079 | 0.347673 | 37.6674 | 2.3472 |
-| 周博文，72 帧 | 校准双模型融合 | **0.468227** | **0.670969** | **0.359576** | **36.2188** | 2.3472 |
-| 唐浩翔，100 帧 | 旧生产单模型 | 0.649530 | 0.775825 | 0.558597 | 34.8305 | 3.2200 |
-| 唐浩翔，100 帧 | 校准双模型融合 | **0.660163** | **0.786047** | **0.569033** | **33.8345** | 3.2400 |
-| DSCF7145，95 帧 | 旧生产单模型 | 0.402525 | 0.483110 | 0.344981 | 104.5161 | 4.0211 |
-| DSCF7145，95 帧 | 校准双模型融合 | **0.476806** | **0.560270** | **0.414985** | **85.1243** | 3.3368 |
+最终 8 组、757 帧结果：
 
-三组 pooled 结果：
+| 序列 | 帧数 | Precision@8 | Recall@8 | F1@8 | Chamfer | Presence F1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 周博文 | 72 | 0.678371 | 0.512807 | 0.584083 | 18.8245 | 1.000000 |
+| 唐浩翔 | 100 | 0.799403 | 0.619221 | 0.697869 | 23.2869 | 1.000000 |
+| DSCF7145 | 95 | 0.584312 | 0.429525 | 0.495102 | 81.9063 | 1.000000 |
+| 池高宇，67 帧 | 67 | 0.753447 | 0.277451 | 0.405558 | 65.4543 | 1.000000 |
+| 池高宇前场 | 120 | 0.702356 | 0.405545 | 0.514192 | 24.6535 | 1.000000 |
+| 华南赛 | 98 | 0.806788 | 0.606642 | 0.692544 | 11.6624 | 0.983784 |
+| 池高宇 f4200-f4299 | 100 | 0.449351 | 0.128170 | 0.199450 | 446.0609 | 0.868571 |
+| namdongxun | 105 | 0.889906 | 0.518684 | 0.655378 | 22.7764 | 0.990385 |
 
-| pipeline | Precision@8 | Recall@8 | F1@8 | 帧均 Chamfer |
-| --- | ---: | ---: | ---: | ---: |
-| 旧生产单模型 | 0.641857 | 0.435180 | 0.518688 | 60.3900 px |
-| 校准双模型融合 | **0.674939** | **0.470354** | **0.554373** | **52.7267 px** |
+Pooled Precision/Recall/F1@8 为 `0.706441/0.441152/0.543133`，帧均 Chamfer 为 `88.4406 px`。最终结果位于：
 
-周博文和唐浩翔未参与副模型训练，是连续视频晋升的独立证据。DSCF7145 参与过副模型训练，仅作为已审核序列上的行为检查。
+`runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json`
 
-正式连续评估：`runs/experiments/semantic_calibrated_ensemble_a30_temporal_all/summary.json`。
+### 关键消融
 
-当前连续集扩展为八组 757 帧。`池高宇-fef6c7bcb0--run-00004200-00004349` 的 `f4200-f4299` 共 100 帧全部为 `string_review_status=approved`、`bbox_review_status=reviewed`；训练视图只包含该区间之后的 `f4336/f4345/f4349` 三张锚点，因此这 100 帧不参与训练。最新数据重建另加入 `namdongxun-72f4a04fb5--run-00003121-00003270` 的 105 帧；该 source group 存在于训练 split，因此只作为当前行为检查，不作为独立晋升证据。
+低饱和亮脊补线是弱场景的主要几何增益。加入亮脊前后，7 组 652 帧 pooled Precision/Recall/F1@8 从 `0.676094/0.382865/0.488881` 提升至 `0.697974/0.434477/0.535570`，帧均 Chamfer 从 `92.1143` 降至 `86.3637 px`；七组均无指标回退。
 
-该片段的基线 F1@8/Recall@8 仅 `0.101836/0.063694`，37 帧完全无绳线预测。96 个有绳真值帧平均有 `2.95` 个组件；真值线像素的 HSV 饱和度中位数均值约 `49.1`，约 76% 满足 `S<70,V>=120`，而旧颜色分支要求 `S>=70`。局部 11x11 top-hat 在线上中位响应约 `7`、邻域中位约 `2`，确认主要域差异是低饱和亮绳而非悠悠球定位。
+超弱单模型路由只命中 `池高宇 f4200-f4299`，其他七组严格不变。该组变化如下：
 
-当前颜色几何改为全局双路：先执行原饱和色 Hough 候选；只有它缺失或未通过语义概率门控时，才执行低饱和亮脊联合候选。普通域的亮脊语义均值门槛为 `0.70`；12 帧门控确认进入低置信远距离域后沿用 `0.40`。亮脊候选不计作“饱和颜色成功”，因此不会错误阻止 adaptive 主模型切换。两路共享 `p>=0.10` 语义支持 ROI、沿线概率覆盖率 `>=0.50`、Hough 和悠悠球几何，不增加神经网络前向次数。
+| 指标 | 一般弱域双路 | 超弱单主模型 |
+| --- | ---: | ---: |
+| Precision / Recall / F1@8 | 0.318856 / 0.077319 / 0.124459 | **0.449351 / 0.128170 / 0.199450** |
+| Chamfer | 532.2312 px | **446.0609 px** |
+| Presence F1 | 0.767296 | **0.868571** |
+| 零预测帧 | 37 | **21** |
 
-正式 A/B 使用相同权重、reviewed yoyo box 和全部 652 帧；关闭亮脊时七份 `frames.jsonl` 与历史基线 SHA-256 逐组相同：
+该区间仍是当前最弱场景，绝对 Recall@8 只有 `0.128170`。主要限制是语义概率只覆盖局部白绳；后续应增加同域独立训练样本，而不是继续放宽几何门控。
 
-| sequence | baseline P/R/F1@8 | candidate P/R/F1@8 | Chamfer baseline -> candidate |
-| --- | ---: | ---: | ---: |
-| 周博文，72 帧 | 0.668309 / 0.497373 / 0.570308 | **0.678371 / 0.512807 / 0.584083** | 18.9776 -> **18.8245** |
-| 唐浩翔，100 帧 | 0.798462 / 0.617045 / 0.696128 | **0.799403 / 0.619221 / 0.697869** | 23.4401 -> **23.2869** |
-| DSCF7145，95 帧 | 0.584312 / 0.429525 / 0.495102 | **0.584312 / 0.429525 / 0.495102** | 81.9063 -> **81.9063** |
-| 池高宇，67 帧 | 0.654623 / 0.162958 / 0.260956 | **0.753447 / 0.277451 / 0.405558** | 90.0565 -> **65.4543** |
-| 池高宇前场，120 帧 | 0.620159 / 0.264369 / 0.370708 | **0.702356 / 0.405545 / 0.514192** | 35.3013 -> **24.6535** |
-| 华南赛，98 帧 | 0.794035 / 0.511688 / 0.622334 | **0.806788 / 0.606642 / 0.692544** | 16.1745 -> **11.6624** |
-| 池高宇 f4200-f4299，100 帧 | 0.253846 / 0.063694 / 0.101836 | **0.318856 / 0.077319 / 0.124459** | 534.2288 -> **532.2312** |
+### 运行时优化
 
-Pooled Precision/Recall/F1 从 `0.676094/0.382865/0.488881` 提升到 `0.697974/0.434477/0.535570`；帧均 Chamfer 从 `92.1143` 降至 `86.3637 px`，HD95 从 `195.2501` 降至 `183.6507 px`。七组的 Precision、Recall、F1 和 Chamfer 均无回退；DSCF7145 严格不变。正式证据为 `runs/experiments/semantic_bright_ridge_ab_off_strict_652/summary.json` 和 `runs/experiments/semantic_bright_ridge_tiered_gate_final_652/summary.json`。
+已保留的优化都通过了输出或指标等价检查：
 
-对最新八组 757 帧重跑调整前生产流程后，新增 namdongxun 组的 Precision/Recall/F1@8 为 `0.889906/0.518684/0.655378`，Chamfer 为 `22.7764 px`，presence F1 为 `0.990385`；八组 pooled Precision/Recall/F1@8 为 `0.705401/0.438289/0.540653`。前七组结果与上表当前候选逐组一致，证据位于 `runs/experiments/semantic_current_default_bright_757/summary.json`。
+| 优化 | 代表性验证结果 |
+| --- | --- |
+| 按需光流与延迟灰度转换 | 新鲜观测帧不再做无效光流；552 帧指标/几何不变 |
+| GPU 概率校准融合 + CUDA Graph | 静态阈值图不变；552 帧指标不变 |
+| 语义支持 ROI 内执行颜色/Hough | 552 帧 F1/Recall 提升，Chamfer 降低；墙钟约降低 20% |
+| 饱和色/亮脊两轮复用 ROI、支持图、HSV 和 mask | 757 帧逐帧 SHA-256 与全部指标相同 |
+| 检测期间并行 semantic letterbox | 默认 30 帧逐帧与视频 SHA-256 相同 |
+| 异步有界 MP4 写入 | 输出视频和 JSONL 逐字节相同 |
+| 无可消费锚点时跳过语义前向 | 60 帧输出相同，语义前向 `60 -> 0` |
 
-最终超低置信路由在 757 帧上只命中 `池高宇 f4200-f4299`：该组触发窗口 mean confidence 为 `0.205067`，其他三个会进入 adaptive 的组分别为 `0.663708/0.736225/0.752342`，因此继续使用原双路融合且七组指标逐项完全不变。命中组的 Precision/Recall/F1@8 从 `0.318856/0.077319/0.124459` 提升到 `0.449351/0.128170/0.199450`，Chamfer 从 `532.2312` 降至 `446.0609 px`，HD95 从 `742.1346` 降至 `737.3849 px`，presence F1 从 `0.767296` 升至 `0.868571`，零预测帧从 37 降至 21，平均预测组件从 `1.29` 升至 `1.63`。八组 pooled Precision/Recall/F1@8 为 `0.706441/0.441152/0.543133`，帧均 Chamfer 为 `88.4406 px`。两次完整运行除产物路径外指标逐项相同，最终证据位于 `runs/experiments/semantic_adaptive_ultraweak_single_production_verified_757/summary.json`。
-
-Workbench 默认配置在池高宇视频 `84.0 s` 起点完成 30 帧 smoke：悠悠球 30/30 帧存在，弱域于 `f4227` 触发并在 `f4228` 启用，tracking loop 为 `6.7253 s / 4.4608 FPS`；MP4、JSONL、审核总览和逐帧审核图均成功生成。`run.json` 记录亮脊默认开启、普通域门槛 `0.70` 以及当前三份语义权重，证据位于 `runs/experiments/bright_ridge_default_workbench_smoke/`。
-
-最终生产实现又在同一视频 `84.0 s` 起点执行 100 帧开关 A/B：两侧均于 `f4227` 触发、`f4228` 激活，门控 mean confidence 均为 `0.206208`；候选从激活帧开始跳过副模型前向。悠悠球与方向输出逐帧零差异，tracking loop 从 `14.3832 s / 6.9526 FPS` 改善为 `13.8434 s / 7.2236 FPS`。候选 `run.json` 记录单模型阈值 `0.55`、组件上限 2、实际激活状态与激活帧，证据位于 `runs/experiments/adaptive_ultraweak_production_ab_baseline/` 和 `runs/experiments/adaptive_ultraweak_production_ab_candidate/`。
-
-同一视频 `84.0 s` 起点另做 60 帧运行时 A/B，固定默认检测/绳线模型并关闭 pose 与方向分支，每侧独立复测两次：关闭亮脊的 tracking loop 平均 `9.393 s`，开启亮脊平均 `9.068 s`（`-3.46%`）。单次计时存在 GPU/编码波动，因此只据此判定没有可测的大幅减速，不主张亮脊本身会加速；证据位于 `runs/experiments/bright_ridge_runtime_audit_off*/` 和 `runs/experiments/bright_ridge_runtime_audit_on*/`。
-
-池高宇 `f4200-f4299` 仍是最弱区间：最终单主路由把 F1@8 相对提高约 60%，但绝对 Recall 仍只有 `0.128170`。当前剩余瓶颈是语义概率支持本身只覆盖局部白绳，导致部分亮脊候选在沿线概率验收前被裁掉；后续应增加同类场景的独立训练样本，而不是继续放宽几何门控。
-
-推理流程优化：主/副 LR-ASPP 现在共享一次 letterbox、归一化和 GPU 输入张量，只执行两次模型前向。四段 334 帧的四个 `frames.jsonl` SHA-256 与优化前逐字节一致；双模型微基准中位耗时由 `18.88 ms` 降到 `18.20 ms`（约 `3.6%`），没有改变任何绳线指标。Workbench 30 帧 smoke 仍成功生成 MP4/JSONL，优化证据目录为 `runs/experiments/semantic_shared_preprocess_equivalence_temporal_all/` 和 `runs/experiments/workbench_shared_preprocess_smoke/`。
-
-颜色补线的语义参考线重采样已从逐 Hough 候选移到逐帧执行。真实 4K 帧的颜色观测微基准由 `161.6 ms` 降到 `141.8 ms`；454 帧五段评估墙钟时间由 `83.8 s` 降到 `79.4 s`。前三段及池高宇前场的 `frames.jsonl` SHA-256 与优化前一致，先前被同名文件覆盖的 67 帧池高宇区间则验证全部汇总指标对象一致。30 帧无 pose 对照的 JSONL 逐字节一致，跟踪循环由 `17.36 s` 降到 `13.15 s`；证据位于 `runs/experiments/semantic_adaptive_current_454_color_reference_hoist/` 和 `runs/experiments/workbench_color_reference_hoist_smoke/`。
-
-进一步等价优化移除了 Hough 每个候选的临时端点数组和重复范数计算，四个端点距离只计算一次；同时跟踪器和连续评估复用当前帧灰度图，不再在光流估计后重复转换 4K 帧。真实帧 20 次颜色观测微基准的中位耗时由 `172.2 ms` 降到 `161.4 ms`，输出 SHA-256 一致。同机 30 帧无 pose/方向严格 A/B 为 `11.87 s -> 11.35 s`（约 `4.4%`），JSONL 逐字节一致；454 帧完整评估由 `79.4 s` 降到 `75.8 s`（约 `4.5%`），五个 `frames.jsonl` 全部逐字节一致，五份 metrics 除输出目录路径外无差异。证据位于 `runs/experiments/workbench_scalar_gray_ab_baseline/`、`runs/experiments/workbench_scalar_gray_ab_candidate/` 和 `runs/experiments/semantic_adaptive_scalar_gray_reuse_454/`。
-
-最新流程将 Lucas-Kanade 从“每帧先计算、仅在缺观测时采用”改为真正的按需缺帧传播：有新鲜语义/颜色观测时直接保留观测，无观测时才执行前后向光流。扩展后的 6 组 552 帧严格 A/B 中，六组完整指标对象和逐帧绳线几何字段全部一致，墙钟时间由 `108.6057 s` 降至 `85.9556 s`（约 `20.86%`）。仅移除了 88 帧不参与几何输出的观测/光流分歧审核字段；对应的无作用 `fusion_distance` 配置、CLI 参数和 bad-case 分支也已删除。默认 30 帧视频 smoke 的悠悠球、绳线几何和方向输出同样逐帧一致，tracking loop 为 `24.2451 s -> 14.6973 s`（`1.2374 -> 2.0412 FPS`），且所有 MP4/JSONL/审核产物成功生成。证据位于 `runs/experiments/semantic_flow_defer_ab_baseline/`、`runs/experiments/semantic_flow_defer_ab_candidate/` 和 `runs/experiments/flow_defer_default_smoke/`。
-
-在上述按需光流基础上，进一步延迟 4K 灰度转换：有新鲜语义/颜色观测的帧不再执行无用的 `cvtColor`，只在需要缺帧传播时从当前帧和上一帧原图生成灰度。六组 552 帧严格 A/B 的六个 `frames.jsonl` SHA-256 全部逐字节一致；同一设备、同一参数墙钟由 `61.8628 s` 降至 `59.5663 s`（约 `3.71%`），六组 F1@8、Recall@8、Chamfer 和组件数均不变。默认 Workbench 30 帧 smoke 的 JSONL 也与优化前逐字节一致，tracking loop 为 `6.5039 s`（`4.6126 FPS`），完整产物生成成功。证据位于 `runs/experiments/semantic_lazy_gray_ab_baseline/`、`runs/experiments/semantic_lazy_gray_ab_candidate_timed/` 和 `runs/experiments/lazy_gray_default_smoke/`。
-
-双 LR-ASPP 的阈值校准融合现保留在模型设备上执行，只将最终一张融合概率图传回 CPU；原路径会先传回两张概率图，再以 NumPy 逐像素执行 `clip + logit + sigmoid`。65 张 canonical test 的 `p>=0.50`、`p>=0.10` 二值图均零像素变化，全部静态指标一致。六组 552 帧完整 metrics 全部一致，JSONL 仅两处审核浮点值变化（最大绝对差 `1e-4`），没有几何、组件、方法或自适应门控差异；同机墙钟由 `59.4119 s` 降至 `51.3375 s`（约 `13.59%`）。默认 Workbench 30 帧 JSONL 逐字节一致，tracking loop `6.5039 -> 5.8240 s`（`4.6126 -> 5.1511 FPS`）。证据位于 `runs/experiments/semantic_gpu_fusion_ab_baseline/`、`runs/experiments/semantic_gpu_fusion_ab_candidate/` 和 `runs/experiments/gpu_fusion_default_smoke/`。
-
-颜色 mask 现只在语义支持包围盒及形态学所需的 4 像素依赖边界内执行 HSV、阈值与 3×3 开闭运算，再放回原尺寸供 Hough 使用；支持区外在原路径中本来就会被清零。随机图像边界测试逐像素一致，六组 552 帧的六个 JSONL SHA-256 也全部一致；同机墙钟 `52.3525 -> 48.0834 s`（约 `8.15%`）。默认 Workbench 30 帧 JSONL 逐字节一致，tracking loop `5.8240 -> 5.2586 s`（`5.1511 -> 5.7050 FPS`）。证据位于 `runs/experiments/semantic_color_mask_crop_ab_baseline/`、`runs/experiments/semantic_color_mask_crop_ab_candidate/` 和 `runs/experiments/color_mask_crop_default_smoke/`。
-
-饱和色首轮与亮脊后备轮现在在同一帧内复用悠悠球搜索 ROI、语义支持图、HSV 结果和饱和色形态学 mask；两次 Hough 搜索、候选优先级及各自概率门槛保持不变。八组 757 帧的八个 `frames.jsonl` SHA-256 与优化前逐组一致，全部指标对象也逐项相同。池高宇 `84.0 s` 起点的 100 帧默认生产流程按无缓存/缓存/缓存/无缓存顺序 A/B，四次 `frames.jsonl` 与 `tracked.mp4` 均分别逐字节一致；tracking loop 中位数 `13.7619 -> 12.8433 s`（缩短 `6.68%`），中位吞吐 `7.2668 -> 7.7947 FPS`（提升 `7.26%`）。证据位于 `runs/experiments/semantic_color_twopass_cache_candidate_757/` 和 `runs/experiments/color_search_cache_ab_*/`。
-
-固定形状的 CUDA 双模型推理现分别为常规主模型和弱域主模型延迟捕获 CUDA Graph，复用卷积与设备端校准融合的启动序列；CPU、非单张 batch 和显式 `--no-cuda-graph` 评估仍走原 eager 路径。65 张独立 test 的概率图最大绝对差为 `0.0`，`p>=0.10` 与 `p>=0.50` 均零像素变化，全部静态指标一致；中位耗时 `0.641670 -> 0.568256 s`（约 `12.9%`）。六组 552 帧严格 A/B 的六个 JSONL SHA-256 全部逐字节一致，主图和 adaptive 图均实际启用，墙钟 `46.5 -> 44.8 s`（约 `3.66%`）。默认 Workbench 30 帧 JSONL 同样逐字节一致，bad-case、方向和门控汇总不变，tracking loop `5.4534 -> 4.9569 s`，吞吐 `5.5011 -> 6.0522 FPS`（约 `10.0%`）。证据位于 `runs/experiments/semantic_cuda_graph_static_65/`、`runs/experiments/semantic_cuda_graph_ab_baseline_552/`、`runs/experiments/semantic_cuda_graph_ab_candidate_552/`、`runs/experiments/cuda_graph_workbench_ab_baseline/` 和 `runs/experiments/cuda_graph_workbench_ab_candidate/`。
-
-Workbench 的 MP4 编码现由容量为两帧的单后台线程严格按序写入，与下一帧模型推理重叠；结束计时前会等待队列清空并释放同一个 OpenCV writer，CLI 可用 `--no-async-video-write` 回到同步路径。同步/异步按正反顺序各跑一轮默认 30 帧片段，两轮的 `frames.jsonl` 和 `tracked.mp4` 均分别逐字节一致；同步与异步 tracking loop 中位数为 `5.2632 -> 4.7387 s`（约 `9.97%`），中位吞吐 `5.7022 -> 6.3333 FPS`（约 `11.1%`）。队列有界，不会随长视频累积未编码帧。证据位于 `runs/experiments/async_writer_workbench_ab_sync_1/`、`runs/experiments/async_writer_workbench_ab_async_1/`、`runs/experiments/async_writer_workbench_ab_async_2/` 和 `runs/experiments/async_writer_workbench_ab_sync_2/`。
-
-语义模型的 `INTER_AREA` letterbox 现由单工作线程在 YOLO 检测期间提前计算，主线程随后仍执行原 CUDA 传输、归一化、模型前向和全部几何后处理；低 cadence 下的非计划重捕获仍使用同步路径。10 帧真实 4K 微基准中，相同 letterbox 像素逐点一致，检测加缩放的组合中位耗时 `0.2415 -> 0.1308 s`。默认 30 帧片段按正反顺序各跑一轮，两轮 `frames.jsonl` 与 `tracked.mp4` 均逐字节一致；同步与重叠预处理中位 tracking loop 为 `5.0119 -> 4.6846 s`（约 `6.53%`），中位吞吐 `5.9861 -> 6.4053 FPS`（约 `7.0%`）。CLI 可用 `--no-parallel-semantic-preprocess` 执行同步对照。证据位于 `runs/experiments/semantic_preprocess_overlap_ab_sync_1/`、`runs/experiments/semantic_preprocess_overlap_ab_parallel_1/`、`runs/experiments/semantic_preprocess_overlap_ab_parallel_2/` 和 `runs/experiments/semantic_preprocess_overlap_ab_sync_2/`。
-
-语义前向现增加可消费锚点门控：当前帧没有悠悠球、没有可延续绳线且已超出最近悠悠球宽限时，跳过本来必然会被丢弃的双 LR-ASPP 推理；悠悠球出现、短时遮挡或已有绳线轨迹时保持原流程。真实视频开头 60 帧的严格 A/B 中，两侧悠悠球、绳线、方向、bad-case、可见性和质量字段零差异，`tracked.mp4` SHA-256 相同；语义前向从 60 次降到 0 次，tracking loop `4.1395 -> 3.0401 s`，吞吐 `14.4946 -> 19.7359 FPS`。活跃段 30 帧 smoke 中悠悠球 29/30、绳线 30/30，语义前向仍执行 30 次，所有视频、JSONL 和审核产物成功生成。证据位于 `runs/experiments/semantic_unanchored_skip_ab_baseline/`、`runs/experiments/semantic_unanchored_skip_ab_candidate/` 和 `runs/experiments/semantic_unanchored_skip_active_smoke/`。
-
-历史基准曾对追踪结束后的源视频和权重执行 SHA-256，并尝试与审核产物重叠；当前追踪默认已移除这组非必要的整文件读取，`run.json` 只记录输入路径和参数。需要发布归档时，模型注册表可显式使用 `--include-hashes` 恢复摘要生成。原始重叠实验数据仍保留在 `runs/experiments/input_hash_overlap_*`，仅作为历史性能记录。
-
-方向分类现在复用 checkpoint 自带的 torchvision 变换，并直接执行已融合的底层分类网络，避免 Ultralytics `ClassificationPredictor` 的惰性构造、数据源装配和通用结果封装；CLI 可用 `--no-orientation-direct-inference` 回到原 predictor。冻结方向 test 的 65 张图像逐张比较三类六位概率，零差异，推理墙钟 `2.4375 -> 0.6790 s`（约 `3.59x`）；CPU 另抽查 10 张同样零差异。默认 4K 30 帧片段含 13 次实际方向推理，按 predictor、直推、直推、predictor 顺序的完整 A/B 中，端到端中位数 `14.8327 -> 14.3004 s`（约 `3.59%`），tracking loop 中位数 `4.6746 -> 4.5164 s`（约 `3.50%`）。四轮各自的 51 个视频、JSONL 和审核图片产物全部逐字节一致，路径归一化审核索引、历史输入哈希及检测/绳线/方向汇总完全一致。证据位于 `runs/experiments/orientation_direct_ab_predictor_1/`、`runs/experiments/orientation_direct_ab_direct_1/`、`runs/experiments/orientation_direct_ab_direct_2/` 和 `runs/experiments/orientation_direct_ab_predictor_2/`。
-
-颜色/Hough 现先由语义支持邻域裁掉无关饱和舞台线，再进行候选搜索和原有沿线概率门控。同机 552 帧 A/B 的每组 F1@8、Recall@8 均上升、Chamfer 均下降，pooled F1 `0.461017 -> 0.490075`、Recall `0.356170 -> 0.386274`、帧均 Chamfer `50.5553 -> 45.2064 px`；presence 六组不变。墙钟由 `80.5 s` 降至 `64.2 s`（约 `20.25%`）。默认 Workbench 30 帧真实视频中，悠悠球与方向逐帧一致、bad-case 计数一致，tracking loop `14.7743 -> 7.6644 s`（`2.0306 -> 3.9142 FPS`）。证据位于 `runs/experiments/semantic_color_prefilter_d31_ab_baseline_552/`、`runs/experiments/semantic_color_prefilter_d31_552/`、`runs/experiments/color_semantic_prefilter_workbench_ab_baseline/` 和 `runs/experiments/color_semantic_prefilter_workbench_ab_candidate/`。
-
-连续评估产物改用唯一 `group_id` 加短 SHA-256 命名，修复同一 `source_group` 的两个区间互相覆盖 `frames.jsonl`/metrics 的问题；模型推理与指标计算不变。
+最新两轮颜色搜索缓存的 100 帧生产 A/B 中，tracking loop 中位数 `13.7619 -> 12.8433 s`（缩短 `6.68%`），吞吐 `7.2668 -> 7.7947 FPS`；四次 `frames.jsonl` 和 `tracked.mp4` 均分别逐字节一致。证据位于 `runs/experiments/semantic_color_twopass_cache_candidate_757/` 和 `runs/experiments/color_search_cache_ab_*/`。
 
 ## 三分类方向识别
 
-最终视图位于 `datasets/1Ayoyo_dataset/orientation_roi`，view id 为 `orientation_roi_9cd9d9361ab5`。训练/验证/测试分别为 810/65/65 张分类图像，且 manifest 明确声明不依赖手部和绳线输入。
+数据视图：`datasets/1Ayoyo_dataset/orientation`，训练/验证/test 为 810/65/65 张，只使用悠悠球 ROI。
 
-| 方案 | Top-1 | Macro recall | horizontal | normal | not_applicable |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 旧上下文 ROI + 旧模型 | 0.8000 | 0.6562 | 0.5000 | 0.9130 | 0.5556 |
-| 仅悠悠球 ROI + 旧模型零样本 | 0.7846 | 0.7048 | 0.6000 | 0.8478 | 0.6667 |
-| 仅悠悠球 ROI + 最终模型 | **0.9231** | **0.8818** | **0.8000** | **0.9565** | **0.8889** |
-
-最终权重：
+生产权重：
 
 `runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt`
 
-权重 SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。正式 test 结果位于同一 run 的 `test_metrics.json`，数据集 manifest 与 checkpoint 完全匹配。
+SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
 
-### 连续帧方向稳定化
-
-单帧权重和 ROI 保持不变；本轮只优化连续视频中的因果时序推理。评估直接使用 `datasets/1Ayoyo_consecutive` 的 6 组 reviewed 标注、552 帧和 reviewed yoyo box，避免 detector 框误差污染方向策略比较。晋升门槛要求 pooled accuracy、Macro recall、每组 accuracy 均不下降，并且预测切换数不增加。
-
-| 运行路径 | 方向推理次数 | Accuracy | Macro recall | 预测切换 | 超额切换 |
+| 方案 | Top-1 | Macro recall | horizontal | normal | not_applicable |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 旧默认：固定 5 FPS、直接 carry | 57 | 0.882246 | 0.850290 | 13 | 9 |
-| **当前默认：5/25 FPS 自适应 + EMA/滞回** | **117** | **0.942029** | **0.922041** | **5** | **1** |
+| 旧上下文 ROI | 0.8000 | 0.6562 | 0.5000 | 0.9130 | 0.5556 |
+| 最终仅悠悠球 ROI | **0.9231** | **0.8818** | **0.8000** | **0.9565** | **0.8889** |
 
-当前默认使用以下因果策略：
+连续帧采用三类概率 EMA `alpha=0.4`、切换 margin `0.05`、连续 3 次确认；高置信大幅领先时允许快速切换。稳定状态以 5 FPS 推理，不稳定状态提升至 25 FPS，连续 4 次稳定后恢复低频。
 
-- 三类概率 EMA `alpha=0.4`；候选类相对当前类至少领先 `0.05`，连续 3 次确认后切换。
-- 当候选类置信度至少 `0.9` 且相对当前类领先 `0.2` 时允许快速切换。
-- 稳定状态保持 5 FPS；初始化、低于 `0.5` 置信度、原始/稳定标签冲突、待确认或刚切换时升到 25 FPS，连续 4 次稳定后回到 5 FPS。
-- 六组序列 accuracy 逐组均未下降；pooled recall 从 horizontal/normal/not_applicable `0.710059/0.965812/0.875000` 提升为 `0.834320/0.994302/0.937500`。
+6 组、552 帧 reviewed 结果：
 
-真实 detector 框 A/B 使用 DSCF7145 的 95 帧双边界片段。旧路径方向推理 10 次，当前自适应路径 21 次，其中 14 次处于 burst：
+| 策略 | Accuracy | Macro recall | 输出切换 | 超额切换 |
+| --- | ---: | ---: | ---: | ---: |
+| 固定 5 FPS + carry | 0.882246 | 0.850290 | 13 | 9 |
+| **5/25 FPS 自适应 + EMA/滞回** | **0.942029** | **0.922041** | **5** | **1** |
 
-| 路径 | Accuracy | Macro recall | 平均/最大边界延迟 | 输出切换 | tracking loop FPS |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 旧 5 FPS | 0.947368 | 0.935988 | 2.5 / 3 帧 | 2 | 6.9078 |
-| **自适应 EMA/滞回** | **0.968421** | **0.968246** | **1.5 / 2 帧** | **2** | 6.8767 |
+真实 detector 框的 DSCF7145 95 帧 A/B 中，Accuracy `0.947368 -> 0.968421`，平均/最大边界延迟 `2.5/3 -> 1.5/2` 帧，吞吐差约 `0.45%`。证据位于 `runs/experiments/orientation_temporal_adaptive_final_20260807/metrics.json` 和 `runs/experiments/orientation_runtime_ab/`。
 
-两次运行的悠悠球 presence、定位和运动指标完全一致；在关闭 pose 和语义绳模型的同配置 tracking loop 中，自适应方向的吞吐差为 `0.45%`。正式离线证据位于 `runs/experiments/orientation_temporal_adaptive_final_20260807/metrics.json`，真实视频证据位于 `runs/experiments/orientation_runtime_ab/`。Workbench 默认继续使用上述最新方向权重，并自动启用自适应滤波。
+## RTMPose
 
-## RTMPose 运行时评估
-
-30 帧连续视频 smoke test 使用项目内 RTMPose-m WholeBody 与 YOLOX-m ONNX 模型：
-
-- pose 成功：30/30 帧。
-- 双手完整 21 点：60/60 组。
-- 完整 pipeline：1.7081 FPS，17.5632 秒。
-- 旧运行时姿态基线：2.0642 FPS，14.5332 秒。
-
-RTMPose 约慢 17%，但提供 133 点 WholeBody 输出；可视审核确认选中了前景表演者。所有下载模型均位于 `models/rtmpose`，C 盘 RTMLib checkpoint 缓存为空。
-
-切换最终方向权重并统一运行时裁剪后，又执行了 30 帧完整 smoke：pose 30/30 帧成功、双手 30/30 帧完整、方向模型按 cadence 推理 3 次，所有方向记录均使用 `yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct`。本次完整 pipeline 为 1.5526 FPS，产物位于 `runs/experiments/rtmpose_yoyo_only_orientation_final_smoke`。
-
-由于当前方向模型只读取悠悠球 ROI，绳线几何也不使用手部硬门控，RTMPose 不再参与本报告四项主任务的预测。当前代码在同一 30 帧片段上的严格开关 A/B 中，关闭 RTMPose 后悠悠球、绳线、方向以及排除 pose-only 标记后的 bad-case 输出逐帧完全一致；tracking loop 从 `0.9989 FPS` 提升至 `1.6117 FPS`（`+61.35%`，`30.0327 s -> 18.6136 s`）。证据位于 `runs/experiments/pose_default_ab_on/` 和 `runs/experiments/pose_default_ab_off/`。
-
-因此 Workbench 和 CLI 继续完整保留 RTMPose 选项与 `--pose/--no-pose` 开关，但默认配置改为关闭，避免为不参与当前主任务输出的审核元数据支付每帧推理成本。需要人体和手部关键点时可在 Workbench 中显式勾选。不传姿态开关的 30 帧默认 smoke manifest 已确认 `pose_enabled=false`，全部视频、JSONL 和审核产物成功生成；其悠悠球、绳线与方向逐帧哈希均与显式 `--no-pose` 运行一致，证据位于 `runs/experiments/pose_default_off_smoke/`。
+RTMPose-m WholeBody 与 YOLOX-m 仍作为可选人体/手部审核分支保留，但不参与当前检测、绳线或仅悠悠球 ROI 的方向预测。严格开关 A/B 中，关闭 RTMPose 后四项主输出不变，tracking loop 从 `0.9989` 提升至 `1.6117 FPS`，因此 Workbench 与 CLI 默认关闭 pose；需要 133 点姿态审核时可显式启用 `--pose`。
 
 ## 验证状态
 
-- `compileall` 通过。
-- `pytest -q`：163 项全部通过；`pytest.ini` 将项目测试范围固定为 `tests/`。
-- 结构化扫描：两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
+- 上次完整验证：`pytest -q`，164 项通过。
+- `compileall` 与 `git diff --check` 通过。
+- 两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令
 
 ```powershell
-.\.venv\Scripts\python.exe -m training_v3.download_rtmpose_models
-.\.venv\Scripts\python.exe -m training_v3.strip_pose_annotations
-.\.venv\Scripts\python.exe -m training_v3.orientation_view --dataset-dir datasets\1Ayoyo_dataset --clear
 .\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1 --device 0
 .\.venv\Scripts\python.exe -m cli.training.train_semantic --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --project runs\experiments --name semantic_degradation_aug_lr5e6_v1 --epochs 20 --input-width 960 --input-height 544 --batch 2 --lr 0.000005 --architecture lraspp_mobilenet_v3 --initial-weights runs\candidates\yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1\weights\best.pt --degradation-augment --early-stopping-patience 5 --early-stopping-min-epochs 6 --device cuda
 .\.venv\Scripts\python.exe -m cli.tracking.evaluate_orientation --output-dir runs\experiments\orientation_temporal_adaptive_20260807 --device 0

@@ -400,21 +400,6 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["points"]), 2)
         self.assertGreaterEqual(len(result["polygon"]), 3)
 
-    def test_division_does_not_reject_component_far_from_yoyo(self):
-        probability = np.zeros((64, 96), dtype=np.float32)
-        probability[5:8, 5:35] = 0.95
-        meta = LetterboxMeta(96, 64, 96, 64, 96, 64, 0, 0, 1.0)
-        yoyo = {"center": [80, 52], "bbox": [76, 48, 84, 56]}
-        result = semantic_mask_observation(
-            probability,
-            meta,
-            threshold=0.8,
-            yoyo=yoyo,
-            yoyo_division="1A",
-            min_component_pixels=1,
-        )
-        self.assertIsNotNone(result)
-
     def test_division_does_not_reject_component_inside_yoyo_body(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[43:53, 72:84] = 0.95

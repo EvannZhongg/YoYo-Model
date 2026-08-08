@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from common.files import file_revision
 from config import BASE_DIR
 from training_v3.prepare_dataset import POSE_ANNOTATION_FIELDS
 
@@ -33,11 +34,6 @@ CONTENT_DIGEST_FIELDS = (
 )
 DIGEST_REFERENCE_FIELDS = {"before_sha256", "after_sha256", "content_sha256"}
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
-
-
-def _file_revision(path: Path) -> tuple[int, int]:
-    stat = path.stat()
-    return int(stat.st_size), int(stat.st_mtime_ns)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -162,7 +158,7 @@ def strip_pose_fields(
     removed_counts: Counter[str] = Counter()
     anchor_counts: Counter[str] = Counter()
     for path in labels:
-        original_revision = _file_revision(path)
+        original_revision = file_revision(path)
         original_bytes = path.read_bytes()
         annotation = json.loads(original_bytes.decode("utf-8"))
         if not isinstance(annotation, dict):
@@ -183,7 +179,7 @@ def strip_pose_fields(
             temporary.write_bytes(output_bytes)
             temporary.replace(path)
         if file_revision_changes is not None:
-            output_revision = _file_revision(path) if not dry_run else (len(output_bytes), original_revision[1])
+            output_revision = file_revision(path) if not dry_run else (len(output_bytes), original_revision[1])
             file_revision_changes[path] = (original_revision, output_revision)
         updated += 1
     result = {

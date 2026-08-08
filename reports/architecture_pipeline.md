@@ -181,9 +181,6 @@ flowchart TD
 
 ## 2026-08-07 版本6
 
-RTMPose-m WholeBody 保留为 Workbench 和 CLI 可选审核分支，默认关闭。当前悠悠球检测、
-绳线追踪和仅悠悠球 ROI 的方向分类均不依赖姿态输出。
-
 ```mermaid
 flowchart TD
     A[视频帧] --> B[YOLO11s 悠悠球检测]

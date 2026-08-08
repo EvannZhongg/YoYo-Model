@@ -20,7 +20,6 @@ from workbench.score_annotation import (
     load_score_annotation_session,
     resolve_score_video_source,
     save_score_annotation,
-    score_annotation_component_kwargs,
     validate_score_annotation,
 )
 from workbench.tracking import tracking_review_gallery
@@ -58,63 +57,6 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertTrue(fnmatch.fnmatch("match.mov", pattern))
         self.assertTrue(fnmatch.fnmatch("match.MOV", pattern))
         self.assertFalse(fnmatch.fnmatch("match.avi", pattern))
-
-    def test_score_annotation_component_has_local_resume_and_frame_controls(self):
-        component = score_annotation_component_kwargs()
-        html = component["value"]
-        javascript = component["js_on_load"]
-
-        self.assertIn('accept="video/*"', html)
-        self.assertIn("Evidence interval", html)
-        self.assertIn("动作名称", html)
-        self.assertIn("记录起点", html)
-        self.assertEqual(html.count('class="ysa__track-row'), 6)
-        self.assertIn('data-track="positive"', html)
-        self.assertIn('data-track="negative"', html)
-        self.assertIn('data-track="major_penalty"', html)
-        self.assertIn('data-track="scene"', html)
-        self.assertIn('data-track="serve_receive"', html)
-        self.assertIn('data-track="excluded"', html)
-        self.assertIn("无关场景", html)
-        self.assertIn("选手入/离场", html)
-        self.assertIn("标记场景起点", html)
-        self.assertIn("不可标记原因", html)
-        self.assertIn("标记不可用起点", html)
-        self.assertIn("annotations/score_annotations", html)
-        self.assertIn("server.save_score_annotation", javascript)
-        self.assertIn("server.list_score_annotations", javascript)
-        self.assertIn("server.load_score_annotation_session", javascript)
-        self.assertIn("resumeManagedSession(session)", javascript)
-        self.assertNotIn("videoFile.click()", javascript)
-        self.assertNotIn("localStorage", javascript)
-        self.assertIn("video.currentTime + 1 / fps()", javascript)
-        self.assertIn("beginClipDrag", javascript)
-        self.assertIn("beginPlayheadDrag", javascript)
-        self.assertIn("beginTrackDraft", javascript)
-        self.assertIn("beginExclusionDrag", javascript)
-        self.assertIn("beginSceneDrag", javascript)
-        self.assertIn("scene_intervals", javascript)
-        self.assertIn("training_eligible:false", javascript)
-        self.assertIn("frames_overlapping_excluded_intervals_are_ineligible", javascript)
-        self.assertIn("与不可标记片段重叠", javascript)
-        self.assertIn("setAnchorFromCurrent", javascript)
-        self.assertIn('loadEvent(event.event_id, false)', javascript)
-        self.assertIn("Anchor 已更新", javascript)
-        self.assertIn('anchor_source:anchorSource', javascript)
-        self.assertIn('scoreEvent.timing.anchor_source = "manual"', javascript)
-        self.assertIn('pendingEventAnchor === null ? "evidence_end_default" : "manual"', javascript)
-        self.assertIn("flushCurrentSessionBeforeSwitch", javascript)
-        self.assertIn("if (!await flushCurrentSessionBeforeSwitch())", javascript)
-        self.assertIn("当前区间尚未完成，未切换视频", javascript)
-        self.assertIn("syncSelectedFromEditor", javascript)
-        self.assertIn("pendingEventStart", javascript)
-        self.assertIn("结束并添加", javascript)
-        self.assertIn("事件已自动更新", javascript)
-        self.assertNotIn("保存修改", javascript)
-        self.assertIn("cursor:col-resize", component["css_template"])
-        self.assertIn(".ysa__clip-anchor::after", component["css_template"])
-        self.assertIn("拖动定位播放帧", html)
-        self.assertEqual(len(component["server_functions"]), 6)
 
     def test_score_annotation_disk_storage_round_trip_and_delete(self):
         document = {

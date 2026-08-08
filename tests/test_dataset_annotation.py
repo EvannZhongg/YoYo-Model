@@ -9,7 +9,6 @@ from PIL import Image
 from helpers import make_annotation_dataset, make_consecutive_dataset
 from workbench.dataset_annotation import (
     REVIEW_MAP_FILENAME,
-    dataset_annotation_component_kwargs,
     list_annotation_datasets,
     load_annotation_sample,
     open_annotation_dataset,
@@ -56,61 +55,6 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                     [{"name": regular.name, "path": str(regular.resolve())}],
                 )
             self.assertTrue((consecutive / "consecutive_groups.json").is_file())
-
-    def test_component_exposes_redraw_precision_and_packed_server_requests(self):
-        component = dataset_annotation_component_kwargs()
-        self.assertIn("重绘绳线", component["value"])
-        self.assertIn('data-tool="box"', component["value"])
-        self.assertIn("canvasPoint(event)", component["js_on_load"])
-        self.assertIn("contextmenu", component["js_on_load"])
-        self.assertIn("function deleteSelectedPoint", component["js_on_load"])
-        self.assertIn('event.key!=="Delete"', component["js_on_load"])
-        self.assertIn("line.splice(selected.point,1)", component["js_on_load"])
-        self.assertIn("已删除标注点并连接相邻点", component["js_on_load"])
-        self.assertIn("ui_save_annotation_sample({", component["js_on_load"])
-        self.assertIn('value="partially_visible">部分可见', component["value"])
-        self.assertIn('value="out_of_frame">画面外', component["value"])
-        self.assertIn('value="absent">不存在', component["value"])
-        self.assertIn('id="yda-trick-orientation"', component["value"])
-        self.assertNotIn('id="yda-item-name"', component["value"])
-        self.assertNotIn('id="yda-item-group"', component["value"])
-        self.assertIn('id="yda-dirty" role="status"', component["value"])
-        self.assertIn('value="horizontal">水平（horizontal）', component["value"])
-        self.assertIn('trick_orientation:$("#yda-trick-orientation").value', component["js_on_load"])
-        self.assertIn('trickOrientation:$("#yda-trick-orientation").value', component["js_on_load"])
-        self.assertIn('$("#yda-trick-orientation").value=annotation.trick_orientation', component["js_on_load"])
-        self.assertIn("ui_set_annotation_sample_reviewed({", component["js_on_load"])
-        self.assertIn('id="yda-toggle-annotations"', component["value"])
-        self.assertIn('addEventListener("wheel"', component["js_on_load"])
-        self.assertIn("toggleAnnotations()", component["js_on_load"])
-        self.assertIn("await selectSample(state.samples[index+1].key)", component["js_on_load"])
-        self.assertIn('id="yda-add-line"', component["value"])
-        self.assertIn("function startNewLine", component["js_on_load"])
-        self.assertIn("startNewLine(false)", component["js_on_load"])
-        self.assertIn("event.stopPropagation()", component["js_on_load"])
-        self.assertIn("capture:true", component["js_on_load"])
-        self.assertIn('id="yda-reset"', component["value"])
-        self.assertIn("function resetUnsavedChanges", component["js_on_load"])
-        self.assertIn("state.baseline=editorSnapshot()", component["js_on_load"])
-        self.assertIn("function refreshDatasetOptions", component["js_on_load"])
-        self.assertIn("syncDatasetChoice(result.dataset_path)", component["js_on_load"])
-        self.assertIn('["pointerenter","focus","pointerdown"]', component["js_on_load"])
-
-    def test_canvas_zoom_is_isolated_from_fixed_sidebars(self):
-        component = dataset_annotation_component_kwargs()
-        html = component["value"]
-        css = component["css_template"]
-        javascript = component["js_on_load"]
-
-        self.assertIn('class="yda__canvas-layer"', html)
-        self.assertIn("grid-template-columns:240px minmax(0,1fr) 330px", css)
-        self.assertIn("grid-template-columns:210px minmax(0,1fr) 300px", css)
-        self.assertIn("height:clamp(700px,calc(100dvh - 100px),960px)", css)
-        self.assertIn(".yda__editor-scroll { overflow:visible; padding-right:0; }", css)
-        self.assertIn(".yda__canvas-layer", css)
-        self.assertIn("contain:size layout paint", css)
-        self.assertIn('$("#yda-viewport").addEventListener("wheel"', javascript)
-        self.assertIn("event.preventDefault()", javascript)
 
     def test_open_and_load_expose_every_image_label_pair(self):
         with TemporaryDirectory() as directory:

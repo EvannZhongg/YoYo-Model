@@ -4,34 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.files import atomic_write_text, file_revision, read_json_object
 
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
 SELECTION_SCHEMA_VERSION = "reviewed_annotation_selection_v2"
 
 
-def file_revision(path: Path) -> tuple[int, int]:
-    stat = path.stat()
-    return int(stat.st_size), int(stat.st_mtime_ns)
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected a JSON object: {path}")
-    return value
-
-
 def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
@@ -47,9 +32,9 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
     if report_path.exists():
         raise FileExistsError(f"report already exists: {report_path}")
 
-    review_document = read_json(review_map_path)
-    manifest = read_json(manifest_path)
-    selection = read_json(selection_path)
+    review_document = read_json_object(review_map_path)
+    manifest = read_json_object(manifest_path)
+    selection = read_json_object(selection_path)
     if review_document.get("schema_version") != REVIEW_SCHEMA_VERSION:
         raise ValueError(f"unsupported review map schema: {review_document.get('schema_version')!r}")
     if selection.get("schema_version") != SELECTION_SCHEMA_VERSION:
@@ -112,7 +97,7 @@ def import_reviews(args: argparse.Namespace) -> dict[str, Any]:
         key = label_path.relative_to(labels_root).as_posix()
         if key in samples:
             raise ValueError(f"selected review would overwrite an existing review entry: {key}")
-        annotation = read_json(label_path)
+        annotation = read_json_object(label_path)
         review_import = annotation.get("workbench_review_import")
         source_sample_key = str(item.get("source_sample_key") or "")
         if (

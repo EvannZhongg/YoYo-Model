@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -12,30 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.files import file_revision, read_json_object, sha256_file
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 APPROVAL_SCOPES = ("visible_geometry", "yoyo_bbox", "trick_orientation")
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def file_revision(path: Path) -> tuple[int, int]:
-    stat = path.stat()
-    return int(stat.st_size), int(stat.st_mtime_ns)
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"expected a JSON object: {path}")
-    return value
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
@@ -128,7 +108,7 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
     if args.report.exists():
         raise FileExistsError(f"report already exists: {args.report}")
 
-    review_map = read_json(args.review_map)
+    review_map = read_json_object(args.review_map)
     if review_map.get("schema_version") != REVIEW_SCHEMA_VERSION:
         raise ValueError(f"unsupported review map schema: {review_map.get('schema_version')!r}")
     datasets = review_map.get("datasets")
@@ -168,7 +148,7 @@ def export_reviewed(args: argparse.Namespace) -> dict[str, Any]:
             ):
                 raise ValueError(f"review label revision mismatch: {normalized_key}")
 
-            annotation = read_json(label_path)
+            annotation = read_json_object(label_path)
             image_path = resolve_image(canonical_root, label_path, annotation)
             image_digest = sha256_file(image_path)
             declared_image_digest = str(annotation.get("image_sha256") or "").lower()

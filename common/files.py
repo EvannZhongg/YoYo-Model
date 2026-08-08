@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 from collections.abc import Collection
 from pathlib import Path
+from typing import Any
 
 
 def collect_files(root: Path, extensions: Collection[str], *, recursive: bool = True) -> list[Path]:
@@ -30,6 +32,18 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def file_revision(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return int(stat.st_size), int(stat.st_mtime_ns)
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"expected a JSON object: {path}")
+    return value
 
 
 def atomic_write_text(path: Path, payload: str, *, encoding: str = "utf-8") -> None:
