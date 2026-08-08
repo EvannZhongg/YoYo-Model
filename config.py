@@ -63,6 +63,12 @@ def _as_path(value: Any) -> Path:
     return BASE_DIR / path
 
 
+def _as_optional_path(value: Any) -> Path | None:
+    if value is None or not str(value).strip():
+        return None
+    return _as_path(value)
+
+
 @dataclass(frozen=True)
 class DatasetConfig:
     image_input_dir: Path = _as_path(
@@ -135,18 +141,18 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/primary.pt",
+            "runs/candidates/yoyo_unified_b36a77f2e354_semantic_string_mobilenetv3-fpn-single-v1/weights/best.pt",
         )
     )
-    string_ensemble_weights_path: Path = _as_path(
+    string_ensemble_weights_path: Path | None = _as_optional_path(
         _env_or_config(
             "TRACKING_STRING_ENSEMBLE_WEIGHTS_PATH",
             "tracking.string_ensemble_weights_path",
-            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/secondary.pt",
+            "",
         )
     )
     string_ensemble_alpha: float = float(
-        _env_or_config("TRACKING_STRING_ENSEMBLE_ALPHA", "tracking.string_ensemble_alpha", 0.30)
+        _env_or_config("TRACKING_STRING_ENSEMBLE_ALPHA", "tracking.string_ensemble_alpha", 0.0)
     )
     string_ensemble_candidate_threshold: float = float(
         _env_or_config(
@@ -155,18 +161,18 @@ class TrackingConfig:
             0.50,
         )
     )
-    string_adaptive_weights_path: Path = _as_path(
+    string_adaptive_weights_path: Path | None = _as_optional_path(
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_WEIGHTS_PATH",
             "tracking.string_adaptive_weights_path",
-            "runs/candidates/yoyo_unified_42086e82249d_semantic_string_degradation-aug-lr5e6-a80-v1/weights/adaptive.pt",
+            "",
         )
     )
     string_adaptive_ensemble_alpha: float = float(
         _env_or_config(
             "TRACKING_STRING_ADAPTIVE_ENSEMBLE_ALPHA",
             "tracking.string_adaptive_ensemble_alpha",
-            0.50,
+            0.0,
         )
     )
     string_adaptive_threshold: float = float(

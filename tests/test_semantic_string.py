@@ -341,6 +341,21 @@ class SemanticStringTests(unittest.TestCase):
             output = model(torch.zeros((1, 3, 64, 96), dtype=torch.float32))
         self.assertEqual(tuple(output.shape), (1, 1, 64, 96))
 
+    def test_mobilenet_fpn_preserves_spatial_shape_without_downloading_weights(self):
+        model = build_string_model("mobilenet_v3_fpn", base_channels=8, pretrained_backbone=False)
+        model.eval()
+        with torch.inference_mode():
+            output = model(torch.zeros((1, 3, 64, 96), dtype=torch.float32))
+        self.assertEqual(tuple(output.shape), (1, 1, 64, 96))
+
+    def test_mobilenet_fpn_keeps_small_batch_encoder_norms_frozen(self):
+        model = build_string_model("mobilenet_v3_fpn", base_channels=8, pretrained_backbone=False)
+        model.train()
+        encoder_norms = [module for module in model.encoder.modules() if isinstance(module, torch.nn.BatchNorm2d)]
+        self.assertTrue(encoder_norms)
+        self.assertTrue(all(not module.training for module in encoder_norms))
+        self.assertTrue(model.classifier.training)
+
     def test_yolo_polygon_renders_binary_mask(self):
         with tempfile.TemporaryDirectory() as directory:
             label = Path(directory) / "mask.txt"

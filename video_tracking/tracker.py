@@ -1253,8 +1253,11 @@ def track_video(
         raise ValueError("adaptive single-model confidence gate must be between 0 and 1")
     if not 0.0 < float(string_adaptive_single_threshold) < 1.0:
         raise ValueError("adaptive single-model threshold must be between 0 and 1")
-    if int(string_adaptive_single_max_components) < 1:
-        raise ValueError("adaptive single-model component limit must be positive")
+    # Zero disables the optional adaptive single-model component cap.  The
+    # inference path treats non-positive configured caps as the uncapped
+    # default, so the CLI/config default must be accepted.
+    if int(string_adaptive_single_max_components) < 0:
+        raise ValueError("adaptive single-model component limit must be non-negative")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -2264,11 +2267,19 @@ def main() -> int:
     )
     string_ensemble_weights = (
         args.string_ensemble_weights.strip()
-        or (str(TRACKING_CONFIG.string_ensemble_weights_path) if use_default_string_bundle else "")
+        or (
+            str(TRACKING_CONFIG.string_ensemble_weights_path)
+            if use_default_string_bundle and TRACKING_CONFIG.string_ensemble_weights_path is not None
+            else ""
+        )
     )
     string_adaptive_weights = (
         args.string_adaptive_weights.strip()
-        or (str(TRACKING_CONFIG.string_adaptive_weights_path) if use_default_string_bundle else "")
+        or (
+            str(TRACKING_CONFIG.string_adaptive_weights_path)
+            if use_default_string_bundle and TRACKING_CONFIG.string_adaptive_weights_path is not None
+            else ""
+        )
     )
     result = track_video(
         source_video_path=args.video,

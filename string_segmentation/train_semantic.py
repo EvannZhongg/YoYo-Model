@@ -110,14 +110,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-channels", type=int, default=SEMANTIC_STRING_CONFIG.base_channels)
     parser.add_argument(
         "--architecture",
-        choices=["tiny_unet", "lraspp_mobilenet_v3"],
+        choices=["tiny_unet", "lraspp_mobilenet_v3", "mobilenet_v3_fpn"],
         default="tiny_unet",
-        help="Semantic model architecture. LR-ASPP is recommended for the small reviewed dataset.",
+        help="Semantic model architecture.",
     )
     parser.add_argument(
         "--pretrained-backbone",
         action="store_true",
-        help="Initialize the LR-ASPP MobileNetV3 backbone from ImageNet weights.",
+        help="Initialize a MobileNetV3 backbone from ImageNet weights.",
+    )
+    parser.add_argument(
+        "--freeze-backbone-epochs",
+        type=int,
+        default=0,
+        help="Train only the new decoder for this many initial epochs.",
+    )
+    parser.add_argument(
+        "--backbone-lr-multiplier",
+        type=float,
+        default=1.0,
+        help="Learning-rate multiplier for the pretrained encoder after unfreezing.",
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
     parser.add_argument("--hard-negative-weight", type=float, default=0.05)
@@ -146,8 +158,19 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("epochs, input dimensions, and base channels must be positive")
     if args.architecture == "tiny_unet" and args.base_channels < 4:
         raise ValueError("tiny_unet base channels must be at least 4")
-    if args.pretrained_backbone and args.architecture != "lraspp_mobilenet_v3":
-        raise ValueError("--pretrained-backbone is only supported by lraspp_mobilenet_v3")
+    if args.pretrained_backbone and args.architecture not in {
+        "lraspp_mobilenet_v3",
+        "mobilenet_v3_fpn",
+    }:
+        raise ValueError("--pretrained-backbone requires a MobileNetV3 architecture")
+    if args.freeze_backbone_epochs < 0:
+        raise ValueError("freeze-backbone epochs must be non-negative")
+    if not 0.0 < args.backbone_lr_multiplier <= 1.0:
+        raise ValueError("backbone learning-rate multiplier must be in (0, 1]")
+    if (
+        args.freeze_backbone_epochs > 0 or args.backbone_lr_multiplier != 1.0
+    ) and args.architecture != "mobilenet_v3_fpn":
+        raise ValueError("staged backbone optimization is only supported by mobilenet_v3_fpn")
     if args.hard_negative_weight < 0:
         raise ValueError("hard-negative weight must be non-negative")
     if args.negative_sample_weight <= 0:
@@ -256,7 +279,25 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             pretrained_backbone=args.pretrained_backbone,
         ).to(device)
     initialization["lineage"] = _initialization_lineage(initial_weights_path, groups)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-4)
+    if args.architecture == "mobilenet_v3_fpn":
+        backbone_parameters = list(model.encoder.parameters())
+        backbone_parameter_ids = {id(parameter) for parameter in backbone_parameters}
+        decoder_parameters = [
+            parameter for parameter in model.parameters() if id(parameter) not in backbone_parameter_ids
+        ]
+        optimizer = torch.optim.AdamW(
+            [
+                {
+                    "params": backbone_parameters,
+                    "lr": float(args.lr) * float(args.backbone_lr_multiplier),
+                    "name": "backbone",
+                },
+                {"params": decoder_parameters, "lr": float(args.lr), "name": "decoder"},
+            ],
+            weight_decay=1e-4,
+        )
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=float(args.lr), weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs), eta_min=float(args.lr) * 0.05)
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
@@ -270,6 +311,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     stopped_early = False
 
     for epoch in range(1, args.epochs + 1):
+        backbone_frozen = args.architecture == "mobilenet_v3_fpn" and epoch <= args.freeze_backbone_epochs
+        if args.architecture == "mobilenet_v3_fpn":
+            model.encoder.requires_grad_(not backbone_frozen)
         model.train()
         loss_total = focal_total = dice_total = hard_negative_total = 0.0
         batch_count = 0
@@ -298,6 +342,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         row = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
+            "learning_rates": {
+                str(group.get("name", index)): float(group["lr"])
+                for index, group in enumerate(optimizer.param_groups)
+            },
+            "backbone_frozen": backbone_frozen,
             "train_loss": loss_total / max(1, batch_count),
             "train_focal": focal_total / max(1, batch_count),
             "train_dice_loss": dice_total / max(1, batch_count),
@@ -375,6 +424,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
             "negative_sample_weight": float(args.negative_sample_weight),
+            "freeze_backbone_epochs": int(args.freeze_backbone_epochs),
+            "backbone_lr_multiplier": float(args.backbone_lr_multiplier),
             "degradation_augment": bool(args.degradation_augment),
             "early_stopping_patience": int(args.early_stopping_patience),
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),

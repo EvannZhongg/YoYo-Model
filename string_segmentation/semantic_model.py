@@ -99,6 +99,77 @@ class LRASPPString(nn.Module):
         return self.model(value)["out"]
 
 
+class _FPNRefine(nn.Module):
+    def __init__(self, channels: int):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, groups=channels, bias=False),
+            nn.GroupNorm(_group_count(channels), channels),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(channels, channels, 1, bias=False),
+            nn.GroupNorm(_group_count(channels), channels),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        return self.layers(value)
+
+
+class MobileNetV3FPNString(nn.Module):
+    """High-resolution FPN decoder on an ImageNet-pretrained MobileNetV3 encoder."""
+
+    _FEATURE_INDICES = (1, 3, 6, 12, 16)
+    _FEATURE_CHANNELS = (16, 24, 40, 112, 960)
+
+    def __init__(self, decoder_channels: int = 32, pretrained_backbone: bool = False):
+        super().__init__()
+        from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
+
+        backbone_weights = MobileNet_V3_Large_Weights.DEFAULT if pretrained_backbone else None
+        self.encoder = mobilenet_v3_large(weights=backbone_weights).features
+        self.lateral = nn.ModuleList(
+            nn.Sequential(
+                nn.Conv2d(input_channels, decoder_channels, 1, bias=False),
+                nn.GroupNorm(_group_count(decoder_channels), decoder_channels),
+            )
+            for input_channels in self._FEATURE_CHANNELS
+        )
+        self.refine = nn.ModuleList(_FPNRefine(decoder_channels) for _ in range(4))
+        self.classifier = nn.Sequential(
+            _FPNRefine(decoder_channels),
+            nn.Conv2d(decoder_channels, 1, 1),
+        )
+
+    def train(self, mode: bool = True) -> MobileNetV3FPNString:
+        super().train(mode)
+        if mode:
+            for module in self.encoder.modules():
+                if isinstance(module, nn.BatchNorm2d):
+                    module.eval()
+        return self
+
+    def forward(self, value: torch.Tensor) -> torch.Tensor:
+        input_size = value.shape[-2:]
+        features = []
+        selected = set(self._FEATURE_INDICES)
+        for index, layer in enumerate(self.encoder):
+            value = layer(value)
+            if index in selected:
+                features.append(value)
+
+        pyramid = self.lateral[-1](features[-1])
+        for level in range(len(features) - 2, -1, -1):
+            pyramid = nn.functional.interpolate(
+                pyramid,
+                size=features[level].shape[-2:],
+                mode="bilinear",
+                align_corners=False,
+            )
+            pyramid = self.refine[level](pyramid + self.lateral[level](features[level]))
+        logits = self.classifier(pyramid)
+        return nn.functional.interpolate(logits, size=input_size, mode="bilinear", align_corners=False)
+
+
 def build_string_model(
     architecture: str = "tiny_unet",
     base_channels: int = 16,
@@ -109,6 +180,11 @@ def build_string_model(
         return TinyUNet(base_channels=int(base_channels))
     if architecture == "lraspp_mobilenet_v3":
         return LRASPPString(pretrained_backbone=bool(pretrained_backbone))
+    if architecture == "mobilenet_v3_fpn":
+        return MobileNetV3FPNString(
+            decoder_channels=max(16, int(base_channels) * 2),
+            pretrained_backbone=bool(pretrained_backbone),
+        )
     raise ValueError(f"Unsupported semantic string architecture: {architecture}")
 
 

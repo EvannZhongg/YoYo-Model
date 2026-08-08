@@ -758,6 +758,25 @@ class StringTrackerTemporalTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
                 track_video("missing.mp4", "missing.pt", **{name: value})
 
+    def test_track_video_allows_disabled_adaptive_component_cap(self):
+        # Zero is the documented/default value when the adaptive route is off.
+        with self.assertRaisesRegex(FileNotFoundError, "Video file not found"):
+            track_video(
+                "missing.mp4",
+                "missing.pt",
+                string_adaptive_single_max_components=0,
+            )
+
+    def test_track_video_rejects_negative_adaptive_component_cap(self):
+        with self.assertRaisesRegex(
+            ValueError, "adaptive single-model component limit must be non-negative"
+        ):
+            track_video(
+                "missing.mp4",
+                "missing.pt",
+                string_adaptive_single_max_components=-1,
+            )
+
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
         cv2.line(frame, (120, 90), (200, 40), (0, 255, 0), 4)

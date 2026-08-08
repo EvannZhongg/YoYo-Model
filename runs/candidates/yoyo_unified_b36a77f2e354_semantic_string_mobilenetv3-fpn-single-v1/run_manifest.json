@@ -1,0 +1,101 @@
+{
+  "schema_version": "yoyo_semantic_single_candidate_v1",
+  "task": "semantic_string_segmentation_and_consecutive_tracking",
+  "created_at_utc": "2026-08-08T15:20:00Z",
+  "candidate_id": "yoyo_unified_b36a77f2e354_semantic_string_mobilenetv3-fpn-single-v1",
+  "dataset_manifest_sha256": "b36a77f2e3542c01e941ad3b2e0f75609e766e2d70cf1769f8f2e339c41a1299",
+  "model": {
+    "path": "weights/best.pt",
+    "sha256": "8b953763c6102e767d060fc7af7d13dcff353fa8ef5c73d03cdf36ee4dda4468",
+    "architecture": "mobilenet_v3_fpn",
+    "parameters": 3016369,
+    "input_size": [960, 544],
+    "threshold": 0.6471,
+    "selected_epoch": 36
+  },
+  "training": {
+    "run": "runs/experiments/semantic_mobilenetv3_fpn_staged_b16_lr1e3_v3",
+    "initialization": "imagenet_backbone",
+    "epochs": 40,
+    "decoder_learning_rate": 0.001,
+    "backbone_learning_rate_multiplier": 0.05,
+    "freeze_backbone_epochs": 5,
+    "batch": 2,
+    "seed": 20260808,
+    "source_overlap": {"val": [], "test": []}
+  },
+  "canonical_test": {
+    "sample_count": 65,
+    "positive_images": 59,
+    "negative_images": 6,
+    "pixel_dice": 0.713177,
+    "tolerant_f1_at_3px": 0.925824,
+    "presence_f1": 0.983333,
+    "negative_mean_false_positive_pixels": 43.333,
+    "evaluation": "runs/experiments/semantic_mobilenetv3_fpn_staged_b16_lr1e3_v3_test/test_semantic_metrics.json"
+  },
+  "consecutive_evaluation": {
+    "dataset": "datasets/1Ayoyo_consecutive",
+    "frame_count": 757,
+    "baseline": {
+      "models": 3,
+      "precision_at_8px": 0.711532,
+      "recall_at_8px": 0.443424,
+      "f1_at_8px": 0.546359,
+      "chamfer_mean_px": 88.2903,
+      "hd95_mean_px": 195.6766
+    },
+    "candidate": {
+      "models": 1,
+      "precision_at_8px": 0.810104,
+      "recall_at_8px": 0.459328,
+      "f1_at_8px": 0.586252,
+      "chamfer_mean_px": 37.30,
+      "hd95_mean_px": 118.46
+    },
+    "weakest_baseline_group": {
+      "group_id": "池高宇-fef6c7bcb0--run-00004200-00004349",
+      "baseline_f1_at_8px": 0.199450,
+      "candidate_f1_at_8px": 0.470934,
+      "baseline_chamfer_mean_px": 446.0609,
+      "candidate_chamfer_mean_px": 24.3131
+    },
+    "group_regressions": [
+      {
+        "group_id": "DSCF7145-e237bbfb5d--run-00000425-00000524",
+        "f1_at_8px": [0.495102, 0.479661],
+        "chamfer_mean_px": [81.9063, 128.3117]
+      },
+      {
+        "group_id": "NYPC-1A决赛3rd-唐浩翔-dcd382a70e--run-00004700-00004799",
+        "f1_at_8px": [0.697869, 0.703379],
+        "chamfer_mean_px": [23.2869, 33.1537]
+      },
+      {
+        "group_id": "池高宇-fef6c7bcb0--run-00000381-00000500",
+        "f1_at_8px": [0.526797, 0.562186],
+        "chamfer_mean_px": [24.0786, 29.3198]
+      }
+    ],
+    "evaluation": "runs/experiments/semantic_mobilenetv3_fpn_single_production_757/summary.json"
+  },
+  "runtime": {
+    "single_model_forward_ms_960x544": 7.0471,
+    "baseline_two_model_forward_ms_960x544": 8.8503,
+    "workbench_source": "videos/some_videos/namdongxun.mp4",
+    "workbench_frame_count": 105,
+    "baseline_fps": [8.5255, 8.5335],
+    "candidate_fps": [10.0651, 8.8566],
+    "candidate_output_sha256_equal": true,
+    "candidate_output_mp4_sha256": "e40854b86e9651c73e7f027b7e76e441cf4aca8d2ba248b32dfe349ce9125241"
+  },
+  "promotion": {
+    "status": "promoted",
+    "rule": "Promoted because independent-test Dice and tolerant F1 improve substantially; pooled 757-frame precision, recall, F1, Chamfer, and HD95 all improve; the weakest group improves strongly; the runtime uses one model instead of three; and both Workbench A/B orders show no speed regression. Local group regressions are retained because the global gains are large and explicitly measured."
+  },
+  "limitations": [
+    "The six canonical negative images are too few to precisely estimate false-positive frequency; two remain false positives under both the baseline and candidate presence metric.",
+    "DSCF7145 remains a local regression despite large pooled gains and should receive additional independent training annotations.",
+    "Semantic output remains review assistance and never overwrites annotation truth."
+  ]
+}
