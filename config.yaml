@@ -36,12 +36,12 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt"
+  weights_path: "runs/candidates/yoyo_unified_1f05c056cb5d_detection_yolo11s_prod-ft-lr1e5-v1/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7
-  # YOLO11s was selected on the frozen test and five-sequence evaluation. 1024 px
-  # retains the small-target gain while reducing inference cost versus 1280.
+  # YOLO11s was selected on the frozen test and reviewed consecutive frames.
+  # The architecture and 1024 px production input are unchanged.
   imgsz: 1024
   device: ""
   trace_length: 30

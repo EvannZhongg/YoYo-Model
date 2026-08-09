@@ -16,27 +16,28 @@ Workbench 默认模型和参数与 `config.yaml`、`config.py` 一致。
 
 ## 悠悠球检测
 
-生产权重：
+生产权重（本机发布产物，GitHub 提交不包含二进制文件）：
 
-`runs/candidates/yoyo_unified_396ce5fa8e73_detection_yolo11s_s-current-capacity60/weights/best.pt`
+`runs/candidates/yoyo_unified_1f05c056cb5d_detection_yolo11s_prod-ft-lr1e5-v1/weights/best.pt`
 
-SHA-256：`ac76000388bc81f442e860b6aac68487406205f27e89f31aab16e0c52e82f705`。
+SHA-256：`05fe3d46cfc175034b3e3e4e69b6af2cf7596863839cbe91a7bfb792b1f6f894`。部署机器需将该本机权重放在上述路径；仓库只提交 manifest 与指标记录。
 
-65 张扩展 test（57 个正样本）的最终结果：Precision `0.9522`、Recall `0.8596`、mAP50 `0.9415`、mAP50-95 `0.5425`。1024 输入下 mAP50 `0.9240`、mAP50-95 `0.5168`、Recall `0.8269`；单图推理约 `8.9 ms`，因此生产输入由 1280 降为 1024。
+候选从上一生产权重出发，在当前 v5 训练集以 `lr=1e-5` 微调；训练上限 15 epoch，patience 触发后实际完成 7 epoch，最佳 checkpoint 来自 epoch 2。初始化 lineage 与当前 val/test source group 无交集。固定 65 张 test（57 个正样本）、`imgsz=1024` 的同口径对比如下：
 
-454 帧、五段 reviewed 连续区间的 detector-only 结果为：
+| 权重 | Precision | Recall | mAP50 | mAP50-95 |
+| --- | ---: | ---: | ---: | ---: |
+| 旧生产 YOLO11s | 0.994193 | 0.807018 | 0.921067 | 0.512976 |
+| **当前微调 YOLO11s** | **1.000000** | **0.824142** | **0.947232** | **0.551444** |
 
-| 指标 | 结果 |
-| --- | ---: |
-| Precision / Recall / F1 | `1.000000 / 0.990544 / 0.995249` |
-| Mean IoU | `0.837197` |
-| Detector-only 吞吐 | `5.9737 FPS` |
+未参与该微调的 221 张 stride-3 reviewed 连续帧上，Recall `0.859818 -> 0.892425`、mAP50 `0.886691 -> 0.906043`、mAP50-95 `0.592889 -> 0.596493`；模型结构、参数量和生产输入不变。
 
-运行时低置信 TTA 已移除：它只净增 1 个 TP，却引入 3 个 FP，并将速度降至 `5.7466 FPS`。训练 manifest 位于候选目录，最佳 epoch 为 16。
+周博文 72 帧完整 pipeline A/B 只替换检测权重：悠悠球 Presence F1 `0.985915 -> 1.000000`、Mean IoU `0.830264 -> 0.847169`、中心误差 `7.1239 -> 4.8022 px`；更稳定的锚点也使绳线 F1@8 `0.649541 -> 0.664403`、Chamfer `20.2388 -> 17.0302 px`。同架构推理耗时持平，首次真实 pipeline 顺序 A/B 墙钟为 `36.79 -> 30.62 s`。
+
+YOLO26s、运动模糊回放和连续帧回放候选均未晋升：YOLO26s 当前 test mAP50-95 仅 `0.476189`；运动模糊回放降低 Recall；连续帧回放虽提高 Recall，但 test mAP50-95 低于当前候选。运行时低置信 TTA 继续保持移除。
 
 ## 绳线分割
 
-生产候选：
+生产候选（本机发布产物，GitHub 提交不包含二进制文件）：
 
 `runs/candidates/yoyo_unified_b36a77f2e354_semantic_string_mobilenetv3-fpn-single-v1/weights/best.pt`
 
