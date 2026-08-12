@@ -36,12 +36,12 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_unified_1f05c056cb5d_detection_yolo11s_prod-ft-lr1e5-v1/weights/best.pt"
+  weights_path: "runs/candidates/yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7
-  # YOLO11s was selected on the frozen test and reviewed consecutive frames.
-  # The architecture and 1024 px production input are unchanged.
+  # The hard-negative YOLO11s candidate passed the frozen test, the 856-frame
+  # consecutive set, and a 99-frame full-pipeline A/B. Architecture unchanged.
   imgsz: 1024
   device: ""
   trace_length: 30
@@ -114,12 +114,14 @@ tracking:
   orientation_inference_fps: 5.0
   orientation_adaptive_inference: true
   orientation_burst_inference_fps: 25.0
-  orientation_adaptive_min_confidence: 0.5
+  # Lower confidence observations stay in the burst cadence; this preserved
+  # the newly added consecutive group without changing neural inference cost.
+  orientation_adaptive_min_confidence: 0.4
   orientation_adaptive_stable_observations: 4
   orientation_temporal_filter: true
-  orientation_ema_alpha: 0.4
+  orientation_ema_alpha: 0.5
   orientation_switch_margin: 0.05
-  orientation_switch_confirmations: 3
+  orientation_switch_confirmations: 4
   orientation_strong_switch_confidence: 0.9
-  orientation_strong_switch_margin: 0.2
+  orientation_strong_switch_margin: 0.1
   export_json: true

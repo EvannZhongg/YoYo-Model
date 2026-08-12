@@ -1,4 +1,4 @@
-# 悠悠球模型与追踪报告：2026-08-08
+# 悠悠球模型与追踪报告：2026-08-12
 
 本报告只记录当前有效结论，覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。训练与评估均在 `.venv` 中执行；详细 checkpoint、manifest 和逐帧结果保留在 `runs/`。
 
@@ -18,22 +18,20 @@ Workbench 默认模型和参数与 `config.yaml`、`config.py` 一致。
 
 生产权重（本机发布产物，GitHub 提交不包含二进制文件）：
 
-`runs/candidates/yoyo_unified_1f05c056cb5d_detection_yolo11s_prod-ft-lr1e5-v1/weights/best.pt`
+`runs/candidates/yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1/weights/best.pt`
 
-SHA-256：`05fe3d46cfc175034b3e3e4e69b6af2cf7596863839cbe91a7bfb792b1f6f894`。部署机器需将该本机权重放在上述路径；仓库只提交 manifest 与指标记录。
+SHA-256：`4913dcf70784c75229282a1a31d1ed124a65f7b334d1a1cc4fb7775f117cabcd`。部署机器需将该本机权重放在上述路径；仓库只提交 manifest 与指标记录。
 
-候选从上一生产权重出发，在当前 v5 训练集以 `lr=1e-5` 微调；训练上限 15 epoch，patience 触发后实际完成 7 epoch，最佳 checkpoint 来自 epoch 2。初始化 lineage 与当前 val/test source group 无交集。固定 65 张 test（57 个正样本）、`imgsz=1024` 的同口径对比如下：
+候选仅从 train split 挖掘上一生产权重在人工悠悠球框 `IoU<0.1`、置信度 `>=0.25` 的误检，目视核对后生成 22 张背景强化图；训练视图为 424 张原训练图加 22 张硬负样本，val/test 与来源组均保持不变。YOLO11s 以 `lr=5e-6` 微调 3 epoch，并在 val 上选择上一生产权重 `0.8` 与微调权重 `0.2` 的参数插值。初始化 lineage 与 val/test source group 无交集。当前 91 张 test（82 个正样本）、`imgsz=1024` 的同口径对比如下：
 
 | 权重 | Precision | Recall | mAP50 | mAP50-95 |
 | --- | ---: | ---: | ---: | ---: |
-| 旧生产 YOLO11s | 0.994193 | 0.807018 | 0.921067 | 0.512976 |
-| **当前微调 YOLO11s** | **1.000000** | **0.824142** | **0.947232** | **0.551444** |
+| 上一生产 YOLO11s | 0.981028 | 0.853659 | 0.947575 | **0.566066** |
+| **当前硬负样本 YOLO11s** | **0.986283** | **0.876891** | **0.952891** | 0.561644 |
 
-未参与该微调的 221 张 stride-3 reviewed 连续帧上，Recall `0.859818 -> 0.892425`、mAP50 `0.886691 -> 0.906043`、mAP50-95 `0.592889 -> 0.596493`；模型结构、参数量和生产输入不变。
+未参与微调的 856 张 reviewed 连续帧上，Presence F1 `0.953295 -> 0.958678`、Recall `0.919753 -> 0.930864`、Mean IoU `0.769834 -> 0.771622`、中心误差 `36.3070 -> 33.0983 px`。FP `8 -> 9`，但 FN `65 -> 56`；test mAP50-95 的 `-0.004422` 是本次晋升保留的局部代价。
 
-周博文 72 帧完整 pipeline A/B 只替换检测权重：悠悠球 Presence F1 `0.985915 -> 1.000000`、Mean IoU `0.830264 -> 0.847169`、中心误差 `7.1239 -> 4.8022 px`；更稳定的锚点也使绳线 F1@8 `0.649541 -> 0.664403`、Chamfer `20.2388 -> 17.0302 px`。同架构推理耗时持平，首次真实 pipeline 顺序 A/B 墙钟为 `36.79 -> 30.62 s`。
-
-YOLO26s、运动模糊回放和连续帧回放候选均未晋升：YOLO26s 当前 test mAP50-95 仅 `0.476189`；运动模糊回放降低 Recall；连续帧回放虽提高 Recall，但 test mAP50-95 低于当前候选。运行时低置信 TTA 继续保持移除。
+邬聪聪 99 帧完整 pipeline A/B 只替换检测权重：悠悠球 Presence F1 `0.828025 -> 0.832298`、Recall `0.755814 -> 0.779070`、Mean IoU `0.270465 -> 0.320123`、中心误差 `280.0470 -> 267.0471 px`；FP `6 -> 8`。绳线 F1@8 `0.611659 -> 0.615666`、Chamfer `476.6630 -> 473.4851 px`。同架构连续集推理耗时 `7.3065 -> 7.2953 ms/frame`，参数量与生产输入不变。
 
 ## 绳线分割
 
@@ -96,18 +94,18 @@ SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
 | 方案 | Top-1 | Macro recall | horizontal | normal | not_applicable |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 旧上下文 ROI | 0.8000 | 0.6562 | 0.5000 | 0.9130 | 0.5556 |
-| 最终仅悠悠球 ROI | **0.9231** | **0.8818** | **0.8000** | **0.9565** | **0.8889** |
+| 当前 manifest，仅悠悠球 ROI（91 张 test） | **0.9231** | **0.8732** | **0.8462** | **0.9552** | **0.8182** |
 
-连续帧采用三类概率 EMA `alpha=0.4`、切换 margin `0.05`、连续 3 次确认；高置信大幅领先时允许快速切换。稳定状态以 5 FPS 推理，不稳定状态提升至 25 FPS，连续 4 次稳定后恢复低频。
+当前默认采用三类概率 EMA `alpha=0.5`、切换 margin `0.05`、连续 4 次确认，强切换置信度 `0.9`、margin `0.1`。稳定状态以 5 FPS 推理，不稳定状态提升至 25 FPS，连续 4 次稳定后恢复低频。该配置不增加模型或前向次数。
 
-6 组、552 帧 reviewed 结果：
+新增邬聪聪组加入后，连续集为 9 组、856 帧。使用旧生产方向模型和新时序配置的离线回放结果为：
 
 | 策略 | Accuracy | Macro recall | 输出切换 | 超额切换 |
 | --- | ---: | ---: | ---: | ---: |
-| 固定 5 FPS + carry | 0.882246 | 0.850290 | 13 | 9 |
-| **5/25 FPS 自适应 + EMA/滞回** | **0.942029** | **0.922041** | **5** | **1** |
+| 旧模型默认配置 | 0.896028 | 0.833289 | 13 | 1 |
+| **旧模型 + 新时序配置** | **0.903037** | **0.864272** | **13** | **1** |
 
-真实 detector 框的 DSCF7145 95 帧 A/B 中，Accuracy `0.947368 -> 0.968421`，平均/最大边界延迟 `2.5/3 -> 1.5/2` 帧，吞吐差约 `0.45%`。证据位于 `runs/experiments/orientation_temporal_adaptive_final_20260807/metrics.json` 和 `runs/experiments/orientation_runtime_ab/`。
+使用上一检测器的邬聪聪 99 帧真实 pipeline A/B 中，方向 Accuracy `0.454545 -> 0.494949`、Macro Recall `0.424866 -> 0.448121`、输出切换 `9 -> 5`；悠悠球和绳线指标逐项不变。检测器同步晋升后，当前完整 pipeline 的方向 Accuracy 为 `0.676768`、Macro Recall 为 `0.487478`。完整证据位于 `runs/experiments/orientation_baseline_consecutive856_20260812/metrics.json`、`runs/experiments/orientation_temporal_selected_consecutive856_20260812/metrics.json`、`runs/experiments/orientation_temporal_old_pipeline_wu99_20260812/metrics.json`、`runs/experiments/detection_hardneg_r2_pipeline_wu99/metrics.json`。
 
 ## RTMPose
 
@@ -115,15 +113,16 @@ RTMPose-m WholeBody 与 YOLOX-m 仍作为可选人体/手部审核分支保留�
 
 ## 验证状态
 
-- 本轮完整验证：`pytest -q`，164 项及 2 个子测试通过。
+- 本轮完整验证：`pytest -q`，168 项及 2 个子测试通过。
 - `compileall` 与 `git diff --check` 通过。
-- 两个数据集共 914 个 canonical JSON，pose/手部键残留数为 0。
+- 两个数据集共 1462 个 canonical JSON，pose/手部键残留数为 0。
 
 ## 复现命令
 
 ```powershell
-.\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1 --device 0
+.\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1 --dataset-dir datasets\experiments\detection_hardneg_r1 --device 0
+.\.venv\Scripts\python.exe -m training_v3.evaluate runs\candidates\yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1 --dataset-dir datasets\1Ayoyo_dataset\orientation_roi --allow-dataset-mismatch --device 0
 .\.venv\Scripts\python.exe -m cli.training.train_semantic --dataset-dir datasets\1Ayoyo_dataset\string_segmentation --project runs\experiments --name semantic_degradation_aug_lr5e6_v1 --epochs 20 --input-width 960 --input-height 544 --batch 2 --lr 0.000005 --architecture lraspp_mobilenet_v3 --initial-weights runs\candidates\yoyo_unified_f5775b248d3b_semantic_string_lraspp_soup-a25-v1\weights\best.pt --degradation-augment --early-stopping-patience 5 --early-stopping-min-epochs 6 --device cuda
-.\.venv\Scripts\python.exe -m cli.tracking.evaluate_orientation --output-dir runs\experiments\orientation_temporal_adaptive_20260807 --device 0
+.\.venv\Scripts\python.exe -m cli.tracking.evaluate_orientation --raw-predictions runs\experiments\orientation_baseline_consecutive856_20260812\raw_predictions.json --output-dir runs\experiments\orientation_temporal_selected_consecutive856_20260812 --device 0
 .\.venv\Scripts\python.exe -m pytest -q
 ```

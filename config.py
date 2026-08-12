@@ -108,7 +108,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_unified_1f05c056cb5d_detection_yolo11s_prod-ft-lr1e5-v1/weights/best.pt",
+            "runs/candidates/yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
@@ -330,7 +330,7 @@ class TrackingConfig:
         _env_or_config("TRACKING_ORIENTATION_BURST_INFERENCE_FPS", "tracking.orientation_burst_inference_fps", 25.0)
     )
     orientation_adaptive_min_confidence: float = float(
-        _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_MIN_CONFIDENCE", "tracking.orientation_adaptive_min_confidence", 0.5)
+        _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_MIN_CONFIDENCE", "tracking.orientation_adaptive_min_confidence", 0.4)
     )
     orientation_adaptive_stable_observations: int = int(
         _env_or_config("TRACKING_ORIENTATION_ADAPTIVE_STABLE_OBSERVATIONS", "tracking.orientation_adaptive_stable_observations", 4)
@@ -340,19 +340,19 @@ class TrackingConfig:
         True,
     )
     orientation_ema_alpha: float = float(
-        _env_or_config("TRACKING_ORIENTATION_EMA_ALPHA", "tracking.orientation_ema_alpha", 0.4)
+        _env_or_config("TRACKING_ORIENTATION_EMA_ALPHA", "tracking.orientation_ema_alpha", 0.5)
     )
     orientation_switch_margin: float = float(
         _env_or_config("TRACKING_ORIENTATION_SWITCH_MARGIN", "tracking.orientation_switch_margin", 0.05)
     )
     orientation_switch_confirmations: int = int(
-        _env_or_config("TRACKING_ORIENTATION_SWITCH_CONFIRMATIONS", "tracking.orientation_switch_confirmations", 3)
+        _env_or_config("TRACKING_ORIENTATION_SWITCH_CONFIRMATIONS", "tracking.orientation_switch_confirmations", 4)
     )
     orientation_strong_switch_confidence: float = float(
         _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_CONFIDENCE", "tracking.orientation_strong_switch_confidence", 0.9)
     )
     orientation_strong_switch_margin: float = float(
-        _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_MARGIN", "tracking.orientation_strong_switch_margin", 0.2)
+        _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_MARGIN", "tracking.orientation_strong_switch_margin", 0.1)
     )
     export_json: bool = _as_bool(_env_or_config("TRACKING_EXPORT_JSON", "tracking.export_json", True), True)
 
