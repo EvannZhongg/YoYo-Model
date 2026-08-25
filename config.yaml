@@ -36,12 +36,12 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/candidates/yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1/weights/best.pt"
+  weights_path: "runs/experiments/det_soup_new116_a0p75/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7
-  # The hard-negative YOLO11s candidate passed the frozen test, the 856-frame
-  # consecutive set, and a 99-frame full-pipeline A/B. Architecture unchanged.
+  # Incremental fine-tuning on the 2026-08-26 manifest followed by validation
+  # weight soup improved the frozen test and 856-frame consecutive set.
   imgsz: 1024
   device: ""
   trace_length: 30
@@ -57,7 +57,7 @@ tracking:
   enable_pose: false
   # One high-resolution MobileNetV3-FPN replaces the previous three-model
   # LR-ASPP route. Predictions remain review-only and never become label truth.
-  string_weights_path: "runs/candidates/yoyo_unified_b36a77f2e354_semantic_string_mobilenetv3-fpn-single-v1/weights/best.pt"
+  string_weights_path: "runs/experiments/semantic_new116_ft_r1_lr1e5/weights/best.pt"
   string_ensemble_weights_path: ""
   string_ensemble_alpha: 0.0
   string_ensemble_candidate_threshold: 0.50

@@ -1,4 +1,28 @@
-# 悠悠球模型与追踪报告：2026-08-12
+# 悠悠球模型与追踪报告：2026-08-26
+
+## 2026-08-26 绳线模型增量微调晋升
+
+在更新后的 `datasets/1Ayoyo_dataset`（string manifest `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c`）上，以当前 MobileNetV3-FPN 权重为初始化，使用 `lr=1e-5`、backbone 学习率倍率 `0.05`、前 3 epoch 冻结 backbone、负样本采样权重 `4` 微调 13 个 epoch，验证集 best 为 epoch 11、阈值 `0.3488`。晋升权重为：
+
+`runs/experiments/semantic_new116_ft_r1_lr1e5/weights/best.pt`
+
+SHA-256：`ab2049c2f8abe0b1d43a77a9093db05114a19ee1e0adc1bf3f8deee3489af0de`。
+
+新 test split 同口径结果：pixel Dice `0.727252 -> 0.736401`，Tolerant F1@3 `0.936931 -> 0.944534`，Presence F1 `0.980198 -> 0.980198`，负图平均误检像素 `75.333 -> 45.889`。连续集 856 帧 pooled F1@8 `0.607372 -> 0.625574`，Chamfer `82.58 -> 42.33 px`，HD95 `262.66 -> 123.05 px`；最弱邬聪聪组 F1@8 `0.637564 -> 0.818828`、Chamfer `474.78 -> 141.46 px`。唐浩翔、华南赛和池高宇 100 帧组 F1 有 `0.005-0.013` 的局部回退，但 Chamfer/HD95 与 pooled 指标显著改善，按全局收益规则保留并记录。`960x544` 单次 GPU 前向约 `7.62 -> 6.77 ms`；使用检测、绳线和方向默认配置对 `videos/2023华南赛1Afinal/2023 Southern China Yoyo Contest 1A Final 2nd 杨云帆 _ Film by CYML.mp4` 前 120 帧的完整追踪 loop 为 `24.897 FPS`，参数量和推理流程不变。
+
+实验 manifest、test 指标和连续集逐组结果分别保留在 `runs/experiments/semantic_new116_ft_r1_lr1e5/run_manifest.json`、`runs/experiments/semantic_new116_ft_r1_lr1e5/test_semantic_metrics.json` 和 `runs/experiments/semantic_new116_ft_r1_lr1e5_consecutive856/summary.json`。默认 `tracking.string_weights_path` 已同步更新。
+
+## 2026-08-26 新增数据复评与检测器晋升
+
+`datasets/1Ayoyo_dataset` 已更新为 manifest `yoyo_unified_57935af9dc69`（722 张，新增审核样本 116 张）。旧生产检测器在同一新 test split 上为 Precision `0.987401`、Recall `0.898990`、mAP50 `0.959212`、mAP50-95 `0.574515`。以该权重初始化、在完整 train split 上以 AdamW、`lr0=5e-6` 微调 8 epoch 后，验证集选择旧/新权重线性 soup `alpha=0.75`，得到默认检测权重：
+
+`runs/experiments/det_soup_new116_a0p75/weights/best.pt`
+
+SHA-256：`13b66a5c6eda03deb7f5bc4b1efc60a273df5aae8d314424a79bf2fb5b7029b8`。
+
+新 test split 同口径结果为 Precision `0.976794`、Recall `0.898990`、mAP50 `0.968342`、mAP50-95 `0.589861`；相对旧权重 mAP50-95 提升 `0.015346`，召回不变。`datasets/1Ayoyo_consecutive` 的 856 帧直接检测复核中，Presence F1 `0.976280`、Mean IoU `0.792355`、中心误差 `20.7396 px`；旧生产候选对应的复核为 Presence F1 `0.958678`、Mean IoU `0.771622`、中心误差 `33.0983 px`。模型结构和参数量不变，1024 输入推理约 `7.5 ms/frame`，未引入额外推理组件。验证、test 与连续帧结果分别保留在 `runs/experiments/yoyo_unified_57935af9dc69_detection_best_incremental_new116_r1_lr5e6/test_metrics.json`、`runs/experiments/det_soup_new116_a0p75/test_metrics.json` 和 `tmp/det_soup_a75_consecutive`。
+
+方向模型在 856 帧连续集上的新基线复评仍为 Accuracy `0.855140`、Macro Recall `0.803199`；现有时序候选为 `0.903037`/`0.864272`，但逐组非下降门禁未通过，因此保持原方向权重与时序配置。
 
 本报告只记录当前有效结论，覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。训练与评估均在 `.venv` 中执行；详细 checkpoint、manifest 和逐帧结果保留在 `runs/`。
 

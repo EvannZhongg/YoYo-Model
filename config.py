@@ -108,7 +108,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/candidates/yoyo_detection_hardneg_4f4fb0ee4e66_detection_yolo11s_soup-a20-v1/weights/best.pt",
+            "runs/experiments/det_soup_new116_a0p75/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
@@ -141,7 +141,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/candidates/yoyo_unified_b36a77f2e354_semantic_string_mobilenetv3-fpn-single-v1/weights/best.pt",
+            "runs/experiments/semantic_new116_ft_r1_lr1e5/weights/best.pt",
         )
     )
     string_ensemble_weights_path: Path | None = _as_optional_path(
