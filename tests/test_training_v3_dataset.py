@@ -87,6 +87,8 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(first["source_inventory"]["NYPC1A"]["labels_discovered"], 9)
             self.assertEqual(first["source_inventory"]["world_final"]["samples_included"], 9)
             self.assertEqual(first["split_policy"]["leakage"]["source_group_overlap_count"], 0)
+            self.assertEqual(first["schema_version"], "yoyo_multitask_dataset_v6")
+            self.assertTrue(all("string_visibility" in record for record in first["records"]))
             self.assertFalse(first["task_input_dependencies"]["hand_string_attachment_required"])
             group_sets = [set(first["split_policy"]["source_groups"][split]) for split in ("train", "val", "test")]
             self.assertFalse(group_sets[0] & group_sets[1])

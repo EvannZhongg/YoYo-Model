@@ -1,34 +1,41 @@
 ---
 name: create-yoyo-blank-annotation-dataset
-description: Create or incrementally extend deduplicated blank agent_yoyo_string_annotation_v5 datasets from yoyo video frames for the Workbench data-annotation page while preserving every existing label edit and human verification record. Use when preparing or supplementing a manual yoyo/string annotation queue without VLM classification, agent geometry, model fine-tuning, or model-review approval.
+description: Create or append deduplicated blank agent_yoyo_string_annotation_v5 samples from yoyo videos for the Workbench manual annotation queue. Use when preparing new annotation data without model-generated geometry or model-review decisions.
 ---
 
 # Create Yoyo Blank Annotation Dataset
 
-Create Workbench inputs with empty geometry and the manual queue defaults
-`visibility=visible`, `trick_orientation=normal`, and
-`string_visibility=partial`. Do not invoke a VLM, recognition model, visual
-agent, reviewer agent, fine-tuning job, or approval pipeline.
+Create samples under `datasets/<dataset-name>` with empty geometry and these
+manual-queue defaults:
 
-## Run The Generator
+- `visibility=visible`
+- `trick_orientation=normal`
+- `string_visibility=partial`
 
-Use the repository virtual environment. The script discovers the repository
-from its installed location and writes `datasets/<dataset-name>` directly.
+Use the repository virtual environment and the bundled generator. Do not call
+VLM, detection, recognition, fine-tuning, or approval workflows; this skill only
+creates blank annotation inputs.
+
+## Create a Dataset
 
 ```powershell
 & PROJECT\.venv\Scripts\python.exe `
   SKILL_DIR\scripts\create_blank_dataset.py `
   --videos VIDEO_OR_DIRECTORY `
-  --dataset-name NEW_DATASET_NAME `
+  --dataset-name DATASET_NAME `
   --frames-per-video 12
 ```
 
-For a controlled source list, write one video path per line in a UTF-8 file and
-use `--videos-list`. Use `--total-frames N` to allocate an exact, nearly equal
-count across sources. The total must be at least the number of videos.
+Use `--videos-list` for a UTF-8 file containing one video path per line. Use
+`--total-frames N` instead of `--frames-per-video` when an exact, source-balanced
+total is required. Repeat `--exclude-dataset PATH` to add reference datasets;
+use `--exclude-frame-window N` when neighboring frames from the same source
+must also be excluded.
 
-To add more blank samples to a dataset previously created by this skill, keep
-the Workbench server stopped and pass `--append` with the same dataset name:
+## Append Samples
+
+Append only to a dataset previously created by this skill, and stop the
+Workbench server for the operation:
 
 ```powershell
 & PROJECT\.venv\Scripts\python.exe `
@@ -38,41 +45,15 @@ the Workbench server stopped and pass `--append` with the same dataset name:
   --frames-per-video 12 --append
 ```
 
-Treat a missing `--append`, stale human-review revision, missing old sample, path
-collision, or changed protected file as a hard failure. Do not bypass these
-checks and do not append directly to `datasets/1Ayoyo_dataset`.
+Never append to `datasets/1Ayoyo_dataset`. Never overwrite, rename, delete, or
+manually normalize an existing image, label, or Workbench review entry. Let the
+generator update the dataset manifest as part of the append operation. It must
+preserve existing review data and report
+`review_map_unchanged=true` plus the preserved review-entry count.
 
-The default exclusion baseline is `datasets/1Ayoyo_dataset`. The generator also
-excludes every sibling dataset whose manifest identifies it as an earlier
-output of this skill. Add other baselines with repeatable `--exclude-dataset`.
-Never disable the root baseline check.
+## Verify
 
-## Fast Decoding
-
-Candidate decoding is progressive: it first tries two temporally balanced
-candidates per requested stratum and stops as soon as a complete diverse set
-passes deduplication. `--oversample-factor` remains the hard fallback budget,
-not a number of frames that must always be decoded.
-
-The default decoded-frame cache is
-`annotations/source_frame_jpeg_cache`. Entries are content-addressed by source
-video SHA-256, frame index, and JPEG quality, so retries and later generation
-runs can reuse decoded frames without seeking through the video again. Use
-`--frame-cache PATH` to relocate it or `--no-frame-cache` for a one-off run.
-The cache is disposable and is never a dataset or annotation source.
-
-Two videos are decoded concurrently by default. Adjust with
-`--decode-workers N`; reduce it to `1` on memory-constrained machines. Results
-are still committed in input order and cross-video deduplication is applied
-before publication.
-
-For stricter separation around frames already present from the same source
-video, pass `--exclude-frame-window N`. The default rejects the identical frame;
-`N=2` also rejects two neighboring frames on either side.
-
-## Verify The Result
-
-Require the command to finish with `"ok": true`. Confirm the result contains:
+Require the command result to contain `ok: true` and confirm the output has:
 
 ```text
 datasets/<dataset-name>/
@@ -82,27 +63,11 @@ datasets/<dataset-name>/
 `-- sampling_manifest.json
 ```
 
-Open the Workbench data-annotation page and select the new dataset. It is
-discoverable without a separate import or copy step.
+The labels must use `agent_yoyo_string_annotation_v5`, contain no boxes,
+polylines, masks, or paths, and retain source/frame provenance. Select the new
+dataset directly on the Workbench data-annotation page; no import or copy step
+is needed.
 
-On Windows, require the published dataset to inherit the `datasets` directory
-ACL so the desktop user can open it without an elevation or "Continue to get
-access" prompt. Treat such a prompt as a generator defect, not a manual setup
-step.
-
-Do not hand-edit generated provenance, hashes, paths, or the manifest. Regenerate
-a failed batch under a new dataset name. Read `references/data-contract.md` when
-debugging compatibility, deduplication, or provenance.
-
-## Protect Existing Work
-
-Before an append, validate every existing image and label against the manifest,
-validate each Workbench review entry against the label size and modification
-time, and snapshot protected file revisions in memory. Publish new image/label files with
-exclusive creation and update only `manifest.json` after all new pairs exist.
-
-Never overwrite, rewrite, rename, delete, or normalize an existing image or
-label. Never write the Workbench review map. On any append failure, remove only
-files created by that append and restore the previous manifest bytes. Require
-the result to report `review_map_unchanged=true` and the expected
-`review_entry_count_preserved`.
+Do not hand-edit generated provenance, hashes, paths, labels, or manifests.
+Read [data-contract.md](references/data-contract.md) when checking schema,
+deduplication, or append compatibility.

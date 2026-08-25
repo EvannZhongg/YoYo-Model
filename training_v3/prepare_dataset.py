@@ -23,7 +23,7 @@ from common.files import sha256_file
 from config import BASE_DIR
 
 
-SCHEMA_VERSION = "yoyo_multitask_dataset_v5"
+SCHEMA_VERSION = "yoyo_multitask_dataset_v6"
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; annotation_schema_v5"
 POSE_ANNOTATION_FIELDS = {
@@ -503,6 +503,7 @@ def build_training_dataset(
                 "trick_orientation": sample.orientation,
                 "yoyo_positive": sample.has_yoyo,
                 "string_positive": sample.has_string,
+                "string_visibility": str(sample.annotation["string_visibility"]),
             }
         )
     orientation_train_counts = {name: len(paths) for name, paths in sorted(orientation_train_images.items())}

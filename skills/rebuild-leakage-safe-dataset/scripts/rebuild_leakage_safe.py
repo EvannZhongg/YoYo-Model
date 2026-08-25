@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -23,8 +24,20 @@ MODES = ("append-isolated", "strict-eval")
 BASELINE_TOKEN = "{baseline_manifest}"
 PROTECTED_CANONICAL_TOKEN = "{protected_canonical}"
 REVIEW_SCHEMA_VERSION = "yoyo_dataset_review_v3"
+PLAN_SCHEMA_VERSION = "leakage_safe_incremental_plan_v2"
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
-LEGACY_NON_TASK_FIELDS = {
+VALID_ORIENTATIONS = ("normal", "horizontal", "not_applicable")
+VALID_STRING_VISIBILITY = ("visible", "partial", "not_visible")
+FEATURES = (
+    "samples",
+    "yoyo_positive",
+    "yoyo_negative",
+    "string_positive",
+    "string_negative",
+    *(f"orientation:{value}" for value in VALID_ORIENTATIONS),
+    *(f"string_visibility:{value}" for value in VALID_STRING_VISIBILITY),
+)
+NON_TASK_FIELDS = {
     "hands",
     "hands_pixel",
     "hands_2d",
@@ -45,7 +58,7 @@ class ManifestView:
     path: Path
     raw: dict[str, Any]
     assignment: dict[str, str]
-    records_by_hash: dict[str, dict[str, str]]
+    records_by_hash: dict[str, dict[str, Any]]
     counts: dict[str, int]
     target_ratios: dict[str, float]
 
@@ -90,6 +103,36 @@ def _target_ratios(raw: dict[str, Any]) -> dict[str, float]:
     return ratios
 
 
+def _task_labels(record: dict[str, Any], index: int) -> dict[str, Any]:
+    orientation = record.get("trick_orientation")
+    if orientation not in VALID_ORIENTATIONS:
+        raise ContractError(
+            f"records[{index}].trick_orientation must be one of {VALID_ORIENTATIONS}"
+        )
+    string_visibility = record.get("string_visibility")
+    if string_visibility not in VALID_STRING_VISIBILITY:
+        raise ContractError(
+            f"records[{index}].string_visibility must be one of {VALID_STRING_VISIBILITY}"
+        )
+    yoyo_positive = record.get("yoyo_positive")
+    string_positive = record.get("string_positive")
+    if not isinstance(yoyo_positive, bool):
+        raise ContractError(f"records[{index}].yoyo_positive must be boolean")
+    if not isinstance(string_positive, bool):
+        raise ContractError(f"records[{index}].string_positive must be boolean")
+    expected_string_positive = string_visibility in {"visible", "partial"}
+    if string_positive != expected_string_positive:
+        raise ContractError(
+            f"records[{index}].string_positive disagrees with string_visibility"
+        )
+    return {
+        "trick_orientation": orientation,
+        "yoyo_positive": yoyo_positive,
+        "string_positive": string_positive,
+        "string_visibility": string_visibility,
+    }
+
+
 def _manifest_view(path: Path, raw: dict[str, Any]) -> ManifestView:
     source_groups = ((raw.get("split_policy") or {}).get("source_groups") or {})
     if not isinstance(source_groups, dict):
@@ -114,7 +157,7 @@ def _manifest_view(path: Path, raw: dict[str, Any]) -> ManifestView:
     records = raw.get("records")
     if not isinstance(records, list) or not records:
         raise ContractError("records must be a non-empty array")
-    records_by_hash: dict[str, dict[str, str]] = {}
+    records_by_hash: dict[str, dict[str, Any]] = {}
     counts = {split: 0 for split in SPLITS}
     for index, record_value in enumerate(records):
         if not isinstance(record_value, dict):
@@ -141,6 +184,7 @@ def _manifest_view(path: Path, raw: dict[str, Any]) -> ManifestView:
         records_by_hash[image_hash] = {
             "split": split,
             "source_group": group,
+            **_task_labels(record_value, index),
         }
         counts[split] += 1
 
@@ -171,20 +215,128 @@ def load_manifest(path_value: str | Path) -> ManifestView:
     return _manifest_view(path, _read_json(path))
 
 
-def _ratio_score(
+def _record_features(record: dict[str, Any]) -> Counter[str]:
+    return Counter(
+        {
+            "samples": 1,
+            "yoyo_positive": int(record["yoyo_positive"]),
+            "yoyo_negative": int(not record["yoyo_positive"]),
+            "string_positive": int(record["string_positive"]),
+            "string_negative": int(not record["string_positive"]),
+            f"orientation:{record['trick_orientation']}": 1,
+            f"string_visibility:{record['string_visibility']}": 1,
+        }
+    )
+
+
+def _group_features(manifest: ManifestView) -> dict[str, Counter[str]]:
+    result = {group: Counter() for group in manifest.assignment}
+    for record in manifest.records_by_hash.values():
+        result[record["source_group"]].update(_record_features(record))
+    return result
+
+
+def _assignment_score(
     assignment: dict[str, str],
-    group_counts: dict[str, int],
+    group_features: dict[str, Counter[str]],
     ratios: dict[str, float],
 ) -> float:
-    split_counts = {split: 0 for split in SPLITS}
+    totals = sum(group_features.values(), Counter())
+    split_counts = {split: Counter() for split in SPLITS}
     for group, split in assignment.items():
-        split_counts[split] += group_counts[group]
-    total = sum(split_counts.values())
+        split_counts[split].update(group_features[group])
+    score = 0.0
+    for split in SPLITS:
+        for feature in FEATURES:
+            target = totals[feature] * ratios[split]
+            weight = 8.0 if feature == "samples" else 1.0
+            score += weight * ((split_counts[split][feature] - target) ** 2) / max(1.0, target)
+    return score
+
+
+def _coverage_gap_count(
+    assignment: dict[str, str],
+    group_features: dict[str, Counter[str]],
+    min_support_groups: int,
+) -> int:
+    split_counts = {split: Counter() for split in SPLITS}
+    for group, split in assignment.items():
+        split_counts[split].update(group_features[group])
     return sum(
-        ((split_counts[split] - total * ratios[split]) ** 2)
-        / max(1.0, total * ratios[split])
+        1
+        for feature in FEATURES[1:]
+        if sum(bool(values[feature]) for values in group_features.values()) >= min_support_groups
         for split in SPLITS
+        if not split_counts[split][feature]
     )
+
+
+def _label_balance_summary(
+    manifest: ManifestView,
+    min_support_groups: int,
+) -> dict[str, Any]:
+    group_features = _group_features(manifest)
+    totals = sum(group_features.values(), Counter())
+    split_counts = {split: Counter() for split in SPLITS}
+    for group, split in manifest.assignment.items():
+        split_counts[split].update(group_features[group])
+    features: dict[str, Any] = {}
+    coverage_gaps: list[dict[str, Any]] = []
+    for feature in FEATURES[1:]:
+        counts = {split: split_counts[split][feature] for split in SPLITS}
+        support = {
+            split: sum(
+                bool(group_features[group][feature])
+                for group, assigned_split in manifest.assignment.items()
+                if assigned_split == split
+            )
+            for split in SPLITS
+        }
+        supporting_groups = sum(support.values())
+        missing_splits = [
+            split
+            for split in SPLITS
+            if supporting_groups >= min_support_groups and support[split] == 0
+        ]
+        if missing_splits:
+            coverage_gaps.append(
+                {
+                    "feature": feature,
+                    "supporting_group_count": supporting_groups,
+                    "missing_splits": missing_splits,
+                }
+            )
+        features[feature] = {
+            "total_samples": totals[feature],
+            "sample_counts": counts,
+            "supporting_group_count": supporting_groups,
+            "supporting_group_counts": support,
+            "split_ratio_deviation": {
+                split: round(
+                    abs((counts[split] / totals[feature]) - manifest.target_ratios[split])
+                    if totals[feature]
+                    else 0.0,
+                    8,
+                )
+                for split in SPLITS
+            },
+        }
+    return {
+        "strategy": "atomic_source_groups_multitask_label_stratification",
+        "sample_weight": 8.0,
+        "label_feature_weight": 1.0,
+        "weighted_assignment_score": round(
+            _assignment_score(
+                manifest.assignment,
+                group_features,
+                manifest.target_ratios,
+            ),
+            8,
+        ),
+        "minimum_support_groups_for_coverage": min_support_groups,
+        "features": features,
+        "coverage_gaps": coverage_gaps,
+    }
 
 
 def build_incremental_plan(
@@ -192,6 +344,7 @@ def build_incremental_plan(
     candidate: ManifestView,
     seed: int,
     attempts: int,
+    min_support_groups: int = len(SPLITS),
 ) -> tuple[dict[str, Any], dict[str, str]]:
     missing_groups = sorted(set(baseline.assignment) - set(candidate.assignment))
     missing_hashes = sorted(set(baseline.records_by_hash) - set(candidate.records_by_hash))
@@ -200,9 +353,7 @@ def build_incremental_plan(
     if missing_hashes:
         raise ContractError(f"candidate is missing {len(missing_hashes)} existing image hashes")
 
-    group_counts = {group: 0 for group in candidate.assignment}
-    for record in candidate.records_by_hash.values():
-        group_counts[record["source_group"]] += 1
+    group_features = _group_features(candidate)
     new_groups = sorted(set(candidate.assignment) - set(baseline.assignment))
     fixed_assignment = {
         group: baseline.assignment.get(group, "") for group in candidate.assignment
@@ -214,32 +365,44 @@ def build_incremental_plan(
             choices = itertools.product(SPLITS, repeat=len(new_groups))
         else:
             rng = random.Random(seed)
-            choices = (
-                tuple(
-                    rng.choices(
-                        SPLITS,
-                        weights=[candidate.target_ratios[split] for split in SPLITS],
-                        k=len(new_groups),
+            choices = itertools.chain(
+                [tuple(candidate.assignment[group] for group in new_groups)],
+                (
+                    tuple(
+                        rng.choices(
+                            SPLITS,
+                            weights=[candidate.target_ratios[split] for split in SPLITS],
+                            k=len(new_groups),
+                        )
                     )
+                    for _ in range(attempts)
                 )
-                for _ in range(attempts)
             )
-        best: tuple[float, tuple[str, ...]] | None = None
+        best: tuple[int, float, tuple[str, ...]] | None = None
         for choice in choices:
             assignment = dict(fixed_assignment)
             assignment.update(zip(new_groups, choice, strict=True))
-            score = _ratio_score(assignment, group_counts, candidate.target_ratios)
-            item = (score, tuple(choice))
+            gap_count = _coverage_gap_count(
+                assignment,
+                group_features,
+                min_support_groups,
+            )
+            score = _assignment_score(
+                assignment,
+                group_features,
+                candidate.target_ratios,
+            )
+            item = (gap_count, score, tuple(choice))
             if best is None or item < best:
                 best = item
         assert best is not None
-        fixed_assignment.update(zip(new_groups, best[1], strict=True))
+        fixed_assignment.update(zip(new_groups, best[2], strict=True))
 
     raw = {
-        "schema_version": "leakage_safe_incremental_plan_v1",
+        "schema_version": PLAN_SCHEMA_VERSION,
         "dataset_id": candidate.raw.get("dataset_id", ""),
         "split_policy": {
-            "strategy": "stable_existing_groups_incremental_balanced",
+            "strategy": "stable_existing_groups_incremental_multitask_stratified",
             "target_sample_ratios": candidate.target_ratios,
             "source_groups": {
                 split: sorted(
@@ -265,6 +428,8 @@ def build_incremental_plan(
                 },
                 "seed": seed,
                 "attempts": attempts,
+                "minimum_support_groups_for_coverage": min_support_groups,
+                "balanced_features": list(FEATURES),
             },
         },
         "records": [
@@ -272,6 +437,10 @@ def build_incremental_plan(
                 "source_group": record["source_group"],
                 "split": fixed_assignment[record["source_group"]],
                 "image_sha256": image_hash,
+                "trick_orientation": record["trick_orientation"],
+                "yoyo_positive": record["yoyo_positive"],
+                "string_positive": record["string_positive"],
+                "string_visibility": record["string_visibility"],
             }
             for image_hash, record in sorted(candidate.records_by_hash.items())
         ],
@@ -284,6 +453,7 @@ def verify_manifests(
     rebuilt: ManifestView,
     mode: str,
     max_ratio_deviation: float,
+    min_support_groups: int = len(SPLITS),
 ) -> dict[str, Any]:
     if mode not in MODES:
         raise ValueError(f"unsupported mode: {mode}")
@@ -306,6 +476,7 @@ def verify_manifests(
     missing_hashes: list[str] = []
     moved_hashes: list[str] = []
     regrouped_hashes: list[str] = []
+    relabeled_hashes: list[str] = []
     for image_hash, old_record in baseline.records_by_hash.items():
         new_record = rebuilt.records_by_hash.get(image_hash)
         if new_record is None:
@@ -315,13 +486,22 @@ def verify_manifests(
                 moved_hashes.append(image_hash)
             if new_record["source_group"] != old_record["source_group"]:
                 regrouped_hashes.append(image_hash)
+            if any(
+                new_record[field] != old_record[field]
+                for field in (
+                    "trick_orientation",
+                    "yoyo_positive",
+                    "string_positive",
+                    "string_visibility",
+                )
+            ):
+                relabeled_hashes.append(image_hash)
     if missing_hashes:
         errors.append(f"{len(missing_hashes)} existing image hashes are missing")
     if moved_hashes:
         errors.append(f"{len(moved_hashes)} existing image hashes changed split")
     if regrouped_hashes:
         errors.append(f"{len(regrouped_hashes)} existing image hashes changed source group")
-
     new_groups = sorted(set(rebuilt.assignment) - set(baseline.assignment))
     new_groups_by_split = {
         split: sorted(group for group in new_groups if rebuilt.assignment[group] == split)
@@ -366,6 +546,14 @@ def verify_manifests(
             f"final split ratio deviation exceeds {max_ratio_deviation:.4f}: {detail}"
         )
 
+    label_balance = _label_balance_summary(rebuilt, min_support_groups)
+    if mode == "append-isolated" and label_balance["coverage_gaps"]:
+        detail = ", ".join(
+            f"{gap['feature']} missing {gap['missing_splits']}"
+            for gap in label_balance["coverage_gaps"]
+        )
+        errors.append(f"label coverage gate failed: {detail}")
+
     return {
         "ok": not errors,
         "mode": mode,
@@ -391,6 +579,7 @@ def verify_manifests(
             "missing_existing_hash_count": len(missing_hashes),
             "moved_existing_hash_count": len(moved_hashes),
             "regrouped_existing_hash_count": len(regrouped_hashes),
+            "relabeled_existing_hash_count": len(relabeled_hashes),
             "new_groups_by_split": new_groups_by_split,
             "new_image_count_by_split": {
                 split: len(values) for split, values in new_hashes_by_split.items()
@@ -403,6 +592,7 @@ def verify_manifests(
             "image_sha256_overlap_count": 0,
             "duplicate_image_sha256_count": 0,
         },
+        "label_balance": label_balance,
     }
 
 
@@ -482,7 +672,7 @@ def _stable_label_value(path: Path) -> dict[str, Any]:
 
 def _present_non_task_fields(path: Path) -> set[str]:
     value = _read_json(path)
-    return LEGACY_NON_TASK_FIELDS.intersection(value) | ({"dataset_management"} if "dataset_management" in value else set())
+    return NON_TASK_FIELDS.intersection(value) | ({"dataset_management"} if "dataset_management" in value else set())
 
 
 def _label_key(path: Path, dataset_root: Path) -> str:
@@ -646,6 +836,7 @@ def run_verify(args: argparse.Namespace) -> int:
             rebuilt,
             mode=args.mode,
             max_ratio_deviation=args.max_ratio_deviation,
+            min_support_groups=args.min_support_groups,
         )
     except ContractError as exc:
         result = {"ok": False, "mode": args.mode, "errors": [str(exc)]}
@@ -669,6 +860,7 @@ def run_plan(args: argparse.Namespace) -> int:
             candidate,
             seed=args.seed,
             attempts=args.attempts,
+            min_support_groups=args.min_support_groups,
         )
         planned = _manifest_view(output_path, raw)
         result = verify_manifests(
@@ -676,6 +868,7 @@ def run_plan(args: argparse.Namespace) -> int:
             planned,
             mode="append-isolated",
             max_ratio_deviation=args.max_ratio_deviation,
+            min_support_groups=args.min_support_groups,
         )
         result["candidate_manifest"] = str(candidate.path)
         result["candidate_manifest_sha256"] = sha256_file(candidate.path)
@@ -752,6 +945,7 @@ def run_build(args: argparse.Namespace) -> int:
             rebuilt,
             mode=args.mode,
             max_ratio_deviation=args.max_ratio_deviation,
+            min_support_groups=args.min_support_groups,
         )
         result = {
             **preflight,
@@ -848,6 +1042,7 @@ def run_protected_build(args: argparse.Namespace) -> int:
             rebuilt,
             mode=args.mode,
             max_ratio_deviation=args.max_ratio_deviation,
+            min_support_groups=args.min_support_groups,
         )
         if not verification["ok"]:
             raise ContractError("; ".join(verification["errors"]))
@@ -916,6 +1111,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     plan.add_argument("--seed", type=int, default=42)
     plan.add_argument("--attempts", type=int, default=10000)
     plan.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    plan.add_argument("--min-support-groups", type=int, default=len(SPLITS))
     plan.add_argument("--report", default="")
     plan.set_defaults(handler=run_plan)
 
@@ -924,6 +1120,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     verify.add_argument("--rebuilt", required=True)
     verify.add_argument("--mode", choices=MODES, default="append-isolated")
     verify.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    verify.add_argument("--min-support-groups", type=int, default=len(SPLITS))
     verify.add_argument("--report", default="")
     verify.set_defaults(handler=run_verify)
 
@@ -933,6 +1130,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument("--report", default="")
     run.add_argument("--mode", choices=MODES, default="append-isolated")
     run.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    run.add_argument("--min-support-groups", type=int, default=len(SPLITS))
     run.add_argument("--cwd", default="")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--overwrite-snapshot", action="store_true")
@@ -952,6 +1150,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     protected.add_argument("--report", default="")
     protected.add_argument("--mode", choices=MODES, default="append-isolated")
     protected.add_argument("--max-ratio-deviation", type=float, default=0.20)
+    protected.add_argument("--min-support-groups", type=int, default=len(SPLITS))
     protected.add_argument("--cwd", default="")
     protected.add_argument("--dry-run", action="store_true")
     protected.add_argument("--allow-command-without-baseline", action="store_true")
@@ -967,6 +1166,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if hasattr(args, "attempts") and args.attempts < 1:
         print("attempts must be positive", file=sys.stderr)
+        return 2
+    if args.min_support_groups < len(SPLITS):
+        print(f"min-support-groups must be at least {len(SPLITS)}", file=sys.stderr)
         return 2
     return int(args.handler(args))
 

@@ -18,6 +18,7 @@ def digest(index: int) -> str:
 
 def manifest(assignments: dict[str, list[str]], records: list[tuple[str, str, int]]) -> dict:
     return {
+        "schema_version": "yoyo_multitask_dataset_v6",
         "split_policy": {
             "source_groups": assignments,
             "target_sample_ratios": {"train": 0.7, "val": 0.15, "test": 0.15},
@@ -27,7 +28,15 @@ def manifest(assignments: dict[str, list[str]], records: list[tuple[str, str, in
             },
         },
         "records": [
-            {"source_group": group, "split": split, "image_sha256": digest(index)}
+            {
+                "source_group": group,
+                "split": split,
+                "image_sha256": digest(index),
+                "trick_orientation": "normal",
+                "yoyo_positive": True,
+                "string_positive": True,
+                "string_visibility": "visible",
+            }
             for group, split, index in records
         ],
     }
@@ -224,7 +233,7 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                     "baseline=Path(sys.argv[2])",
                     "value=json.loads(baseline.read_text(encoding='utf-8'))",
                     "value['split_policy']['source_groups']['train'].append('train-b')",
-                    f"value['records'].append({{'source_group':'train-b','split':'train','image_sha256':'{digest(4)}'}})",
+                    f"value['records'].append({{'source_group':'train-b','split':'train','image_sha256':'{digest(4)}','trick_orientation':'normal','yoyo_positive':True,'string_positive':True,'string_visibility':'visible'}})",
                     "active.write_text(json.dumps(value),encoding='utf-8')",
                 )
             ),
@@ -405,6 +414,121 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertEqual(planned.assignment["test-a"], "test")
         new_splits = [planned.assignment[group] for group in ("new-a", "new-b", "new-c")]
         self.assertCountEqual(new_splits, ["train", "val", "test"])
+        raw = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(
+            raw["split_policy"]["strategy"],
+            "stable_existing_groups_incremental_multitask_stratified",
+        )
+
+    def test_manifest_requires_current_multitask_labels(self) -> None:
+        value = json.loads(json.dumps(self.baseline_value))
+        del value["records"][0]["string_visibility"]
+
+        with self.assertRaisesRegex(ContractError, "string_visibility"):
+            load_manifest(self.write("missing-label.json", value))
+
+    def test_manifest_rejects_inconsistent_string_labels(self) -> None:
+        value = json.loads(json.dumps(self.baseline_value))
+        value["records"][0]["string_visibility"] = "not_visible"
+
+        with self.assertRaisesRegex(ContractError, "disagrees"):
+            load_manifest(self.write("inconsistent-label.json", value))
+
+    def test_reports_existing_image_task_label_change(self) -> None:
+        value = json.loads(json.dumps(self.baseline_value))
+        value["records"][0]["trick_orientation"] = "horizontal"
+
+        result = self.verify(value)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lineage"]["relabeled_existing_hash_count"], 1)
+
+    def test_append_isolated_rejects_supported_label_missing_from_splits(self) -> None:
+        value = manifest(
+            {
+                "train": ["train-a", "horizontal-a", "horizontal-b", "horizontal-c"],
+                "val": ["val-a"],
+                "test": ["test-a"],
+            },
+            [
+                ("train-a", "train", 1),
+                ("val-a", "val", 2),
+                ("test-a", "test", 3),
+                ("horizontal-a", "train", 4),
+                ("horizontal-b", "train", 5),
+                ("horizontal-c", "train", 6),
+            ],
+        )
+        for record in value["records"][3:]:
+            record["trick_orientation"] = "horizontal"
+
+        result = self.verify(value)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("orientation:horizontal" in error for error in result["errors"]))
+
+    def test_plan_uses_task_labels_when_sample_counts_tie(self) -> None:
+        labels = (
+            ("normal", True, True, "visible"),
+            ("horizontal", True, True, "partial"),
+            ("not_applicable", False, False, "not_visible"),
+        )
+        baseline_value = manifest(
+            {"train": ["old-normal"], "val": ["old-horizontal"], "test": ["old-negative"]},
+            [("old-normal", "train", 10), ("old-horizontal", "val", 11), ("old-negative", "test", 12)],
+        )
+        candidate_value = manifest(
+            {
+                "train": ["old-negative", "new-normal", "new-horizontal", "new-negative"],
+                "val": ["old-normal"],
+                "test": ["old-horizontal"],
+            },
+            [
+                ("old-normal", "val", 10),
+                ("old-horizontal", "test", 11),
+                ("old-negative", "train", 12),
+                ("new-normal", "train", 13),
+                ("new-horizontal", "train", 14),
+                ("new-negative", "train", 15),
+            ],
+        )
+        for value, task_labels in zip(baseline_value["records"], labels, strict=True):
+            value.update(dict(zip(
+                ("trick_orientation", "yoyo_positive", "string_positive", "string_visibility"),
+                task_labels,
+                strict=True,
+            )))
+        candidate_labels = (*labels, *labels)
+        for value, task_labels in zip(candidate_value["records"], candidate_labels, strict=True):
+            value.update(dict(zip(
+                ("trick_orientation", "yoyo_positive", "string_positive", "string_visibility"),
+                task_labels,
+                strict=True,
+            )))
+        baseline = self.write("label-baseline.json", baseline_value)
+        candidate = self.write("label-candidate.json", candidate_value)
+        output = self.root / "label-plan.json"
+
+        exit_code = main(
+            [
+                "plan",
+                "--baseline", str(baseline),
+                "--candidate", str(candidate),
+                "--output", str(output),
+                "--max-ratio-deviation", "1",
+            ]
+        )
+
+        self.assertEqual(exit_code, 0)
+        planned = load_manifest(output)
+        old_by_split = {"train": "normal", "val": "horizontal", "test": "not_applicable"}
+        new_orientation = {
+            "new-normal": "normal",
+            "new-horizontal": "horizontal",
+            "new-negative": "not_applicable",
+        }
+        for group, orientation in new_orientation.items():
+            self.assertNotEqual(orientation, old_by_split[planned.assignment[group]])
 
 
 if __name__ == "__main__":
