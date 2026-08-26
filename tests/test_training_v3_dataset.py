@@ -89,7 +89,6 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(first["split_policy"]["leakage"]["source_group_overlap_count"], 0)
             self.assertEqual(first["schema_version"], "yoyo_multitask_dataset_v6")
             self.assertTrue(all("string_visibility" in record for record in first["records"]))
-            self.assertFalse(first["task_input_dependencies"]["hand_string_attachment_required"])
             group_sets = [set(first["split_policy"]["source_groups"][split]) for split in ("train", "val", "test")]
             self.assertFalse(group_sets[0] & group_sets[1])
             self.assertFalse(group_sets[0] & group_sets[2])
@@ -118,7 +117,6 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertEqual(orientation["train_balance"]["repeated_image_count"], 0)
             self.assertEqual(len(list((output / "orientation").rglob("*.jpg"))), 18)
             roi = build_orientation_view(output)
-            self.assertNotIn("hands_pixel", roi["input_dependencies"])
             self.assertFalse(roi["input_dependencies"]["string_geometry"])
             self.assertEqual(roi["counts"]["test"]["total"], first["counts"]["test"]["samples"])
             self.assertTrue(all(Path(record["image"]).is_file() for record in roi["records"]))

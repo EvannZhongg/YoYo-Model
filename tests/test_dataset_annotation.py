@@ -30,19 +30,6 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 self.assertEqual(list_annotation_datasets(), [{"name": "review_set", "path": str(dataset.resolve())}])
 
-    def test_rejects_v4_annotation_schema(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            dataset, key = make_annotation_dataset(root)
-            label_path = dataset / "canonical" / "labels" / key
-            document = json.loads(label_path.read_text(encoding="utf-8"))
-            document["schema_version"] = "agent_yoyo_string_annotation_v4"
-            label_path.write_text(json.dumps(document), encoding="utf-8")
-            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
-                self.assertEqual(list_annotation_datasets(), [])
-                with self.assertRaisesRegex(ValueError, "unsupported annotation schema"):
-                    load_annotation_sample(str(dataset), key)
-
     def test_lists_every_annotation_dataset_under_datasets_root(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

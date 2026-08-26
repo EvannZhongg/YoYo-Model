@@ -1,4 +1,4 @@
-"""Build a hand-independent yoyo orientation view."""
+"""Build a yoyo orientation view."""
 
 from __future__ import annotations
 

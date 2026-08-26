@@ -1,8 +1,10 @@
 # Training v3
 
-Training v3 keeps the detector and string label contracts, excludes all hand
-and pose annotations from datasets, and trains orientation from yoyo pixels
-without hand/string crop geometry. RTMPose-m WholeBody is runtime-only.
+Training v3 keeps the detector and string label contracts. Current task
+builders read only the fields required by detection, string segmentation, and
+orientation; other annotation fields remain available in canonical labels and
+are not consumed by these tasks. Orientation is trained from yoyo pixels
+without string crop geometry. RTMPose-m WholeBody is runtime-only.
 
 Run every command through the project virtual environment:
 
@@ -15,6 +17,5 @@ Run every command through the project virtual environment:
 ```
 
 The model downloader writes only to `models/rtmpose`. No RTMLib user-cache
-path is used. Detection and string training do not contain hand fields. The v3
-orientation view records `string_geometry: false` in its manifest so the
-independence claim is mechanically auditable.
+path is used. The v3 orientation view records `string_geometry: false` in its
+manifest so its input dependencies are mechanically auditable.

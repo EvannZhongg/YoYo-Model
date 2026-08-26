@@ -20,7 +20,6 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 
 SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
-V4_SCHEMA_VERSION = "agent_yoyo_string_annotation_v4"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
@@ -1772,164 +1771,6 @@ def command_audit(args: argparse.Namespace) -> int:
     return 1 if args.strict and not report["ok"] else 0
 
 
-def _remove_v4_fields(value: Any, removals: Counter[str]) -> None:
-    if isinstance(value, dict):
-        for key in list(value):
-            if key in REMOVED_FIELDS or key in LEGACY_NON_TASK_FIELDS:
-                removals[key] += 1
-                value.pop(key)
-            else:
-                _remove_v4_fields(value[key], removals)
-    elif isinstance(value, list):
-        for item in value:
-            _remove_v4_fields(item, removals)
-
-
-def _upgrade_v5_document(before: dict[str, Any], removals: Counter[str]) -> dict[str, Any]:
-    version = before.get("schema_version")
-    if version not in {V4_SCHEMA_VERSION, SCHEMA_VERSION}:
-        raise ValueError(f"unsupported source schema_version={version}")
-    after = copy.deepcopy(before)
-    _remove_v4_fields(after, removals)
-    after["schema_version"] = SCHEMA_VERSION
-    width, height = [int(item) for item in after["image_size"]]
-
-    if after.get("visibility") == "not_visible":
-        after["visibility"] = "uncertain"
-    box = bbox(after.get("yoyo_bbox_pixel"))
-    if "yoyo_bbox_2d" in after:
-        after["yoyo_bbox_2d"] = (
-            pixel_to_normalized(box[:2], width, height) + pixel_to_normalized(box[2:], width, height)
-            if box else None
-        )
-    if "bbox" in after:
-        after["bbox"] = (
-            [{
-                "label": "yoyo",
-                "sub_label": "visible yoyo body",
-                "bbox_pixel": after.get("yoyo_bbox_pixel"),
-                "bbox_2d": after.get("yoyo_bbox_2d"),
-            }]
-            if box else []
-        )
-
-    strokes = after.get("string_polylines_pixel") or []
-    strokes_2d = [
-        [pixel_to_normalized(point_value, width, height) for point_value in stroke]
-        for stroke in strokes
-    ]
-    if "string_polylines_2d" in after:
-        after["string_polylines_2d"] = strokes_2d or None
-    if "string_polyline_pixel" in after:
-        after["string_polyline_pixel"] = strokes[0] if strokes else None
-    if "string_polyline_2d" in after:
-        after["string_polyline_2d"] = strokes_2d[0] if strokes else None
-
-    path_data = after.get("string_path")
-    if isinstance(path_data, dict):
-        if path_data.get("topology") == "not_visible":
-            path_data["topology"] = "uncertain"
-        if path_data.get("reconstruction_status") == "not_visible":
-            path_data["reconstruction_status"] = "not_applicable"
-        anchor_threshold = max(8.0, math.hypot(width, height) * 0.08)
-        for path_item in path_data.get("paths") or []:
-            if not isinstance(path_item, dict):
-                continue
-            points = path_item.get("points_pixel") or []
-            if "points_2d" in path_item:
-                path_item["points_2d"] = [pixel_to_normalized(item, width, height) for item in points]
-            for anchor_name, point_index in (("start_anchor", 0), ("end_anchor", -1)):
-                anchor = str(path_item.get(anchor_name) or "unknown")
-                if anchor not in PATH_ANCHORS:
-                    path_item[anchor_name] = "unknown"
-                elif anchor == "yoyo" and (
-                    not box or not points or point_box_distance(points[point_index], box) > anchor_threshold
-                ):
-                    path_item[anchor_name] = "unknown"
-            for edge in path_item.get("edges") or []:
-                if not isinstance(edge, dict):
-                    continue
-                evidence = str(edge.get("evidence") or "").lower()
-                if evidence == "reviewed":
-                    edge["evidence"] = "observed"
-                elif evidence == "propagated":
-                    edge["evidence"] = "temporal"
-                elif evidence not in EDGE_EVIDENCE:
-                    edge["evidence"] = "inferred"
-    added = set(after) - set(before)
-    if added:
-        raise ValueError(f"v5 migration unexpectedly added top-level fields: {sorted(added)}")
-    return after
-
-
-def command_upgrade_v5(args: argparse.Namespace) -> int:
-    labels_input = Path(args.labels).resolve()
-    labels_root = labels_input / "labels" if (labels_input / "labels").is_dir() else labels_input
-    files = label_files(labels_input)
-    if not files:
-        raise ValueError(f"no labels found: {labels_input}")
-
-    removals: Counter[str] = Counter()
-    writes: list[tuple[Path, dict[str, Any]]] = []
-    upgraded = normalized = unchanged = 0
-    for label_path in files:
-        before = read_json(label_path)
-        after = _upgrade_v5_document(before, removals)
-        gate = validate_label(after, check_image=False, check_reviews=False, label_path=label_path)
-        if gate["errors"]:
-            raise ValueError(f"migrated v5 label is invalid ({label_path}): {gate['errors']}")
-        if after == before:
-            unchanged += 1
-            continue
-        upgraded += int(before.get("schema_version") == V4_SCHEMA_VERSION)
-        normalized += int(before.get("schema_version") == SCHEMA_VERSION)
-        writes.append((label_path, after))
-
-    review_document = None
-    review_entries: dict[str, Any] = {}
-    review_map_path = Path(args.review_map).resolve() if args.review_map else None
-    if review_map_path is not None:
-        if not args.dataset_key:
-            raise ValueError("--dataset-key is required with --review-map")
-        review_document = read_json(review_map_path)
-        if review_document.get("schema_version") != "yoyo_dataset_review_v3":
-            raise ValueError(f"unsupported review map schema: {review_map_path}")
-        dataset_review = (review_document.get("datasets") or {}).get(args.dataset_key) or {}
-        review_entries = dataset_review.get("samples") or {}
-        if not isinstance(review_entries, dict):
-            raise ValueError(f"invalid review map dataset entry: {args.dataset_key}")
-        known_keys = {path.relative_to(labels_root).as_posix() for path in files}
-        orphaned = sorted(set(review_entries) - known_keys)
-        if orphaned:
-            raise ValueError(f"review map contains labels outside the upgrade set: {orphaned[:5]}")
-
-    if not args.dry_run:
-        for label_path, after in writes:
-            write_json(label_path, after)
-        if review_document is not None and review_map_path is not None:
-            files_by_key = {path.relative_to(labels_root).as_posix(): path for path in files}
-            for key, review in review_entries.items():
-                stat = files_by_key[key].stat()
-                review["label_size_bytes"] = int(stat.st_size)
-                review["label_mtime_ns"] = int(stat.st_mtime_ns)
-            write_json(review_map_path, review_document)
-    result = {
-        "ok": True,
-        "dry_run": bool(args.dry_run),
-        "schema_version": SCHEMA_VERSION,
-        "label_count": len(files),
-        "upgraded_v4_count": upgraded,
-        "normalized_v5_count": normalized,
-        "unchanged_count": unchanged,
-        "written_count": 0 if args.dry_run else len(writes),
-        "review_entry_count": len(review_entries),
-        "review_entries_rebound": 0 if args.dry_run else len(review_entries),
-        "removed_fields": dict(sorted(removals.items())),
-    }
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
-
-
 def command_rebase_sources(args: argparse.Namespace) -> int:
     labels_root = Path(args.labels).resolve()
     images_root = Path(args.images).resolve()
@@ -2333,16 +2174,6 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--require-approved", action="store_true", help="Treat every pending/rejected label as a final-gate error.")
     audit.add_argument("--strict", action="store_true")
     audit.set_defaults(func=command_audit)
-
-    upgrade_v5 = subparsers.add_parser(
-        "upgrade-v5",
-        help="Upgrade a v4 label tree to the exact v5 contract without adding annotation fields.",
-    )
-    upgrade_v5.add_argument("--labels", required=True, help="One label, a labels tree, or a project containing labels/.")
-    upgrade_v5.add_argument("--review-map", default="", help="Optional yoyo_dataset_review_v3 map to rebind after writes.")
-    upgrade_v5.add_argument("--dataset-key", default="", help="Review-map dataset key, required with --review-map.")
-    upgrade_v5.add_argument("--dry-run", action="store_true")
-    upgrade_v5.set_defaults(func=command_upgrade_v5)
 
     rebase = subparsers.add_parser(
         "rebase-sources",

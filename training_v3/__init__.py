@@ -1,4 +1,4 @@
-"""Pose-excluded, hand-independent multi-task training pipeline."""
+"""Multi-task training pipeline for yoyo detection, strings, and orientation."""
 
 from .prepare_dataset import build_training_dataset
 

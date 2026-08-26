@@ -26,10 +26,6 @@ from config import BASE_DIR
 SCHEMA_VERSION = "yoyo_multitask_dataset_v6"
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; annotation_schema_v5"
-POSE_ANNOTATION_FIELDS = {
-    "hands", "hands_pixel", "hands_2d", "hands_normalized",
-    "hand_landmarks_pixel", "hand_pose", "pose", "pose_person",
-}
 VALID_ORIENTATIONS = ("normal", "horizontal", "not_applicable")
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible"}
 SPLITS = ("train", "val", "test")
@@ -118,8 +114,6 @@ def _load_samples(source_roots: Iterable[Path]) -> tuple[list[Sample], list[dict
             reason = ""
             if annotation.get("schema_version") != ANNOTATION_SCHEMA_VERSION:
                 reason = f"unsupported_schema_version={annotation.get('schema_version')}"
-            elif POSE_ANNOTATION_FIELDS.intersection(annotation):
-                reason = "unsupported_pose_annotation_fields"
             elif "dataset_management" in annotation:
                 reason = "unsupported_dataset_management_field"
             elif not group:
@@ -602,13 +596,11 @@ def build_training_dataset(
             "detection": "quality-approved yoyo_bbox_pixel; empty label is a reviewed negative",
             "string_segmentation": "approved masks or buffered visible centerlines; not_visible is a reviewed negative",
             "orientation": "three-way trick_orientation including not_applicable",
-            "pose_annotations": "excluded from the dataset; RTMPose is runtime-only",
         },
         "task_input_dependencies": {
             "detection": ["image", "yoyo_bbox_pixel"],
             "string_segmentation": ["image", "string_mask_or_polyline"],
             "orientation": ["image", "yoyo_bbox_pixel_or_fixed_negative_crop", "trick_orientation"],
-            "hand_string_attachment_required": False,
         },
     }
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -26,23 +26,6 @@ Use `scripts/annotation_pipeline.py` for every label state change. Do not
 hand-edit labels, digests, revision history, approvals, exports, or cleanup
 reports.
 
-## Upgrade V4 Labels
-
-Upgrade a label tree in one pass. The command changes only fields whose v4
-values are invalid in v5, removes deprecated non-task fields recursively, and
-never creates migration history or other top-level annotation fields.
-
-```powershell
-& VENV_PYTHON "$SKILL_DIR\scripts\annotation_pipeline.py" upgrade-v5 `
-  --labels DATASET\canonical\labels `
-  --review-map PROJECT\workbench_state\dataset_review_status.json `
-  --dataset-key DATASET_NAME --dry-run
-```
-
-Remove `--dry-run` only after every label and review-map key validates. The
-write pass rebinds existing `yoyo_dataset_review_v3` entries to the migrated
-file revisions without changing reviewer decisions.
-
 ## Interpreter And Configuration
 
 Use a project virtual-environment interpreter that contains OpenCV, OpenAI,
