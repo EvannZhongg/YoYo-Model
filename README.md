@@ -42,7 +42,7 @@ datasets/1Ayoyo_dataset/
 - `trick_orientation` 三分类：`horizontal`、`normal`、`not_applicable`
 - 人工审核状态和来源信息
 
-数据集不包含手部或 pose 标注。RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放在项目内的 `models/rtmpose/`，不会写入 C 盘用户缓存。方向模型只读取悠悠球 ROI，不读取手部或绳线几何。
+RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放在项目内的 `models/rtmpose/`，不会写入 C 盘用户缓存。方向模型只读取悠悠球 ROI。
 
 不包含具名招式类别。项目不再训练或推理具体招式名称，也不生成招式时间段或候选短视频。
 
