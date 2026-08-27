@@ -26,6 +26,18 @@ SHA-256：`13b66a5c6eda03deb7f5bc4b1efc60a273df5aae8d314424a79bf2fb5b7029b8`。
 
 本报告只记录当前有效结论，覆盖悠悠球检测、绳线分割、三分类方向识别，以及连续视频中的悠悠球/绳线追踪。训练与评估均在 `.venv` 中执行；详细 checkpoint、manifest 和逐帧结果保留在 `runs/`。
 
+## 2026-08-27 绳线模型硬负样本损失权重晋升
+
+在同一 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以当前生产 FPN 权重初始化，保持输入、增强、采样和后处理不变，仅将 hard-negative loss 权重从 `0.05` 调整为 `0.20`，以 `lr=5e-6` 微调 8 epoch。验证集选择 epoch 8、阈值 `0.15`。晋升权重为：
+
+`runs/experiments/semantic_new116_hn20_r1/weights/best.pt`
+
+SHA-256：`ea5592d6510c17be55bf4b86517acb747a758cc0d8538050635bae0fa4dd2d9b`。
+
+独立 test（108 张）Tolerant F1@3 为 `0.945094`，高于生产权重 `0.944534`；Presence F1 保持 `0.980198`，负图平均误检像素由 `45.889` 降至 `43.778`。在 856 帧连续集上，以 Workbench 实际默认阈值 `0.20`（checkpoint 阈值 `0.15` 加配置下限）和相同颜色/亮脊/时序后处理复核，帧加权 F1@8 `0.651356 -> 0.652770`，Chamfer `43.94 -> 33.997 px`；9 组中 6 组 F1 提升，邬聪聪组 Chamfer `148.65 -> 59.91 px`，DSCF7145 等局部组保持在同一量级。模型结构和参数量不变，`960x544` 单次 GPU 前向基准约 `8.46 -> 7.88 ms`。
+
+初始化 lineage、test 指标和连续集逐组结果分别保留在 `runs/experiments/semantic_new116_hn20_r1/run_manifest.json`、`runs/experiments/semantic_new116_hn20_r1_test/test_semantic_metrics.json` 和 `runs/experiments/semantic_new116_hn20_r1_consecutive856/summary.json`。默认 `tracking.string_weights_path` 与 `config.py` 回退值已同步更新。
+
 ## 当前默认方案
 
 | 任务 | 当前方案 | 默认行为 |

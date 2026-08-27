@@ -141,7 +141,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/experiments/semantic_new116_ft_r1_lr1e5/weights/best.pt",
+            "runs/experiments/semantic_new116_hn20_r1/weights/best.pt",
         )
     )
     string_ensemble_weights_path: Path | None = _as_optional_path(
