@@ -16,10 +16,8 @@ from common.files import sha256_file
 from config import TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
-    PreparedCalibratedEnsemblePredictor,
     load_checkpoint,
     polyline_probability_support,
-    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     semantic_mask_observation,
@@ -28,7 +26,6 @@ from video_tracking.sequence_metrics import evaluate_sequence
 from video_tracking.string_tracker import (
     _color_line_observation,
     estimate_string,
-    update_adaptive_string_domain_gate,
 )
 
 
@@ -79,22 +76,6 @@ def evaluate_consecutive_checkpoint(
     max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     unanchored_semantic_grace_frames: int = 12,
-    ensemble_weights: Path | None = None,
-    ensemble_alpha: float = 0.0,
-    ensemble_candidate_threshold: float = 0.5,
-    adaptive_weights: Path | None = None,
-    adaptive_ensemble_alpha: float = 0.0,
-    adaptive_threshold: float | None = None,
-    adaptive_threshold_max_mean_confidence: float | None = None,
-    adaptive_inference_scale: float = TRACKING_CONFIG.string_adaptive_inference_scale,
-    adaptive_warmup_frames: int = 0,
-    adaptive_max_color_accepts: int = 0,
-    adaptive_max_mean_confidence: float = 1.0,
-    adaptive_min_mean_distance_ratio: float = 0.0,
-    adaptive_single_max_mean_confidence: float = 0.0,
-    adaptive_single_threshold: float | None = None,
-    adaptive_single_max_components: int = 0,
-    cuda_graph: bool = True,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -109,63 +90,6 @@ def evaluate_consecutive_checkpoint(
         checkpoint.get("threshold", 0.5) if threshold is None else threshold
     )
     selected_threshold = primary_calibration_threshold
-    ensemble_model = None
-    ensemble_checkpoint = None
-    if not 0.0 <= float(ensemble_alpha) <= 1.0:
-        raise ValueError("ensemble_alpha must be between 0 and 1")
-    if not 0.0 < float(ensemble_candidate_threshold) < 1.0:
-        raise ValueError("ensemble_candidate_threshold must be between 0 and 1")
-    if ensemble_weights is not None and float(ensemble_alpha) > 0.0:
-        ensemble_weights = ensemble_weights.resolve()
-        ensemble_model, ensemble_checkpoint = load_checkpoint(ensemble_weights, device)
-        if ensemble_checkpoint.get("model_config") != checkpoint.get("model_config"):
-            raise ValueError("Semantic ensemble checkpoints use incompatible model configurations")
-        selected_threshold = 0.5
-    adaptive_model = None
-    adaptive_checkpoint = None
-    if adaptive_weights is not None:
-        if ensemble_model is None:
-            raise ValueError("Adaptive semantic evaluation requires an ensemble model")
-        if adaptive_warmup_frames < 1 or adaptive_max_color_accepts < 0:
-            raise ValueError("Adaptive warmup must be positive and maximum color accepts non-negative")
-        if not 0.0 <= float(adaptive_max_mean_confidence) <= 1.0:
-            raise ValueError("Adaptive maximum mean confidence must be between 0 and 1")
-        if float(adaptive_min_mean_distance_ratio) < 0.0:
-            raise ValueError("Adaptive minimum mean distance ratio must be non-negative")
-        if not 0.0 <= float(adaptive_single_max_mean_confidence) <= 1.0:
-            raise ValueError("Adaptive single-model confidence gate must be between 0 and 1")
-        if adaptive_single_threshold is not None and not 0.0 < float(adaptive_single_threshold) < 1.0:
-            raise ValueError("Adaptive single-model threshold must be between 0 and 1")
-        if int(adaptive_single_max_components) < 0:
-            raise ValueError("Adaptive single-model component limit must be non-negative")
-        if not 0.0 <= float(adaptive_ensemble_alpha) <= 1.0:
-            raise ValueError("adaptive_ensemble_alpha must be between 0 and 1")
-        if adaptive_threshold is not None and not 0.0 < float(adaptive_threshold) < 1.0:
-            raise ValueError("adaptive threshold must be between 0 and 1")
-        if (
-            adaptive_threshold_max_mean_confidence is not None
-            and not 0.0 <= float(adaptive_threshold_max_mean_confidence) <= 1.0
-        ):
-            raise ValueError("adaptive threshold confidence gate must be between 0 and 1")
-        if not 0.5 <= float(adaptive_inference_scale) <= 2.0:
-            raise ValueError("adaptive_inference_scale must be between 0.5 and 2.0")
-        adaptive_weights = adaptive_weights.resolve()
-        adaptive_model, adaptive_checkpoint = load_checkpoint(adaptive_weights, device)
-        if adaptive_checkpoint.get("model_config") != checkpoint.get("model_config"):
-            raise ValueError("Adaptive semantic checkpoint uses an incompatible model configuration")
-    ensemble_predictor = (
-        PreparedCalibratedEnsemblePredictor(
-            model,
-            ensemble_model,
-            float(ensemble_alpha),
-            float(checkpoint.get("threshold", 0.5)),
-            float(ensemble_candidate_threshold),
-            cuda_graph,
-        )
-        if ensemble_model is not None
-        else None
-    )
-    adaptive_ensemble_predictors: dict[float, PreparedCalibratedEnsemblePredictor] = {}
     document = json.loads((dataset_dir / "consecutive_groups.json").read_text(encoding="utf-8"))
     selected = set(groups or [])
     results: list[dict[str, Any]] = []
@@ -180,15 +104,6 @@ def evaluate_consecutive_checkpoint(
         target_components = []
         accepted_color_candidates = 0
         rejected_color_candidates = 0
-        adaptive_enabled = False
-        adaptive_single_enabled = False
-        adaptive_active_threshold = float(
-            adaptive_checkpoint.get("threshold", 0.5)
-            if adaptive_checkpoint is not None
-            else 0.5
-        )
-        adaptive_window: list[tuple[bool, float, float]] = []
-        adaptive_gate_metrics: dict[str, float | int] = {}
         previous_frame: np.ndarray | None = None
         previous_string: dict[str, Any] | None = None
         last_yoyo_frame: int | None = None
@@ -198,65 +113,13 @@ def evaluate_consecutive_checkpoint(
             annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
             image_path = dataset_dir / str(frame["image"])
             image = _read_image(image_path)
-            active_model = adaptive_model if adaptive_enabled else model
-            active_checkpoint = adaptive_checkpoint if adaptive_enabled else checkpoint
-            active_primary_threshold = float(
-                adaptive_active_threshold
-                if adaptive_enabled
-                else active_checkpoint.get("threshold", 0.5)
-            )
-            active_ensemble_alpha = (
-                float(adaptive_ensemble_alpha) if adaptive_enabled else float(ensemble_alpha)
-            )
-            active_scale = float(adaptive_inference_scale) if adaptive_enabled else 1.0
-            active_input_width = max(32, int(round(input_width * active_scale / 16.0)) * 16)
-            active_input_height = max(32, int(round(input_height * active_scale / 16.0)) * 16)
+            active_input_width = input_width
+            active_input_height = input_height
             tensor, meta = prepare_letterboxed_input(
                 image, active_input_width, active_input_height, device,
             )
-            use_ensemble = bool(
-                ensemble_model is not None
-                and not (adaptive_enabled and adaptive_single_enabled)
-            )
-            if use_ensemble:
-                active_predictor = (
-                    adaptive_ensemble_predictors.get(active_primary_threshold)
-                    if adaptive_enabled
-                    else ensemble_predictor
-                )
-                if adaptive_enabled and active_predictor is None:
-                    active_predictor = PreparedCalibratedEnsemblePredictor(
-                        active_model,
-                        ensemble_model,
-                        active_ensemble_alpha,
-                        active_primary_threshold,
-                        float(ensemble_candidate_threshold),
-                        cuda_graph,
-                    )
-                    adaptive_ensemble_predictors[active_primary_threshold] = active_predictor
-                probability = (
-                    active_predictor.predict(tensor)
-                    if active_predictor is not None
-                    else predict_prepared_calibrated_ensemble(
-                        active_model,
-                        ensemble_model,
-                        tensor,
-                        active_ensemble_alpha,
-                        active_primary_threshold,
-                        float(ensemble_candidate_threshold),
-                    )
-                )
-            else:
-                probability = predict_prepared_probability(active_model, tensor)
-            active_selected_threshold = (
-                float(
-                    active_primary_threshold
-                    if adaptive_single_threshold is None
-                    else adaptive_single_threshold
-                )
-                if adaptive_enabled and adaptive_single_enabled
-                else selected_threshold
-            )
+            probability = predict_prepared_probability(model, tensor)
+            active_selected_threshold = selected_threshold
             yoyo = _yoyo(annotation)
             observation = semantic_mask_observation(
                 probability,
@@ -265,13 +128,7 @@ def evaluate_consecutive_checkpoint(
                 yoyo=yoyo,
                 yoyo_division=str(annotation.get("yoyo_division") or "1A"),
                 min_component_pixels=8,
-                max_components=(
-                    int(adaptive_single_max_components)
-                    if adaptive_enabled
-                    and adaptive_single_enabled
-                    and int(adaptive_single_max_components) > 0
-                    else 8
-                ),
+                max_components=8,
             )
             final_string = observation
             if color_augment and yoyo is not None:
@@ -303,13 +160,9 @@ def evaluate_consecutive_checkpoint(
                         probability, meta, candidate["points"], active_selected_threshold,
                     )
                     candidate_min_mean = (
-                        color_probability_min_mean
-                        if adaptive_enabled
-                        else max(
-                            float(color_probability_min_mean or 0.0),
-                            float(bright_line_min_mean),
-                        )
-                    ) if use_bright_lines else color_probability_min_mean
+                        max(float(color_probability_min_mean or 0.0), float(bright_line_min_mean))
+                        if use_bright_lines else color_probability_min_mean
+                    )
                     if bool(
                         color_probability_min_mean is None
                         or (
@@ -352,35 +205,6 @@ def evaluate_consecutive_checkpoint(
                     })
                     if color.get("line_features"):
                         final_string["color_line_features"] = color["line_features"]
-            if adaptive_model is not None and not adaptive_enabled:
-                adaptive_window, triggered, adaptive_gate_metrics = (
-                    update_adaptive_string_domain_gate(
-                        adaptive_window,
-                        final_string,
-                        image.shape[1],
-                        image.shape[0],
-                        adaptive_warmup_frames,
-                        adaptive_max_color_accepts,
-                        adaptive_max_mean_confidence,
-                        adaptive_min_mean_distance_ratio,
-                    )
-                )
-                if triggered:
-                    adaptive_enabled = True
-                    if (
-                        adaptive_threshold is not None
-                        and (
-                            adaptive_threshold_max_mean_confidence is None
-                            or float(adaptive_gate_metrics.get("mean_confidence", 1.0))
-                            < float(adaptive_threshold_max_mean_confidence)
-                        )
-                    ):
-                        adaptive_active_threshold = float(adaptive_threshold)
-                    adaptive_single_enabled = bool(
-                        float(adaptive_single_max_mean_confidence) > 0.0
-                        and float(adaptive_gate_metrics.get("mean_confidence", 1.0))
-                        < float(adaptive_single_max_mean_confidence)
-                    )
             if temporal:
                 frame_index = int(frame["frame_index"])
                 allow_unanchored_semantic = bool(
@@ -447,9 +271,6 @@ def evaluate_consecutive_checkpoint(
             "zero_prediction_frames": int(sum(value == 0 for value in predicted_components)),
             "accepted_color_candidates": accepted_color_candidates,
             "rejected_color_candidates": rejected_color_candidates,
-            "adaptive_enabled": adaptive_enabled,
-            "adaptive_single_enabled": adaptive_single_enabled,
-            "adaptive_gate_metrics": adaptive_gate_metrics,
             "string": metrics["string"],
         })
     if not results:
@@ -472,44 +293,6 @@ def evaluate_consecutive_checkpoint(
         "max_propagation_frames": int(max_propagation_frames),
         "max_forward_backward_error": float(max_forward_backward_error),
         "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
-        "ensemble_weights": str(ensemble_weights) if ensemble_weights is not None else "",
-        "ensemble_weights_sha256": (
-            sha256_file(ensemble_weights) if ensemble_weights is not None else ""
-        ),
-        "ensemble_alpha": float(ensemble_alpha),
-        "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
-        "adaptive_weights": str(adaptive_weights) if adaptive_weights is not None else "",
-        "adaptive_weights_sha256": sha256_file(adaptive_weights) if adaptive_weights is not None else "",
-        "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
-        "adaptive_threshold": (
-            float(adaptive_threshold) if adaptive_threshold is not None else None
-        ),
-        "adaptive_threshold_max_mean_confidence": (
-            float(adaptive_threshold_max_mean_confidence)
-            if adaptive_threshold_max_mean_confidence is not None
-            else None
-        ),
-        "adaptive_inference_scale": float(adaptive_inference_scale),
-        "adaptive_warmup_frames": int(adaptive_warmup_frames),
-        "adaptive_max_color_accepts": int(adaptive_max_color_accepts),
-        "adaptive_max_mean_confidence": float(adaptive_max_mean_confidence),
-        "adaptive_min_mean_distance_ratio": float(adaptive_min_mean_distance_ratio),
-        "adaptive_single_max_mean_confidence": float(
-            adaptive_single_max_mean_confidence
-        ),
-        "adaptive_single_threshold": (
-            float(adaptive_single_threshold)
-            if adaptive_single_threshold is not None
-            else None
-        ),
-        "adaptive_single_max_components": int(adaptive_single_max_components),
-        "cuda_graph_requested": bool(cuda_graph),
-        "cuda_graph_primary": bool(
-            ensemble_predictor is not None and ensemble_predictor.uses_cuda_graph
-        ),
-        "cuda_graph_adaptive": bool(
-            any(predictor.uses_cuda_graph for predictor in adaptive_ensemble_predictors.values())
-        ),
         "groups": results,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -554,35 +337,6 @@ def main() -> int:
         default=TRACKING_CONFIG.string_flow_fb_max_error,
     )
     parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
-    parser.add_argument("--ensemble-weights", default="")
-    parser.add_argument("--ensemble-alpha", type=float, default=0.0)
-    parser.add_argument("--ensemble-candidate-threshold", type=float, default=0.5)
-    parser.add_argument("--adaptive-weights", default="")
-    parser.add_argument("--adaptive-ensemble-alpha", type=float, default=0.0)
-    parser.add_argument("--adaptive-threshold", type=float, default=None)
-    parser.add_argument(
-        "--adaptive-threshold-max-mean-confidence",
-        type=float,
-        default=None,
-    )
-    parser.add_argument(
-        "--adaptive-inference-scale",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_inference_scale,
-    )
-    parser.add_argument("--adaptive-warmup-frames", type=int, default=0)
-    parser.add_argument("--adaptive-max-color-accepts", type=int, default=0)
-    parser.add_argument("--adaptive-max-mean-confidence", type=float, default=1.0)
-    parser.add_argument("--adaptive-min-mean-distance-ratio", type=float, default=0.0)
-    parser.add_argument("--adaptive-single-max-mean-confidence", type=float, default=0.0)
-    parser.add_argument("--adaptive-single-threshold", type=float, default=None)
-    parser.add_argument("--adaptive-single-max-components", type=int, default=0)
-    parser.add_argument(
-        "--cuda-graph",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Capture fixed-shape CUDA ensemble inference; CPU always uses eager inference.",
-    )
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(
         weights=Path(args.weights),
@@ -601,24 +355,6 @@ def main() -> int:
         max_propagation_frames=args.max_propagation_frames,
         max_forward_backward_error=args.max_forward_backward_error,
         unanchored_semantic_grace_frames=args.unanchored_semantic_grace_frames,
-        ensemble_weights=Path(args.ensemble_weights) if str(args.ensemble_weights).strip() else None,
-        ensemble_alpha=args.ensemble_alpha,
-        ensemble_candidate_threshold=args.ensemble_candidate_threshold,
-        adaptive_weights=Path(args.adaptive_weights) if str(args.adaptive_weights).strip() else None,
-        adaptive_ensemble_alpha=args.adaptive_ensemble_alpha,
-        adaptive_threshold=args.adaptive_threshold,
-        adaptive_threshold_max_mean_confidence=(
-            args.adaptive_threshold_max_mean_confidence
-        ),
-        adaptive_inference_scale=args.adaptive_inference_scale,
-        adaptive_warmup_frames=args.adaptive_warmup_frames,
-        adaptive_max_color_accepts=args.adaptive_max_color_accepts,
-        adaptive_max_mean_confidence=args.adaptive_max_mean_confidence,
-        adaptive_min_mean_distance_ratio=args.adaptive_min_mean_distance_ratio,
-        adaptive_single_max_mean_confidence=args.adaptive_single_max_mean_confidence,
-        adaptive_single_threshold=args.adaptive_single_threshold,
-        adaptive_single_max_components=args.adaptive_single_max_components,
-        cuda_graph=args.cuda_graph,
     )
     compact = [{
         "source_group": item["source_group"],

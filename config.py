@@ -63,12 +63,6 @@ def _as_path(value: Any) -> Path:
     return BASE_DIR / path
 
 
-def _as_optional_path(value: Any) -> Path | None:
-    if value is None or not str(value).strip():
-        return None
-    return _as_path(value)
-
-
 @dataclass(frozen=True)
 class DatasetConfig:
     image_input_dir: Path = _as_path(
@@ -142,107 +136,6 @@ class TrackingConfig:
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
             "runs/experiments/semantic_centerline_regularized_r3/weights/best.pt",
-        )
-    )
-    string_ensemble_weights_path: Path | None = _as_optional_path(
-        _env_or_config(
-            "TRACKING_STRING_ENSEMBLE_WEIGHTS_PATH",
-            "tracking.string_ensemble_weights_path",
-            "",
-        )
-    )
-    string_ensemble_alpha: float = float(
-        _env_or_config("TRACKING_STRING_ENSEMBLE_ALPHA", "tracking.string_ensemble_alpha", 0.0)
-    )
-    string_ensemble_candidate_threshold: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ENSEMBLE_CANDIDATE_THRESHOLD",
-            "tracking.string_ensemble_candidate_threshold",
-            0.50,
-        )
-    )
-    string_adaptive_weights_path: Path | None = _as_optional_path(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_WEIGHTS_PATH",
-            "tracking.string_adaptive_weights_path",
-            "",
-        )
-    )
-    string_adaptive_ensemble_alpha: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_ENSEMBLE_ALPHA",
-            "tracking.string_adaptive_ensemble_alpha",
-            0.0,
-        )
-    )
-    string_adaptive_threshold: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_THRESHOLD",
-            "tracking.string_adaptive_threshold",
-            0.32,
-        )
-    )
-    string_adaptive_threshold_max_mean_confidence: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_THRESHOLD_MAX_MEAN_CONFIDENCE",
-            "tracking.string_adaptive_threshold_max_mean_confidence",
-            0.74,
-        )
-    )
-    string_adaptive_inference_scale: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_INFERENCE_SCALE",
-            "tracking.string_adaptive_inference_scale",
-            1.50,
-        )
-    )
-    string_adaptive_window_frames: int = int(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_WINDOW_FRAMES",
-            "tracking.string_adaptive_window_frames",
-            12,
-        )
-    )
-    string_adaptive_max_color_accepts: int = int(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_MAX_COLOR_ACCEPTS",
-            "tracking.string_adaptive_max_color_accepts",
-            0,
-        )
-    )
-    string_adaptive_max_mean_confidence: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_MAX_MEAN_CONFIDENCE",
-            "tracking.string_adaptive_max_mean_confidence",
-            0.82,
-        )
-    )
-    string_adaptive_min_mean_distance_ratio: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_MIN_MEAN_DISTANCE_RATIO",
-            "tracking.string_adaptive_min_mean_distance_ratio",
-            0.018,
-        )
-    )
-    string_adaptive_single_max_mean_confidence: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_SINGLE_MAX_MEAN_CONFIDENCE",
-            "tracking.string_adaptive_single_max_mean_confidence",
-            0.30,
-        )
-    )
-    string_adaptive_single_threshold: float = float(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_SINGLE_THRESHOLD",
-            "tracking.string_adaptive_single_threshold",
-            0.55,
-        )
-    )
-    string_adaptive_single_max_components: int = int(
-        _env_or_config(
-            "TRACKING_STRING_ADAPTIVE_SINGLE_MAX_COMPONENTS",
-            "tracking.string_adaptive_single_max_components",
-            2,
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)

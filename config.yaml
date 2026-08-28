@@ -1,6 +1,5 @@
 dataset:
   image_input_dir: "dataset/Positive_Sample/1A"
-  # Current videos are exclusively 1A. Future groups remain schema-only.
   current_action_group: "1A"
   annotation_output_dir: "annotations"
   recursive: true
@@ -55,28 +54,11 @@ tracking:
   # WholeBody pose is optional review metadata. The current yoyo, string, and
   # orientation paths do not consume it, so keep it off unless explicitly needed.
   enable_pose: false
-  # One high-resolution MobileNetV3-FPN replaces the previous three-model
-  # LR-ASPP route. Predictions remain review-only and never become label truth.
+  # High-resolution MobileNetV3-FPN semantic string model.
   string_weights_path: "runs/experiments/semantic_centerline_regularized_r3/weights/best.pt"
-  string_ensemble_weights_path: ""
-  string_ensemble_alpha: 0.0
-  string_ensemble_candidate_threshold: 0.50
-  string_adaptive_weights_path: ""
-  string_adaptive_ensemble_alpha: 0.0
-  string_adaptive_threshold: 0.50
-  string_adaptive_threshold_max_mean_confidence: 1.0
-  string_adaptive_inference_scale: 1.0
-  string_adaptive_window_frames: 12
-  string_adaptive_max_color_accepts: 0
-  string_adaptive_max_mean_confidence: 1.0
-  string_adaptive_min_mean_distance_ratio: 0.0
-  string_adaptive_single_max_mean_confidence: 0.0
-  string_adaptive_single_threshold: 0.50
-  string_adaptive_single_max_components: 0
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20
-  # Normal domains keep the original independent-test input scale.
   string_inference_scale: 1.0
   # Reacquire the multi-segment centerline on every frame. This is slower than
   # optical-flow propagation alone, but the reviewed sequence showed a large
@@ -86,8 +68,7 @@ tracking:
   # supports it. This recovers weak, fragmented string pixels without allowing
   # unrelated saturated stage lines into the final geometry.
   string_color_probability_augment: true
-  # When the saturated-color proposal is absent or fails semantic gating, also
-  # search low-saturation local bright ridges. The original proposal keeps priority.
+  # Search low-saturation local bright ridges after the saturated-color proposal.
   string_bright_line_augment: true
   # Bright ridges are less color-specific, so use a strict semantic mean gate.
   string_bright_line_min_mean: 0.70
@@ -114,8 +95,7 @@ tracking:
   orientation_inference_fps: 5.0
   orientation_adaptive_inference: true
   orientation_burst_inference_fps: 25.0
-  # Lower confidence observations stay in the burst cadence; this preserved
-  # the newly added consecutive group without changing neural inference cost.
+  # Lower-confidence observations stay in the burst cadence.
   orientation_adaptive_min_confidence: 0.4
   orientation_adaptive_stable_observations: 4
   orientation_temporal_filter: true

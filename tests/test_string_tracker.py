@@ -9,7 +9,6 @@ from unittest.mock import Mock, patch
 import cv2
 import numpy as np
 
-from string_segmentation.semantic_model import PreparedCalibratedEnsemblePredictor
 from video_tracking.string_tracker import (
     _color_line_observation,
     _resample_polyline,
@@ -26,12 +25,10 @@ from video_tracking.review_sheet import (
 )
 from video_tracking.tracker import (
     _AsyncVideoWriter,
-    _activate_adaptive_string_route,
     _augment_semantic_color_observation,
     _draw_frame,
     _can_seed_previous_string,
     _inference_interval_frames,
-    _load_string_model,
     _prepare_semantic_letterbox,
     _predict_string_model,
     _select_pose_person,
@@ -361,124 +358,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertTrue(bright_triggered)
         self.assertEqual(bright_metrics["color_accepts"], 0)
 
-    def test_semantic_ensemble_fuses_probabilities_before_geometry(self):
-        meta = SimpleNamespace(
-            original_width=16,
-            original_height=16,
-            target_width=16,
-            target_height=16,
-            resized_width=16,
-            resized_height=16,
-            pad_x=0,
-            pad_y=0,
-            scale=1.0,
-        )
-        model = {
-            "kind": "semantic_ensemble",
-            "model": object(),
-            "checkpoint": {
-                "threshold": 0.4,
-                "model_config": {"input_width": 16, "input_height": 16},
-            },
-            "ensemble_model": object(),
-            "ensemble_alpha": 0.3,
-            "ensemble_candidate_threshold": 0.5,
-            "device": "cpu",
-        }
-        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
-
-        with (
-            patch(
-                "video_tracking.tracker.prepare_letterboxed_input",
-                return_value=(object(), meta),
-            ) as prepare,
-            patch(
-                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
-                return_value=np.full((16, 16), 0.5, dtype=np.float32),
-            ) as predict,
-            patch(
-                "video_tracking.tracker.semantic_mask_observation",
-                return_value=observation,
-            ) as geometry,
-        ):
-            result = _predict_string_model(
-                model,
-                np.zeros((16, 16, 3), dtype=np.uint8),
-                yoyo=None,
-                confidence=0.2,
-                imgsz=16,
-                device="cpu",
-                yoyo_division="1A",
-            )
-
-        self.assertEqual(prepare.call_count, 1)
-        self.assertEqual(predict.call_count, 1)
-        self.assertIs(predict.call_args.args[0], model["model"])
-        self.assertIs(predict.call_args.args[1], model["ensemble_model"])
-        self.assertEqual(predict.call_args.args[3:], (0.3, 0.4, 0.5))
-        self.assertAlmostEqual(float(geometry.call_args.args[0][0, 0]), 0.5, places=5)
-        self.assertEqual(geometry.call_args.kwargs["threshold"], 0.5)
-        self.assertEqual(result["semantic_probability_ensemble"]["alpha"], 0.3)
-
-    def test_prepared_semantic_letterbox_skips_duplicate_resize(self):
-        meta = SimpleNamespace(
-            original_width=32,
-            original_height=32,
-            target_width=32,
-            target_height=32,
-            resized_width=32,
-            resized_height=32,
-            pad_x=0,
-            pad_y=0,
-            scale=1.0,
-        )
-        model = {
-            "kind": "semantic_ensemble",
-            "model": object(),
-            "checkpoint": {
-                "threshold": 0.4,
-                "model_config": {"input_width": 32, "input_height": 32},
-            },
-            "ensemble_model": object(),
-            "ensemble_alpha": 0.3,
-            "ensemble_candidate_threshold": 0.5,
-            "device": "cpu",
-        }
-        image = np.zeros((32, 32, 3), dtype=np.uint8)
-        tensor = object()
-        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
-
-        with (
-            patch("video_tracking.tracker.prepare_letterboxed_input") as prepare,
-            patch(
-                "video_tracking.tracker.normalize_image_for_inference",
-                return_value=tensor,
-            ) as normalize,
-            patch(
-                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
-                return_value=np.full((32, 32), 0.5, dtype=np.float32),
-            ) as predict,
-            patch(
-                "video_tracking.tracker.semantic_mask_observation",
-                return_value=observation,
-            ),
-        ):
-            result = _predict_string_model(
-                model,
-                image,
-                None,
-                0.2,
-                32,
-                "cpu",
-                "1A",
-                prepared_letterbox=(image, None, meta),
-            )
-
-        prepare.assert_not_called()
-        normalize.assert_called_once_with(image, "cpu")
-        self.assertIs(predict.call_args.args[2], tensor)
-        self.assertEqual(result["points"], observation["points"])
-
     def test_scaled_semantic_inference_keeps_fixed_component_filter(self):
         meta = SimpleNamespace(
             original_width=1920, original_height=1080,
@@ -523,259 +402,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertEqual(prepare.call_args.args[1:3], (1440, 816))
         self.assertEqual(geometry.call_args.kwargs["min_component_pixels"], 8)
-
-    def test_parallel_semantic_letterbox_uses_active_model_size(self):
-        model = {
-            "kind": "semantic_adaptive_ensemble",
-            "checkpoint": {"model_config": {"input_width": 64, "input_height": 32}},
-            "adaptive_checkpoint": {
-                "model_config": {"input_width": 96, "input_height": 64},
-            },
-            "adaptive_enabled": True,
-        }
-        expected = (np.zeros((64, 96, 3), dtype=np.uint8), None, object())
-
-        with patch("video_tracking.tracker.letterbox", return_value=expected) as resize:
-            actual = _prepare_semantic_letterbox(
-                model,
-                np.zeros((20, 40, 3), dtype=np.uint8),
-                1.0,
-            )
-
-        self.assertIs(actual, expected)
-        self.assertEqual(resize.call_args.args[1:], (96, 64))
-
-    def test_adaptive_ensemble_selects_primary_and_alpha_from_state(self):
-        meta = SimpleNamespace(
-            original_width=16, original_height=16, target_width=16, target_height=16,
-            resized_width=16, resized_height=16, pad_x=0, pad_y=0, scale=1.0,
-        )
-        primary, adaptive, secondary = object(), object(), object()
-        model = {
-            "kind": "semantic_adaptive_ensemble",
-            "model": primary,
-            "checkpoint": {
-                "threshold": 0.4,
-                "model_config": {"input_width": 16, "input_height": 16},
-            },
-            "adaptive_model": adaptive,
-            "adaptive_checkpoint": {
-                "threshold": 0.45,
-                "model_config": {"input_width": 16, "input_height": 16},
-            },
-            "ensemble_model": secondary,
-            "ensemble_alpha": 0.3,
-            "adaptive_ensemble_alpha": 0.5,
-            "ensemble_candidate_threshold": 0.5,
-            "adaptive_enabled": False,
-            "device": "cpu",
-        }
-        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
-        with (
-            patch(
-                "video_tracking.tracker.prepare_letterboxed_input",
-                return_value=(object(), meta),
-            ) as prepare,
-            patch(
-                "video_tracking.tracker.predict_prepared_calibrated_ensemble",
-                return_value=np.full((16, 16), 0.5, dtype=np.float32),
-            ) as predict,
-            patch("video_tracking.tracker.semantic_mask_observation", return_value=observation),
-        ):
-            before = _predict_string_model(
-                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
-            )
-            before_ensemble = deepcopy(before["semantic_probability_ensemble"])
-            model["adaptive_enabled"] = True
-            after = _predict_string_model(
-                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
-            )
-
-        self.assertEqual(prepare.call_count, 2)
-        self.assertIs(predict.call_args_list[0].args[0], primary)
-        self.assertIs(predict.call_args_list[0].args[1], secondary)
-        self.assertEqual(predict.call_args_list[0].args[3:], (0.3, 0.4, 0.5))
-        self.assertIs(predict.call_args_list[1].args[0], adaptive)
-        self.assertIs(predict.call_args_list[1].args[1], secondary)
-        self.assertEqual(predict.call_args_list[1].args[3:], (0.5, 0.45, 0.5))
-        self.assertEqual(before_ensemble["alpha"], 0.3)
-        self.assertFalse(before_ensemble["adaptive_primary"])
-        self.assertEqual(after["semantic_probability_ensemble"]["alpha"], 0.5)
-        self.assertTrue(after["semantic_probability_ensemble"]["adaptive_primary"])
-
-    def test_adaptive_single_route_skips_ensemble_and_caps_components(self):
-        meta = SimpleNamespace(
-            original_width=16, original_height=16, target_width=16, target_height=16,
-            resized_width=16, resized_height=16, pad_x=0, pad_y=0, scale=1.0,
-        )
-        adaptive = object()
-        adaptive_ensemble_predictor = Mock()
-        model = {
-            "kind": "semantic_adaptive_ensemble",
-            "model": object(),
-            "checkpoint": {
-                "threshold": 0.4,
-                "model_config": {"input_width": 16, "input_height": 16},
-            },
-            "adaptive_model": adaptive,
-            "adaptive_checkpoint": {
-                "threshold": 0.2991,
-                "model_config": {"input_width": 16, "input_height": 16},
-            },
-            "ensemble_model": object(),
-            "ensemble_alpha": 0.3,
-            "adaptive_ensemble_alpha": 0.5,
-            "ensemble_candidate_threshold": 0.5,
-            "adaptive_ensemble_predictor": adaptive_ensemble_predictor,
-            "adaptive_enabled": True,
-            "adaptive_single_enabled": True,
-            "adaptive_single_threshold": 0.55,
-            "adaptive_single_max_components": 2,
-            "device": "cpu",
-        }
-        observation = {"points": [[1.0, 1.0], [4.0, 4.0]], "polylines": []}
-        with (
-            patch(
-                "video_tracking.tracker.prepare_letterboxed_input",
-                return_value=(object(), meta),
-            ),
-            patch(
-                "video_tracking.tracker.predict_prepared_probability",
-                return_value=np.full((16, 16), 0.5, dtype=np.float32),
-            ) as predict,
-            patch(
-                "video_tracking.tracker.predict_prepared_calibrated_ensemble"
-            ) as ensemble_fallback,
-            patch(
-                "video_tracking.tracker.semantic_mask_observation",
-                return_value=observation,
-            ) as geometry,
-        ):
-            result = _predict_string_model(
-                model, np.zeros((16, 16, 3), dtype=np.uint8), None, 0.2, 16, "cpu", "1A",
-            )
-
-        self.assertIs(predict.call_args.args[0], adaptive)
-        adaptive_ensemble_predictor.predict.assert_not_called()
-        ensemble_fallback.assert_not_called()
-        self.assertEqual(geometry.call_args.kwargs["threshold"], 0.55)
-        self.assertEqual(geometry.call_args.kwargs["max_components"], 2)
-        self.assertTrue(result["adaptive_single_primary"])
-        self.assertEqual(
-            result["semantic_probability_single"],
-            {"adaptive_primary": True, "threshold": 0.55, "max_components": 2},
-        )
-
-    def test_load_string_model_builds_adaptive_ensemble(self):
-        with TemporaryDirectory() as directory:
-            paths = [Path(directory) / name for name in ("primary.pt", "secondary.pt", "adaptive.pt")]
-            for path in paths:
-                path.touch()
-            checkpoints = [
-                {"model_config": {"input_width": 16, "input_height": 16}},
-                {"model_config": {"input_width": 16, "input_height": 16}},
-                {"model_config": {"input_width": 16, "input_height": 16}},
-            ]
-            with (
-                patch("video_tracking.tracker.is_semantic_checkpoint", return_value=True),
-                patch("video_tracking.tracker.load_semantic_checkpoint", side_effect=[
-                    ("primary", checkpoints[0]),
-                    ("secondary", checkpoints[1]),
-                    ("adaptive", checkpoints[2]),
-                ]),
-            ):
-                model, status = _load_string_model(
-                    paths[0], True, "cpu", paths[1], 0.3, 0.5, paths[2], 0.5,
-                    0.32, 0.74, 0.55, 2,
-                )
-
-        self.assertEqual(model["kind"], "semantic_adaptive_ensemble")
-        self.assertEqual(model["adaptive_model"], "adaptive")
-        self.assertFalse(model["adaptive_enabled"])
-        self.assertFalse(model["adaptive_single_enabled"])
-        self.assertEqual(model["adaptive_ensemble_alpha"], 0.5)
-        self.assertEqual(model["adaptive_threshold"], 0.32)
-        self.assertEqual(model["adaptive_threshold_max_mean_confidence"], 0.74)
-        self.assertEqual(model["adaptive_single_threshold"], 0.55)
-        self.assertEqual(model["adaptive_single_max_components"], 2)
-        self.assertIsInstance(
-            model["ensemble_predictor"], PreparedCalibratedEnsemblePredictor,
-        )
-        self.assertIsNone(model["adaptive_ensemble_predictor"])
-        self.assertTrue(status.startswith("semantic_adaptive_ensemble:"))
-
-    @staticmethod
-    def _adaptive_route_model() -> dict:
-        return {
-            "adaptive_model": object(),
-            "adaptive_checkpoint": {"threshold": 0.2991},
-            "ensemble_model": object(),
-            "adaptive_ensemble_alpha": 0.5,
-            "ensemble_candidate_threshold": 0.5,
-            "adaptive_threshold": 0.32,
-            "adaptive_threshold_max_mean_confidence": 0.74,
-        }
-
-    def test_adaptive_route_uses_recalibration_only_below_confidence_gate(self):
-        low_model = self._adaptive_route_model()
-        high_model = self._adaptive_route_model()
-        predictors = [Mock(), Mock()]
-        with patch(
-            "video_tracking.tracker.PreparedCalibratedEnsemblePredictor",
-            side_effect=predictors,
-        ) as predictor_type:
-            low_route = _activate_adaptive_string_route(low_model, 0.663708, 0.30)
-            high_route = _activate_adaptive_string_route(high_model, 0.767642, 0.30)
-
-        self.assertEqual(low_route, (0.32, False))
-        self.assertEqual(high_route, (0.2991, False))
-        self.assertIs(low_model["adaptive_ensemble_predictor"], predictors[0])
-        self.assertIs(high_model["adaptive_ensemble_predictor"], predictors[1])
-        self.assertEqual(predictor_type.call_args_list[0].args[3], 0.32)
-        self.assertEqual(predictor_type.call_args_list[1].args[3], 0.2991)
-
-    def test_ultraweak_route_does_not_build_adaptive_ensemble(self):
-        model = self._adaptive_route_model()
-        with patch(
-            "video_tracking.tracker.PreparedCalibratedEnsemblePredictor"
-        ) as predictor_type:
-            route = _activate_adaptive_string_route(model, 0.205067, 0.30)
-
-        self.assertEqual(route, (0.32, True))
-        self.assertTrue(model["adaptive_single_enabled"])
-        self.assertIsNone(model["adaptive_ensemble_predictor"])
-        predictor_type.assert_not_called()
-
-    def test_track_video_rejects_invalid_adaptive_calibration(self):
-        for name, value, message in (
-            ("string_adaptive_threshold", 1.0, "string_adaptive_threshold"),
-            (
-                "string_adaptive_threshold_max_mean_confidence",
-                1.1,
-                "string_adaptive_threshold_max_mean_confidence",
-            ),
-        ):
-            with self.subTest(name=name), self.assertRaisesRegex(ValueError, message):
-                track_video("missing.mp4", "missing.pt", **{name: value})
-
-    def test_track_video_allows_disabled_adaptive_component_cap(self):
-        # Zero is the documented/default value when the adaptive route is off.
-        with self.assertRaisesRegex(FileNotFoundError, "Video file not found"):
-            track_video(
-                "missing.mp4",
-                "missing.pt",
-                string_adaptive_single_max_components=0,
-            )
-
-    def test_track_video_rejects_negative_adaptive_component_cap(self):
-        with self.assertRaisesRegex(
-            ValueError, "adaptive single-model component limit must be non-negative"
-        ):
-            track_video(
-                "missing.mp4",
-                "missing.pt",
-                string_adaptive_single_max_components=-1,
-            )
 
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
@@ -1177,12 +803,12 @@ class StringTrackerTemporalTests(unittest.TestCase):
             observation={
                 "points": [[41, 90], [151, 90]],
                 "confidence": 0.80,
-                "method": "yolo_segmentation",
+                "method": "semantic_segmentation",
                 "needs_review": False,
             },
         )
         self.assertIsNotNone(result)
-        self.assertEqual(result["method"], "yolo_segmentation")
+        self.assertEqual(result["method"], "semantic_segmentation")
         self.assertEqual(result["propagation_age_frames"], 0)
         self.assertNotIn("temporal_consistent", result)
         self.assertEqual(result["points"], [[41, 90], [151, 90]])

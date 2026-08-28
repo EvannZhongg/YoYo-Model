@@ -25,16 +25,13 @@ from typing import Any
 import cv2
 import numpy as np
 
-from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from string_segmentation.semantic_model import (
-    PreparedCalibratedEnsemblePredictor,
     is_semantic_checkpoint,
     letterbox,
     load_checkpoint as load_semantic_checkpoint,
     normalize_image_for_inference,
     polyline_probability_support,
-    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     semantic_mask_observation,
@@ -57,7 +54,6 @@ from video_tracking.rtmpose_backend import (
 from video_tracking.string_tracker import (
     _color_line_observation,
     estimate_string,
-    update_adaptive_string_domain_gate,
 )
 
 
@@ -154,167 +150,35 @@ def _load_string_model(
     weights_path: str | Path | None,
     enabled: bool,
     device: str = "",
-    ensemble_weights_path: str | Path | None = None,
-    ensemble_alpha: float = 0.0,
-    ensemble_candidate_threshold: float = 0.5,
-    adaptive_weights_path: str | Path | None = None,
-    adaptive_ensemble_alpha: float = 0.0,
-    adaptive_threshold: float = 0.5,
-    adaptive_threshold_max_mean_confidence: float = 1.0,
-    adaptive_single_threshold: float = 0.5,
-    adaptive_single_max_components: int = 0,
 ):
     if not enabled:
         return None, "disabled"
     path = Path(weights_path) if weights_path else TRACKING_CONFIG.string_weights_path
     if not path.exists():
-        logger.warning("String segmentation model not found; using review-only visual fallback: %s", path)
+        logger.warning("String segmentation model not found: %s", path)
         return None, f"missing: {path}"
-    if is_semantic_checkpoint(path):
-        try:
-            import torch
-
-            requested_device = str(device).strip()
-            if requested_device.isdigit():
-                requested_device = f"cuda:{requested_device}"
-            semantic_device = torch.device(
-                requested_device or ("cuda" if torch.cuda.is_available() else "cpu")
-            )
-            model, checkpoint = load_semantic_checkpoint(path, semantic_device)
-            bundle = {
-                "kind": "semantic",
-                "model": model,
-                "checkpoint": checkpoint,
-                "device": semantic_device,
-                "path": str(path),
-            }
-            secondary_path = Path(ensemble_weights_path) if ensemble_weights_path else None
-            if float(ensemble_alpha) > 0.0 and secondary_path is not None:
-                if not secondary_path.is_file():
-                    logger.warning("Semantic ensemble weights not found; using primary only: %s", secondary_path)
-                elif not is_semantic_checkpoint(secondary_path):
-                    logger.warning("Semantic ensemble weights are not a semantic checkpoint: %s", secondary_path)
-                else:
-                    secondary_model, secondary_checkpoint = load_semantic_checkpoint(
-                        secondary_path, semantic_device,
-                    )
-                    if secondary_checkpoint.get("model_config") != checkpoint.get("model_config"):
-                        logger.warning(
-                            "Semantic ensemble model config differs from primary; using primary only: %s",
-                            secondary_path,
-                        )
-                    else:
-                        bundle.update({
-                            "kind": "semantic_ensemble",
-                            "ensemble_model": secondary_model,
-                            "ensemble_checkpoint": secondary_checkpoint,
-                            "ensemble_path": str(secondary_path),
-                            "ensemble_alpha": float(ensemble_alpha),
-                            "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
-                        })
-            adaptive_path = Path(adaptive_weights_path) if adaptive_weights_path else None
-            if adaptive_path is not None:
-                if bundle["kind"] != "semantic_ensemble":
-                    logger.warning("Adaptive semantic weights require a compatible ensemble; ignoring: %s", adaptive_path)
-                elif not adaptive_path.is_file() or not is_semantic_checkpoint(adaptive_path):
-                    logger.warning("Adaptive semantic weights unavailable; ignoring: %s", adaptive_path)
-                else:
-                    adaptive_model, adaptive_checkpoint = load_semantic_checkpoint(adaptive_path, semantic_device)
-                    if adaptive_checkpoint.get("model_config") != checkpoint.get("model_config"):
-                        logger.warning("Adaptive semantic model config differs from primary; ignoring: %s", adaptive_path)
-                    else:
-                        bundle.update({
-                            "kind": "semantic_adaptive_ensemble",
-                            "adaptive_model": adaptive_model,
-                            "adaptive_checkpoint": adaptive_checkpoint,
-                            "adaptive_path": str(adaptive_path),
-                            "adaptive_ensemble_alpha": float(adaptive_ensemble_alpha),
-                            "adaptive_threshold": float(adaptive_threshold),
-                            "adaptive_threshold_max_mean_confidence": float(
-                                adaptive_threshold_max_mean_confidence
-                            ),
-                            "adaptive_enabled": False,
-                            "adaptive_single_enabled": False,
-                            "adaptive_single_threshold": float(adaptive_single_threshold),
-                            "adaptive_single_max_components": int(
-                                adaptive_single_max_components
-                            ),
-                        })
-            if bundle["kind"] in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
-                bundle["ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
-                    bundle["model"],
-                    bundle["ensemble_model"],
-                    bundle["ensemble_alpha"],
-                    float(bundle["checkpoint"].get("threshold", 0.5)),
-                    bundle["ensemble_candidate_threshold"],
-                )
-                if bundle["kind"] == "semantic_adaptive_ensemble":
-                    bundle["adaptive_ensemble_predictor"] = None
-            status = (
-                f"semantic_adaptive_ensemble:{path}+{bundle['ensemble_path']}+{bundle['adaptive_path']}"
-                if bundle["kind"] == "semantic_adaptive_ensemble"
-                else f"semantic_ensemble:{path}+{bundle['ensemble_path']}"
-                if bundle["kind"] == "semantic_ensemble"
-                else f"semantic:{path}"
-            )
-            return bundle, status
-        except Exception as exc:
-            logger.warning("Semantic string weights unavailable (%s): %s", path, exc)
-            return None, f"semantic_error: {exc}"
-    from ultralytics import YOLO
-
     try:
-        model = YOLO(str(path))
-        names = {int(key): str(value).lower() for key, value in dict(getattr(model, "names", {}) or {}).items()}
-        if names and not any(name in {"string", "yoyo_string", "yoyo-string", "string_segment"} for name in names.values()):
-            logger.warning("String weights do not expose a string class; ignoring checkpoint: %s (%s)", path, names)
-            return None, f"incompatible_classes: {names}"
-        return model, str(path)
-    except Exception as exc:
-        logger.warning("String segmentation model unavailable (%s): %s", path, exc)
-        return None, str(exc)
+        if not is_semantic_checkpoint(path):
+            return None, f"unsupported checkpoint: {path}"
+        import torch
 
-
-def _activate_adaptive_string_route(
-    model: dict[str, Any],
-    gate_mean_confidence: float,
-    single_max_mean_confidence: float,
-) -> tuple[float, bool]:
-    """Select the weak-domain calibration and prepare only the route that will run."""
-    native_threshold = float(model["adaptive_checkpoint"].get("threshold", 0.5))
-    active_threshold = float(
-        model.get("adaptive_threshold", native_threshold)
-        if float(gate_mean_confidence)
-        < float(model.get("adaptive_threshold_max_mean_confidence", 1.0))
-        else native_threshold
-    )
-    single_enabled = bool(
-        float(single_max_mean_confidence) > 0.0
-        and float(gate_mean_confidence) < float(single_max_mean_confidence)
-    )
-    model["adaptive_active_threshold"] = active_threshold
-    model["adaptive_single_enabled"] = single_enabled
-    model["adaptive_ensemble_predictor"] = None
-    if not single_enabled:
-        model["adaptive_ensemble_predictor"] = PreparedCalibratedEnsemblePredictor(
-            model["adaptive_model"],
-            model["ensemble_model"],
-            model["adaptive_ensemble_alpha"],
-            active_threshold,
-            model["ensemble_candidate_threshold"],
+        requested_device = str(device).strip()
+        if requested_device.isdigit():
+            requested_device = f"cuda:{requested_device}"
+        semantic_device = torch.device(
+            requested_device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
-    return active_threshold, single_enabled
-
-
-def _polygon_centerline(polygon: np.ndarray) -> list[list[float]]:
-    points = np.asarray(polygon, dtype=np.float32).reshape(-1, 2)
-    if len(points) < 2:
-        return []
-    centered = points - points.mean(axis=0)
-    _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    projection = centered @ vh[0]
-    endpoints = [points[int(np.argmin(projection))].tolist(), points[int(np.argmax(projection))].tolist()]
-    return [[float(value) for value in point] for point in endpoints]
+        model, checkpoint = load_semantic_checkpoint(path, semantic_device)
+        return {
+            "kind": "semantic",
+            "model": model,
+            "checkpoint": checkpoint,
+            "device": semantic_device,
+            "path": str(path),
+        }, f"semantic:{path}"
+    except Exception as exc:
+        logger.warning("Semantic string weights unavailable (%s): %s", path, exc)
+        return None, f"semantic_error: {exc}"
 
 
 def _semantic_inference_parameters(
@@ -485,12 +349,9 @@ def _predict_string_model(
 ) -> dict[str, Any] | None:
     if model is None:
         return None
-    if isinstance(model, dict) and model.get("kind") in {
-        "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
-    }:
-        adaptive_enabled = bool(model.get("adaptive_enabled"))
-        checkpoint = model["adaptive_checkpoint"] if adaptive_enabled else model["checkpoint"]
-        primary_model = model["adaptive_model"] if adaptive_enabled else model["model"]
+    if isinstance(model, dict) and model.get("kind") == "semantic":
+        checkpoint = model["checkpoint"]
+        primary_model = model["model"]
         model_device = model["device"]
         model_config = checkpoint["model_config"]
         scale = float(semantic_inference_scale)
@@ -507,70 +368,9 @@ def _predict_string_model(
             if (meta.target_width, meta.target_height) != (input_width, input_height):
                 raise ValueError("Prepared semantic letterbox has an unexpected size")
             tensor = normalize_image_for_inference(image, model_device)
-        primary_threshold = float(
-            model.get("adaptive_active_threshold", checkpoint.get("threshold", 0.5))
-            if adaptive_enabled
-            else checkpoint.get("threshold", 0.5)
-        )
-        threshold = max(primary_threshold, float(confidence))
-        ensemble_metadata = None
-        adaptive_single_metadata = None
+        threshold = max(float(checkpoint.get("threshold", 0.5)), float(confidence))
         max_components = 8
-        if model.get("kind") in {"semantic_ensemble", "semantic_adaptive_ensemble"}:
-            adaptive_single_enabled = bool(
-                adaptive_enabled and model.get("adaptive_single_enabled")
-            )
-            if adaptive_single_enabled:
-                threshold = max(
-                    float(model.get("adaptive_single_threshold", primary_threshold)),
-                    float(confidence),
-                )
-                configured_max_components = int(
-                    model.get("adaptive_single_max_components", 0)
-                )
-                max_components = (
-                    configured_max_components if configured_max_components > 0 else 8
-                )
-                probability = predict_prepared_probability(primary_model, tensor)
-                adaptive_single_metadata = {
-                    "adaptive_primary": True,
-                    "threshold": round(threshold, 4),
-                    "max_components": max_components,
-                }
-            else:
-                active_alpha = float(
-                    model["adaptive_ensemble_alpha"]
-                    if adaptive_enabled
-                    else model["ensemble_alpha"]
-                )
-                secondary_threshold = float(model["ensemble_candidate_threshold"])
-                predictor = model.get(
-                    "adaptive_ensemble_predictor"
-                    if adaptive_enabled
-                    else "ensemble_predictor"
-                )
-                probability = (
-                    predictor.predict(tensor)
-                    if predictor is not None
-                    else predict_prepared_calibrated_ensemble(
-                        primary_model,
-                        model["ensemble_model"],
-                        tensor,
-                        active_alpha,
-                        primary_threshold,
-                        secondary_threshold,
-                    )
-                )
-                threshold = max(0.5, float(confidence))
-                ensemble_metadata = {
-                    "alpha": round(active_alpha, 4),
-                    "primary_threshold": round(primary_threshold, 4),
-                    "secondary_threshold": round(secondary_threshold, 4),
-                    "fused_threshold": round(threshold, 4),
-                    "adaptive_primary": adaptive_enabled,
-                }
-        else:
-            probability = predict_prepared_probability(primary_model, tensor)
+        probability = predict_prepared_probability(primary_model, tensor)
         observation = semantic_mask_observation(
             probability,
             meta,
@@ -596,62 +396,13 @@ def _predict_string_model(
                 color_probability_min_fraction,
                 color_semantic_prefilter,
                 bright_line_augment,
-                color_probability_min_mean if adaptive_enabled else bright_line_min_mean,
+                bright_line_min_mean,
             )
         if observation is not None:
-            if ensemble_metadata is not None:
-                observation["semantic_probability_ensemble"] = ensemble_metadata
-            if adaptive_single_metadata is not None:
-                observation["semantic_probability_single"] = adaptive_single_metadata
-                observation["adaptive_single_primary"] = True
             observation["inference_scale"] = round(scale, 4)
             observation["inference_size"] = [input_width, input_height]
         return observation
-    kwargs: dict[str, Any] = {"source": frame, "conf": confidence, "imgsz": imgsz, "verbose": False}
-    if device:
-        kwargs["device"] = device
-    result = model.predict(**kwargs)[0]
-    masks = getattr(result, "masks", None)
-    boxes = getattr(result, "boxes", None)
-    polygons = list(getattr(masks, "xy", []) or []) if masks is not None else []
-    if not polygons:
-        return None
-    confidences = boxes.conf.cpu().numpy().tolist() if boxes is not None and boxes.conf is not None else [1.0] * len(polygons)
-    class_ids = boxes.cls.cpu().numpy().astype(int).tolist() if boxes is not None and boxes.cls is not None else [0] * len(polygons)
-    names = {int(key): str(value).lower() for key, value in dict(getattr(model, "names", {}) or {}).items()}
-    allowed_ids = {key for key, value in names.items() if value in {"string", "yoyo_string", "yoyo-string", "string_segment"}}
-    if allowed_ids:
-        filtered = [(polygon, score, class_id) for polygon, score, class_id in zip(polygons, confidences, class_ids) if class_id in allowed_ids]
-        polygons = [item[0] for item in filtered]
-        confidences = [item[1] for item in filtered]
-    elif names:
-        return None
-    candidates = []
-    for polygon, score in zip(polygons, confidences):
-        array = np.asarray(polygon, dtype=np.float32).reshape(-1, 2)
-        if len(array) < 3:
-            continue
-        distance = 0.0
-        if yoyo is not None:
-            distance = float(np.min(np.linalg.norm(array - np.asarray(yoyo["center"], dtype=np.float32), axis=1)))
-        candidates.append((distance, -float(score), array))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[1], item[0]))
-    _, negative_score, polygon = candidates[0]
-    selected = [item[2] for item in candidates]
-    return {
-        "points": _polygon_centerline(polygon),
-        "polygon": [[round(float(x), 2), round(float(y), 2)] for x, y in polygon],
-        "polylines": [_polygon_centerline(item) for item in selected],
-        "polygons": [
-            [[round(float(x), 2), round(float(y), 2)] for x, y in item]
-            for item in selected
-        ],
-        "confidence": round(-negative_score, 4),
-        "method": "yolo_segmentation",
-        "needs_review": False,
-    }
+    return None
 
 
 def _prepare_semantic_letterbox(
@@ -659,14 +410,10 @@ def _prepare_semantic_letterbox(
     frame: np.ndarray,
     semantic_inference_scale: float,
 ) -> tuple[np.ndarray, np.ndarray | None, Any] | None:
-    if not isinstance(model, dict) or model.get("kind") not in {
-        "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
-    }:
+    if not isinstance(model, dict) or model.get("kind") != "semantic":
         return None
-    adaptive_enabled = bool(model.get("adaptive_enabled"))
-    checkpoint = model["adaptive_checkpoint"] if adaptive_enabled else model["checkpoint"]
     input_width, input_height, _ = _semantic_inference_parameters(
-        checkpoint["model_config"],
+        model["checkpoint"]["model_config"],
         float(semantic_inference_scale),
     )
     return letterbox(frame, input_width, input_height)
@@ -1143,18 +890,6 @@ def _orientation_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _hash_run_inputs(paths: dict[str, Path | None]) -> dict[str, str]:
-    """Legacy helper kept for callers that explicitly request an audit digest.
-
-    Normal tracking no longer calls this function because hashing a source
-    video and several checkpoints after every run is not part of inference.
-    """
-    return {
-        name: sha256_file(path) if path is not None else ""
-        for name, path in paths.items()
-    }
-
-
 def track_video(
     source_video_path: str | Path,
     weights_path: str | Path = TRACKING_CONFIG.weights_path,
@@ -1171,23 +906,6 @@ def track_video(
     pose_detector_path: str | Path | None = None,
     enable_pose: bool = TRACKING_CONFIG.enable_pose,
     string_weights_path: str | Path | None = None,
-    string_ensemble_weights_path: str | Path | None = TRACKING_CONFIG.string_ensemble_weights_path,
-    string_ensemble_alpha: float = TRACKING_CONFIG.string_ensemble_alpha,
-    string_ensemble_candidate_threshold: float = TRACKING_CONFIG.string_ensemble_candidate_threshold,
-    string_adaptive_weights_path: str | Path | None = TRACKING_CONFIG.string_adaptive_weights_path,
-    string_adaptive_ensemble_alpha: float = TRACKING_CONFIG.string_adaptive_ensemble_alpha,
-    string_adaptive_threshold: float = TRACKING_CONFIG.string_adaptive_threshold,
-    string_adaptive_threshold_max_mean_confidence: float = (
-        TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence
-    ),
-    string_adaptive_inference_scale: float = TRACKING_CONFIG.string_adaptive_inference_scale,
-    string_adaptive_window_frames: int = TRACKING_CONFIG.string_adaptive_window_frames,
-    string_adaptive_max_color_accepts: int = TRACKING_CONFIG.string_adaptive_max_color_accepts,
-    string_adaptive_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_max_mean_confidence,
-    string_adaptive_min_mean_distance_ratio: float = TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
-    string_adaptive_single_max_mean_confidence: float = TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
-    string_adaptive_single_threshold: float = TRACKING_CONFIG.string_adaptive_single_threshold,
-    string_adaptive_single_max_components: int = TRACKING_CONFIG.string_adaptive_single_max_components,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
@@ -1220,7 +938,6 @@ def track_video(
     max_frames: int = 0,
     async_video_write: bool = True,
     parallel_semantic_preprocess: bool = True,
-    parallel_run_input_hashing: bool = True,  # Deprecated; retained for API compatibility.
     orientation_direct_inference: bool = True,
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
@@ -1229,35 +946,6 @@ def track_video(
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
         raise ValueError("string_inference_fps must be non-negative")
-    if not 0.0 <= float(string_ensemble_alpha) <= 1.0:
-        raise ValueError("string_ensemble_alpha must be between 0 and 1")
-    if not 0.0 < float(string_ensemble_candidate_threshold) < 1.0:
-        raise ValueError("string_ensemble_candidate_threshold must be between 0 and 1")
-    if not 0.0 <= float(string_adaptive_ensemble_alpha) <= 1.0:
-        raise ValueError("string_adaptive_ensemble_alpha must be between 0 and 1")
-    if not 0.0 < float(string_adaptive_threshold) < 1.0:
-        raise ValueError("string_adaptive_threshold must be between 0 and 1")
-    if not 0.0 <= float(string_adaptive_threshold_max_mean_confidence) <= 1.0:
-        raise ValueError(
-            "string_adaptive_threshold_max_mean_confidence must be between 0 and 1"
-        )
-    if not 0.5 <= float(string_adaptive_inference_scale) <= 2.0:
-        raise ValueError("string_adaptive_inference_scale must be between 0.5 and 2.0")
-    if int(string_adaptive_window_frames) < 1 or int(string_adaptive_max_color_accepts) < 0:
-        raise ValueError("adaptive window must be positive and maximum color accepts non-negative")
-    if not 0.0 <= float(string_adaptive_max_mean_confidence) <= 1.0:
-        raise ValueError("adaptive maximum mean confidence must be between 0 and 1")
-    if float(string_adaptive_min_mean_distance_ratio) < 0.0:
-        raise ValueError("adaptive minimum mean distance ratio must be non-negative")
-    if not 0.0 <= float(string_adaptive_single_max_mean_confidence) <= 1.0:
-        raise ValueError("adaptive single-model confidence gate must be between 0 and 1")
-    if not 0.0 < float(string_adaptive_single_threshold) < 1.0:
-        raise ValueError("adaptive single-model threshold must be between 0 and 1")
-    # Zero disables the optional adaptive single-model component cap.  The
-    # inference path treats non-positive configured caps as the uncapped
-    # default, so the CLI/config default must be accepted.
-    if int(string_adaptive_single_max_components) < 0:
-        raise ValueError("adaptive single-model component limit must be non-negative")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -1289,15 +977,6 @@ def track_video(
         string_weights_path,
         enable_string_model,
         device,
-        string_ensemble_weights_path,
-        string_ensemble_alpha,
-        string_ensemble_candidate_threshold,
-        string_adaptive_weights_path,
-        string_adaptive_ensemble_alpha,
-        string_adaptive_threshold,
-        string_adaptive_threshold_max_mean_confidence,
-        string_adaptive_single_threshold,
-        string_adaptive_single_max_components,
     )
     resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
@@ -1357,7 +1036,7 @@ def track_video(
         if parallel_semantic_preprocess
         and isinstance(string_model, dict)
         and string_model.get("kind") in {
-            "semantic", "semantic_ensemble", "semantic_adaptive_ensemble",
+            "semantic",
         }
         else None
     )
@@ -1381,12 +1060,6 @@ def track_video(
     frame_index = start_frame
     processed_frames = 0
     string_inference_frames = 0
-    string_adaptive_history: list[tuple[bool, float, float]] = []
-    string_adaptive_metrics: dict[str, float | int] = {}
-    string_adaptive_trigger_frame: int | None = None
-    string_adaptive_activation_frame: int | None = None
-    string_adaptive_single_activation_frame: int | None = None
-    string_adaptive_pending = False
     orientation_inference_frames = 0
     last_orientation: dict[str, Any] | None = None
     last_orientation_frame: int | None = None
@@ -1400,17 +1073,7 @@ def track_video(
         ok, frame = capture.read()
         if not ok or (max_frames and processed_frames >= max_frames):
             break
-        if string_adaptive_pending and isinstance(string_model, dict):
-            string_model["adaptive_enabled"] = True
-            string_adaptive_activation_frame = frame_index
-            if string_model.get("adaptive_single_enabled"):
-                string_adaptive_single_activation_frame = frame_index
-            string_adaptive_pending = False
-        active_string_inference_scale = (
-            float(string_adaptive_inference_scale)
-            if isinstance(string_model, dict) and string_model.get("adaptive_enabled")
-            else float(string_inference_scale)
-        )
+        active_string_inference_scale = float(string_inference_scale)
         scheduled_string_inference = bool(
             string_model is not None and processed_frames % string_inference_interval == 0
         )
@@ -1526,34 +1189,6 @@ def track_video(
                 ),
             )
             string_inference_frames += 1
-            if (
-                isinstance(string_model, dict)
-                and string_model.get("kind") == "semantic_adaptive_ensemble"
-                and not string_model.get("adaptive_enabled")
-            ):
-                string_adaptive_history, triggered, string_adaptive_metrics = (
-                    update_adaptive_string_domain_gate(
-                        string_adaptive_history,
-                        model_string,
-                        frame.shape[1],
-                        frame.shape[0],
-                        string_adaptive_window_frames,
-                        string_adaptive_max_color_accepts,
-                        string_adaptive_max_mean_confidence,
-                        string_adaptive_min_mean_distance_ratio,
-                    )
-                )
-                if triggered:
-                    string_adaptive_trigger_frame = frame_index
-                    gate_mean_confidence = float(
-                        string_adaptive_metrics.get("mean_confidence", 1.0)
-                    )
-                    _activate_adaptive_string_route(
-                        string_model,
-                        gate_mean_confidence,
-                        string_adaptive_single_max_mean_confidence,
-                    )
-                    string_adaptive_pending = True
         allow_unanchored_semantic = bool(
             yoyo is None
             and last_seen_frame is not None
@@ -1758,9 +1393,6 @@ def track_video(
                     if string_model is not None
                     else "model_unavailable"
                 ),
-                "adaptive_primary": bool(
-                    isinstance(string_model, dict) and string_model.get("adaptive_enabled")
-                ),
             },
             "yoyo_division": yoyo_division,
             "visibility": {
@@ -1851,7 +1483,7 @@ def track_video(
         "source_video": str(source_video_path.resolve()),
         "weights": str(weights_path.resolve()),
         "string_model_kind": (
-            string_model.get("kind", "yolo_segmentation") if isinstance(string_model, dict) else "yolo_segmentation"
+            string_model.get("kind", "semantic") if isinstance(string_model, dict) else "disabled_or_unavailable"
         ) if string_model is not None else "disabled_or_unavailable",
         "parameters": {
             "confidence": confidence,
@@ -1879,41 +1511,6 @@ def track_video(
             "pose_detector": str(pose_model.detector_path) if pose_model is not None else str(pose_detector_path or ""),
             "string_model_enabled": bool(enable_string_model),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
-            "string_ensemble_weights": str(string_ensemble_weights_path or ""),
-            "string_ensemble_alpha": float(string_ensemble_alpha),
-            "string_ensemble_candidate_threshold": float(string_ensemble_candidate_threshold),
-            "string_adaptive_weights": str(string_adaptive_weights_path or ""),
-            "string_adaptive_ensemble_alpha": float(string_adaptive_ensemble_alpha),
-            "string_adaptive_threshold": float(string_adaptive_threshold),
-            "string_adaptive_threshold_max_mean_confidence": float(
-                string_adaptive_threshold_max_mean_confidence
-            ),
-            "string_adaptive_inference_scale": float(string_adaptive_inference_scale),
-            "string_adaptive_window_frames": int(string_adaptive_window_frames),
-            "string_adaptive_max_color_accepts": int(string_adaptive_max_color_accepts),
-            "string_adaptive_max_mean_confidence": float(string_adaptive_max_mean_confidence),
-            "string_adaptive_min_mean_distance_ratio": float(string_adaptive_min_mean_distance_ratio),
-            "string_adaptive_single_max_mean_confidence": float(
-                string_adaptive_single_max_mean_confidence
-            ),
-            "string_adaptive_single_threshold": float(string_adaptive_single_threshold),
-            "string_adaptive_single_max_components": int(
-                string_adaptive_single_max_components
-            ),
-            "string_cuda_graph": {
-                "primary": bool(
-                    isinstance(string_model, dict)
-                    and getattr(string_model.get("ensemble_predictor"), "uses_cuda_graph", False)
-                ),
-                "adaptive": bool(
-                    isinstance(string_model, dict)
-                    and getattr(
-                        string_model.get("adaptive_ensemble_predictor"),
-                        "uses_cuda_graph",
-                        False,
-                    )
-                ),
-            },
             "string_confidence": string_confidence,
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),
@@ -1950,13 +1547,6 @@ def track_video(
         },
         "frame_count": processed_frames,
         "string_inference_frame_count": string_inference_frames,
-        "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
-        "string_adaptive_activation_frame": string_adaptive_activation_frame,
-        "string_adaptive_single_activated": bool(
-            string_adaptive_single_activation_frame is not None
-        ),
-        "string_adaptive_single_activation_frame": string_adaptive_single_activation_frame,
-        "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
         "orientation_summary": _orientation_summary(records),
@@ -2011,13 +1601,6 @@ def track_video(
         "output_width": output_width,
         "output_height": output_height,
         "string_inference_frame_count": string_inference_frames,
-        "string_adaptive_trigger_frame": string_adaptive_trigger_frame,
-        "string_adaptive_activation_frame": string_adaptive_activation_frame,
-        "string_adaptive_single_activated": bool(
-            string_adaptive_single_activation_frame is not None
-        ),
-        "string_adaptive_single_activation_frame": string_adaptive_single_activation_frame,
-        "string_adaptive_gate_metrics": string_adaptive_metrics,
         "orientation_inference_frame_count": orientation_inference_frames,
         "orientation_burst_inference_frame_count": orientation_burst_inference_frames,
         "orientation_summary": _orientation_summary(records),
@@ -2058,12 +1641,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=True,
         help="Overlap exact semantic letterboxing with detector inference.",
     )
-    parser.add_argument(
-        "--parallel-run-input-hashing",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Deprecated compatibility option; run-input hashing is no longer automatic.",
-    )
     parser.add_argument("--pose-weights", default=str(TRACKING_CONFIG.pose_weights_path))
     parser.add_argument("--pose-detector", default=str(TRACKING_CONFIG.pose_detector_path))
     parser.add_argument(
@@ -2073,83 +1650,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Run RTMPose-m WholeBody inference; defaults to tracking.enable_pose.",
     )
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
-    parser.add_argument(
-        "--string-ensemble-weights",
-        default="",
-        help="Secondary semantic checkpoint; the configured default is used with the default primary.",
-    )
-    parser.add_argument(
-        "--string-ensemble-alpha",
-        type=float,
-        default=TRACKING_CONFIG.string_ensemble_alpha,
-    )
-    parser.add_argument(
-        "--string-ensemble-candidate-threshold",
-        type=float,
-        default=TRACKING_CONFIG.string_ensemble_candidate_threshold,
-    )
-    parser.add_argument(
-        "--string-adaptive-weights",
-        default="",
-        help="Weak-domain primary checkpoint; the configured default is used with the default primary.",
-    )
-    parser.add_argument(
-        "--string-adaptive-ensemble-alpha",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_ensemble_alpha,
-    )
-    parser.add_argument(
-        "--string-adaptive-threshold",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_threshold,
-    )
-    parser.add_argument(
-        "--string-adaptive-threshold-max-mean-confidence",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
-    )
-    parser.add_argument(
-        "--string-adaptive-inference-scale",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_inference_scale,
-        help="Semantic input scale after the weak-domain gate activates.",
-    )
-    parser.add_argument(
-        "--string-adaptive-window-frames",
-        type=int,
-        default=TRACKING_CONFIG.string_adaptive_window_frames,
-    )
-    parser.add_argument(
-        "--string-adaptive-max-color-accepts",
-        type=int,
-        default=TRACKING_CONFIG.string_adaptive_max_color_accepts,
-    )
-    parser.add_argument(
-        "--string-adaptive-max-mean-confidence",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_max_mean_confidence,
-    )
-    parser.add_argument(
-        "--string-adaptive-min-mean-distance-ratio",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio,
-    )
-    parser.add_argument(
-        "--string-adaptive-single-max-mean-confidence",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
-        help="Use only the adaptive primary below this triggered-gate confidence; 0 disables.",
-    )
-    parser.add_argument(
-        "--string-adaptive-single-threshold",
-        type=float,
-        default=TRACKING_CONFIG.string_adaptive_single_threshold,
-    )
-    parser.add_argument(
-        "--string-adaptive-single-max-components",
-        type=int,
-        default=TRACKING_CONFIG.string_adaptive_single_max_components,
-    )
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
     parser.add_argument(
@@ -2262,25 +1762,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    use_default_string_bundle = (
-        Path(args.string_weights).resolve() == TRACKING_CONFIG.string_weights_path.resolve()
-    )
-    string_ensemble_weights = (
-        args.string_ensemble_weights.strip()
-        or (
-            str(TRACKING_CONFIG.string_ensemble_weights_path)
-            if use_default_string_bundle and TRACKING_CONFIG.string_ensemble_weights_path is not None
-            else ""
-        )
-    )
-    string_adaptive_weights = (
-        args.string_adaptive_weights.strip()
-        or (
-            str(TRACKING_CONFIG.string_adaptive_weights_path)
-            if use_default_string_bundle and TRACKING_CONFIG.string_adaptive_weights_path is not None
-            else ""
-        )
-    )
     result = track_video(
         source_video_path=args.video,
         weights_path=args.weights,
@@ -2292,30 +1773,10 @@ def main() -> int:
         visualization_max_width=args.visualization_max_width,
         async_video_write=args.async_video_write,
         parallel_semantic_preprocess=args.parallel_semantic_preprocess,
-        parallel_run_input_hashing=args.parallel_run_input_hashing,
         pose_weights_path=args.pose_weights or None,
         pose_detector_path=args.pose_detector or None,
         enable_pose=args.pose,
         string_weights_path=args.string_weights,
-        string_ensemble_weights_path=string_ensemble_weights or None,
-        string_ensemble_alpha=args.string_ensemble_alpha,
-        string_ensemble_candidate_threshold=args.string_ensemble_candidate_threshold,
-        string_adaptive_weights_path=string_adaptive_weights or None,
-        string_adaptive_ensemble_alpha=args.string_adaptive_ensemble_alpha,
-        string_adaptive_threshold=args.string_adaptive_threshold,
-        string_adaptive_threshold_max_mean_confidence=(
-            args.string_adaptive_threshold_max_mean_confidence
-        ),
-        string_adaptive_inference_scale=args.string_adaptive_inference_scale,
-        string_adaptive_window_frames=args.string_adaptive_window_frames,
-        string_adaptive_max_color_accepts=args.string_adaptive_max_color_accepts,
-        string_adaptive_max_mean_confidence=args.string_adaptive_max_mean_confidence,
-        string_adaptive_min_mean_distance_ratio=args.string_adaptive_min_mean_distance_ratio,
-        string_adaptive_single_max_mean_confidence=(
-            args.string_adaptive_single_max_mean_confidence
-        ),
-        string_adaptive_single_threshold=args.string_adaptive_single_threshold,
-        string_adaptive_single_max_components=args.string_adaptive_single_max_components,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
         string_inference_scale=args.string_inference_scale,

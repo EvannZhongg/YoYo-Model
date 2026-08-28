@@ -43,7 +43,6 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertNotIn("Trick Label", labels)
         self.assertNotIn("Segment Manifest", labels)
         self.assertNotIn("Candidate Clips", labels)
-        self.assertFalse(any("legacy-video" in value for value in values))
 
     def test_video_tracking_input_accepts_mp4_and_mov(self):
         config = create_demo().get_config_file()
@@ -329,33 +328,6 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertTrue(kwargs["enable_orientation_model"])
         self.assertEqual(kwargs["visualization_max_width"], 1920)
         self.assertFalse(any("tta" in key.lower() for key in kwargs))
-        self.assertEqual(kwargs["string_ensemble_alpha"], 0.0)
-        self.assertIsNone(kwargs["string_adaptive_weights_path"])
-        self.assertEqual(kwargs["string_adaptive_ensemble_alpha"], 0.0)
-        self.assertEqual(
-            kwargs["string_adaptive_threshold"],
-            TRACKING_CONFIG.string_adaptive_threshold,
-        )
-        self.assertEqual(
-            kwargs["string_adaptive_threshold_max_mean_confidence"],
-            TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
-        )
-        self.assertEqual(
-            kwargs["string_adaptive_inference_scale"],
-            TRACKING_CONFIG.string_adaptive_inference_scale,
-        )
-        self.assertEqual(
-            kwargs["string_adaptive_single_max_mean_confidence"],
-            TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
-        )
-        self.assertEqual(
-            kwargs["string_adaptive_single_threshold"],
-            TRACKING_CONFIG.string_adaptive_single_threshold,
-        )
-        self.assertEqual(
-            kwargs["string_adaptive_single_max_components"],
-            TRACKING_CONFIG.string_adaptive_single_max_components,
-        )
         self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
         self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
 
@@ -366,43 +338,6 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             "1A", True, "orientation.pt", 5.0, 1920,
         )
         default_kwargs = track_video.call_args.kwargs
-        self.assertEqual(default_kwargs["string_ensemble_alpha"], TRACKING_CONFIG.string_ensemble_alpha)
-        self.assertEqual(
-            default_kwargs["string_ensemble_weights_path"],
-            TRACKING_CONFIG.string_ensemble_weights_path,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_weights_path"],
-            TRACKING_CONFIG.string_adaptive_weights_path,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_ensemble_alpha"],
-            TRACKING_CONFIG.string_adaptive_ensemble_alpha,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_threshold"],
-            TRACKING_CONFIG.string_adaptive_threshold,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_threshold_max_mean_confidence"],
-            TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_inference_scale"],
-            TRACKING_CONFIG.string_adaptive_inference_scale,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_single_max_mean_confidence"],
-            TRACKING_CONFIG.string_adaptive_single_max_mean_confidence,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_single_threshold"],
-            TRACKING_CONFIG.string_adaptive_single_threshold,
-        )
-        self.assertEqual(
-            default_kwargs["string_adaptive_single_max_components"],
-            TRACKING_CONFIG.string_adaptive_single_max_components,
-        )
         self.assertEqual(
             default_kwargs["string_color_semantic_prefilter"],
             TRACKING_CONFIG.string_color_semantic_prefilter,

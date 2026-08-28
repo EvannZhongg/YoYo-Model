@@ -1,31 +1,16 @@
 from __future__ import annotations
 
 import unittest
-import tempfile
-from pathlib import Path
 
 import numpy as np
 
 from training_v3.orientation_view import _crop_box
 from video_tracking.rtmpose_backend import WholebodyPrediction, _rtmlib_device, hand_landmarks
 from config import TRACKING_CONFIG
-from video_tracking.tracker import _hash_run_inputs, _predict_pose, parse_args
+from video_tracking.tracker import _predict_pose, parse_args
 
 
 class TrainingV3Tests(unittest.TestCase):
-    def test_run_input_hashing_preserves_empty_optional_inputs(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "input.bin"
-            path.write_bytes(b"abc")
-
-            result = _hash_run_inputs({"present": path, "disabled": None})
-
-        self.assertEqual(
-            result["present"],
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-        )
-        self.assertEqual(result["disabled"], "")
-
     def test_tracking_cli_pose_defaults_to_config_and_supports_explicit_disable(self):
         self.assertFalse(TRACKING_CONFIG.enable_pose)
         self.assertEqual(parse_args(["input.mp4"]).pose, TRACKING_CONFIG.enable_pose)
@@ -37,25 +22,20 @@ class TrainingV3Tests(unittest.TestCase):
             parse_args(["input.mp4", "--no-string-color-semantic-prefilter"])
             .string_color_semantic_prefilter
         )
-        self.assertTrue(parse_args(["input.mp4"]).parallel_run_input_hashing)
-        self.assertFalse(
-            parse_args(["input.mp4", "--no-parallel-run-input-hashing"])
-            .parallel_run_input_hashing
-        )
         self.assertTrue(parse_args(["input.mp4"]).orientation_direct_inference)
         self.assertFalse(
             parse_args(["input.mp4", "--no-orientation-direct-inference"])
             .orientation_direct_inference
         )
 
-    def test_orientation_crop_ignores_hands_and_string_geometry(self):
+    def test_orientation_crop_uses_only_yoyo_box(self):
         base = {"yoyo_bbox_pixel": [400, 300, 440, 340]}
-        with_legacy_context = {
+        with_extra_context = {
             **base,
             "hands_pixel": {"left": [10, 10], "right": [1900, 1000]},
             "string_polylines_pixel": [[[0, 0], [1919, 1079]]],
         }
-        self.assertEqual(_crop_box(base, 1920, 1080), _crop_box(with_legacy_context, 1920, 1080))
+        self.assertEqual(_crop_box(base, 1920, 1080), _crop_box(with_extra_context, 1920, 1080))
 
     def test_no_yoyo_orientation_crop_is_deterministic_center_negative(self):
         self.assertEqual(_crop_box({}, 1000, 800), (388, 288, 612, 512))

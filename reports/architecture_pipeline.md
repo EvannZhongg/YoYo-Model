@@ -31,4 +31,4 @@ flowchart TD
     P --> Q[tracked.mp4 / frames.jsonl / run.json]
 ```
 
-FPN 融合 MobileNetV3 编码器的五个空间尺度，以一个模型替代原来的普通域双 LR-ASPP、弱域模型和分档路由。Workbench 与 CLI 默认读取 `config.yaml` 中的同一候选权重；旧 ensemble/adaptive 参数只保留为显式兼容接口，不参与默认执行。
+FPN 融合 MobileNetV3 编码器的五个空间尺度，Workbench 与 CLI 统一读取 `config.yaml` 中的候选权重。

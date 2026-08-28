@@ -117,11 +117,6 @@ def run_video_tracking(
         return (*empty, f"Error: Unsupported video format: {Path(video_path).suffix or '(none)'}.")
 
     try:
-        selected_string_weights = Path(string_weights_path.strip()).resolve() if string_weights_path.strip() else None
-        use_default_string_ensemble = bool(
-            selected_string_weights is not None
-            and selected_string_weights == TRACKING_CONFIG.string_weights_path.resolve()
-        )
         result = track_video(
             source_video_path=video_path,
             weights_path=weights_path,
@@ -135,47 +130,6 @@ def run_video_tracking(
             pose_detector_path=TRACKING_CONFIG.pose_detector_path,
             enable_string_model=bool(enable_string_model),
             string_weights_path=string_weights_path.strip() or None,
-            string_ensemble_weights_path=(
-                TRACKING_CONFIG.string_ensemble_weights_path
-                if use_default_string_ensemble else None
-            ),
-            string_ensemble_alpha=(
-                TRACKING_CONFIG.string_ensemble_alpha
-                if use_default_string_ensemble else 0.0
-            ),
-            string_ensemble_candidate_threshold=(
-                TRACKING_CONFIG.string_ensemble_candidate_threshold
-            ),
-            string_adaptive_weights_path=(
-                TRACKING_CONFIG.string_adaptive_weights_path
-                if use_default_string_ensemble else None
-            ),
-            string_adaptive_ensemble_alpha=(
-                TRACKING_CONFIG.string_adaptive_ensemble_alpha
-                if use_default_string_ensemble else 0.0
-            ),
-            string_adaptive_threshold=TRACKING_CONFIG.string_adaptive_threshold,
-            string_adaptive_threshold_max_mean_confidence=(
-                TRACKING_CONFIG.string_adaptive_threshold_max_mean_confidence
-            ),
-            string_adaptive_inference_scale=TRACKING_CONFIG.string_adaptive_inference_scale,
-            string_adaptive_window_frames=TRACKING_CONFIG.string_adaptive_window_frames,
-            string_adaptive_max_color_accepts=TRACKING_CONFIG.string_adaptive_max_color_accepts,
-            string_adaptive_max_mean_confidence=(
-                TRACKING_CONFIG.string_adaptive_max_mean_confidence
-            ),
-            string_adaptive_min_mean_distance_ratio=(
-                TRACKING_CONFIG.string_adaptive_min_mean_distance_ratio
-            ),
-            string_adaptive_single_max_mean_confidence=(
-                TRACKING_CONFIG.string_adaptive_single_max_mean_confidence
-            ),
-            string_adaptive_single_threshold=(
-                TRACKING_CONFIG.string_adaptive_single_threshold
-            ),
-            string_adaptive_single_max_components=(
-                TRACKING_CONFIG.string_adaptive_single_max_components
-            ),
             string_confidence=float(string_confidence),
             string_inference_scale=float(string_inference_scale),
             string_inference_fps=float(string_inference_fps),
