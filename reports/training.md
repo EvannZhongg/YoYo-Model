@@ -1,5 +1,17 @@
 # 悠悠球模型与追踪报告：2026-08-26
 
+## 2026-08-28 绳线中心线一致性正则微调晋升
+
+在 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以硬负样本生产权重初始化，保持模型结构、输入尺寸、后处理和推理流程不变，训练期加入中心线一致性 Dice 正则（权重 `0.2`），微调 3 epoch。晋升权重为：
+
+`runs/experiments/semantic_centerline_regularized_r3/weights/best.pt`
+
+SHA-256：`f48c4e24c3550f1f0321eaa17259e673da3df029080033b716f90f3c6ae2c8c5`。
+
+独立 test（108 张）Tolerant F1@3 为 `0.945482`，Presence F1 `0.980198`，负图平均误检像素 `43.667`。固定 `threshold=0.30`、颜色/亮脊/时序协议下，9 组 856 帧平均 F1@8 为 `0.657528`，高于硬负样本生产权重的 `0.652264`；平均 Chamfer `34.1008 -> 34.2803`，代价 `+0.1795 px`，HD95 `108.2812 -> 109.2675`，代价 `+0.9863 px`。DSCF7145 组 F1@8 `0.520351 -> 0.540467`，邬聪聪组 `0.814025 -> 0.818555`；唐浩翔和一个池高宇分组各有小幅 F1 回退，均小于 `0.008`。
+
+95 帧 GPU 端到端连续评估耗时为 `12.275 s`，基线复测 `12.360 s`；模型参数量和默认推理头不变。完整复现证据位于 `runs/experiments/semantic_centerline_regularized_r3/run_manifest.json`、`runs/experiments/semantic_centerline_regularized_r3/test_eval/test_semantic_metrics.json` 和 `runs/experiments/semantic_centerline_regularized_r3/consecutive856_t0p30_protocol/summary.json`。默认 `tracking.string_weights_path` 与 `config.py` 回退值已同步更新。
+
 ## 2026-08-26 绳线模型增量微调晋升
 
 在更新后的 `datasets/1Ayoyo_dataset`（string manifest `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c`）上，以当前 MobileNetV3-FPN 权重为初始化，使用 `lr=1e-5`、backbone 学习率倍率 `0.05`、前 3 epoch 冻结 backbone、负样本采样权重 `4` 微调 13 个 epoch，验证集 best 为 epoch 11、阈值 `0.3488`。晋升权重为：

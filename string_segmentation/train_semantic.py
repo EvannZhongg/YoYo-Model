@@ -133,6 +133,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
     parser.add_argument("--hard-negative-weight", type=float, default=0.05)
+    parser.add_argument("--centerline-weight", type=float, default=0.0)
     parser.add_argument(
         "--negative-sample-weight",
         type=float,
@@ -173,6 +174,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("staged backbone optimization is only supported by mobilenet_v3_fpn")
     if args.hard_negative_weight < 0:
         raise ValueError("hard-negative weight must be non-negative")
+    if args.centerline_weight < 0:
+        raise ValueError("centerline weight must be non-negative")
     if args.negative_sample_weight <= 0:
         raise ValueError("negative sample weight must be positive")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
@@ -216,6 +219,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         args.min_mask_width_px,
         augment=True,
         degradation_augment=args.degradation_augment,
+        return_centerline=args.centerline_weight > 0.0,
     )
     val_dataset = ReviewedStringDataset(
         dataset_dir,
@@ -324,6 +328,16 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 logits = model(images)
                 loss, parts = focal_dice_loss(logits, masks, args.hard_negative_weight)
+                if args.centerline_weight > 0.0:
+                    centerline = batch_data["centerline"].to(device, non_blocking=True)
+                    probability = torch.sigmoid(logits)
+                    intersection = (probability * centerline).sum(dim=(1, 2, 3))
+                    denominator = probability.sum(dim=(1, 2, 3)) + centerline.sum(dim=(1, 2, 3))
+                    centerline_loss = 1.0 - (
+                        (2.0 * intersection + 1.0) / (denominator + 1.0)
+                    ).mean()
+                    loss = loss + float(args.centerline_weight) * centerline_loss
+                    parts["centerline_loss"] = float(centerline_loss.detach().cpu())
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -423,6 +437,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "device": str(device),
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
+            "centerline_weight": float(args.centerline_weight),
             "negative_sample_weight": float(args.negative_sample_weight),
             "freeze_backbone_epochs": int(args.freeze_backbone_epochs),
             "backbone_lr_multiplier": float(args.backbone_lr_multiplier),

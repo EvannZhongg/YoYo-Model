@@ -283,6 +283,17 @@ def render_yolo_segmentation(label_path: Path, width: int, height: int) -> np.nd
     return mask
 
 
+def centerline_heatmap_target(mask: np.ndarray, blur_sigma: float = 1.2) -> np.ndarray:
+    skeleton = _skeletonize(mask)
+    if not np.any(skeleton):
+        return skeleton.astype(np.float32)
+    heatmap = cv2.GaussianBlur(
+        skeleton.astype(np.float32), (0, 0), float(max(0.1, blur_sigma)),
+    )
+    peak = float(heatmap.max())
+    return heatmap / peak if peak > 1e-6 else heatmap
+
+
 def image_label_pairs(dataset_dir: Path, split: str) -> list[tuple[Path, Path]]:
     image_root = dataset_dir / "images" / split
     label_root = dataset_dir / "labels" / split
@@ -307,6 +318,7 @@ class ReviewedStringDataset(Dataset):
         min_mask_width_px: int = 2,
         augment: bool = False,
         degradation_augment: bool = False,
+        return_centerline: bool = False,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
@@ -315,6 +327,7 @@ class ReviewedStringDataset(Dataset):
         self.min_mask_width_px = max(1, int(min_mask_width_px))
         self.augment = bool(augment)
         self.degradation_augment = bool(degradation_augment)
+        self.return_centerline = bool(return_centerline)
         self.pairs = image_label_pairs(self.dataset_dir, split)
         if not self.pairs:
             raise RuntimeError(f"No reviewed semantic samples found for split={split}: {self.dataset_dir}")
@@ -343,13 +356,16 @@ class ReviewedStringDataset(Dataset):
             image = np.clip(image.astype(np.float32) * gain + bias, 0, 255).astype(np.uint8)
         if self.augment and self.degradation_augment:
             image = augment_video_degradation(image)
-        return {
+        result = {
             "image": normalize_image(image),
             "mask": torch.from_numpy(mask.astype(np.float32)[None, ...]),
             "image_path": str(image_path),
             "label_path": str(label_path),
             "positive": bool(np.any(mask)),
         }
+        if self.return_centerline:
+            result["centerline"] = torch.from_numpy(centerline_heatmap_target(mask)[None, ...])
+        return result
 
 
 def augment_video_degradation(image: np.ndarray) -> np.ndarray:

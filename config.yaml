@@ -57,7 +57,7 @@ tracking:
   enable_pose: false
   # One high-resolution MobileNetV3-FPN replaces the previous three-model
   # LR-ASPP route. Predictions remain review-only and never become label truth.
-  string_weights_path: "runs/experiments/semantic_new116_hn20_r1/weights/best.pt"
+  string_weights_path: "runs/experiments/semantic_centerline_regularized_r3/weights/best.pt"
   string_ensemble_weights_path: ""
   string_ensemble_alpha: 0.0
   string_ensemble_candidate_threshold: 0.50
