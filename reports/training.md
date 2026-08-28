@@ -1,5 +1,19 @@
 # 悠悠球模型与追踪报告：2026-08-26
 
+## 2026-08-29 绳线 clDice 拓扑损失晋升
+
+在同一 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以当前生产 FPN 权重初始化，加入正样本 soft-clDice 拓扑损失（权重 `0.10`、迭代 `5`），使用 `lr=5e-6`、hard-negative 权重 `0.20`、全量 backbone 微调，训练 3 epoch。模型结构、输入尺寸和后处理保持不变。晋升权重为：
+
+`runs/experiments/semantic_cldice_w010_r1/weights/best.pt`
+
+SHA-256：`8ab93a877b15ece5f5e4ebdd9cfed5ef405f56004d0fae9c77d4e6b6d22614e1`。
+
+独立 test 在固定阈值 `0.40` 下，Pixel Dice `0.739187 -> 0.741140`，Tolerant F1@3 `0.945287 -> 0.947523`，Presence F1 `0.980198 -> 0.985075`，负图平均误检像素 `40.111 -> 37.000`。`1Ayoyo_consecutive` 856 帧在相同颜色/亮脊/时序协议与阈值 `0.40` 下，帧加权 F1@8 `0.654365 -> 0.660675`，Chamfer `34.7267 -> 28.4521 px`；9 组中 6 组 F1 提升，邬聪聪组 Chamfer `62.0578 -> 15.4579 px`。局部 F1 回退最大 `0.0151`（namdongxun），其余关键弱组保持或提升。
+
+邬聪聪 99 帧真实 pipeline 在相同阈值下，绳线 Presence F1 `0.940541 -> 0.944444`，F1@8 `0.824923 -> 0.823792`，Chamfer `100.0474 -> 60.3611 px`；悠悠球/方向结果逐帧一致。模型结构、参数量和推理头不变，clDice 仅作用于训练期。
+
+完整证据位于 `runs/experiments/semantic_cldice_w010_r1/run_manifest.json`、`runs/experiments/semantic_cldice_w010_r1_test_t0p40/test_semantic_metrics_threshold_0p4.json`、`runs/experiments/semantic_cldice_w010_r1/consecutive856_t0p40/summary.json`、`runs/experiments/semantic_cldice_w010_r1_pipeline_wu99_t0p40/metrics.json`。默认 `tracking.string_weights_path` 与 `string_confidence` 已同步更新。
+
 ## 2026-08-28 绳线联合硬负样本与中心线正则微调晋升
 
 在同一 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以 `semantic_centerline_regularized_r3` 初始化，联合使用 hard-negative loss 权重 `0.20` 与中心线一致性权重 `0.20`，保持 MobileNetV3-FPN、输入尺寸、后处理和推理流程不变，训练 3 epoch。晋升权重为：
@@ -67,7 +81,7 @@ SHA-256：`ea5592d6510c17be55bf4b86517acb747a758cc0d8538050635bae0fa4dd2d9b`。
 | 任务 | 当前方案 | 默认行为 |
 | --- | --- | --- |
 | 悠悠球检测 | YOLO11s，约 9.4M 参数 | `imgsz=1024`，常规单次推理 |
-| 绳线分割 | 单 MobileNetV3-FPN，约 3.0M 参数 | `960x544` 单次推理，验证阈值 `0.6471` |
+| 绳线分割 | 单 MobileNetV3-FPN，约 3.0M 参数 + clDice 训练正则 | `960x544` 单次推理，配置阈值 `0.40` |
 | 绳线追踪 | 语义分割 + 概率门控颜色/Hough + 按需光流 | 新鲜观测优先，仅缺帧时传播 |
 | 方向识别 | 仅悠悠球 ROI 的三分类模型 | 5/25 FPS 自适应采样 + EMA/滞回 |
 | RTMPose | 可选审核分支 | 默认关闭，不参与上述四项主任务输出 |

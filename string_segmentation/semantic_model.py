@@ -443,6 +443,56 @@ def focal_dice_loss(
     }
 
 
+def _soft_erode(value: torch.Tensor) -> torch.Tensor:
+    vertical = -nn.functional.max_pool2d(-value, kernel_size=(3, 1), stride=1, padding=(1, 0))
+    horizontal = -nn.functional.max_pool2d(-value, kernel_size=(1, 3), stride=1, padding=(0, 1))
+    return torch.minimum(vertical, horizontal)
+
+
+def _soft_dilate(value: torch.Tensor) -> torch.Tensor:
+    return nn.functional.max_pool2d(value, kernel_size=3, stride=1, padding=1)
+
+
+def _soft_open(value: torch.Tensor) -> torch.Tensor:
+    return _soft_dilate(_soft_erode(value))
+
+
+def _soft_skeletonize(value: torch.Tensor, iterations: int) -> torch.Tensor:
+    current = value.clamp(0.0, 1.0)
+    skeleton = nn.functional.relu(current - _soft_open(current))
+    for _ in range(max(1, int(iterations))):
+        current = _soft_erode(current)
+        delta = nn.functional.relu(current - _soft_open(current))
+        skeleton = skeleton + nn.functional.relu(delta - skeleton * delta)
+    return skeleton.clamp(0.0, 1.0)
+
+
+def soft_cldice_loss(
+    probability: torch.Tensor,
+    target: torch.Tensor,
+    iterations: int = 5,
+) -> torch.Tensor:
+    """Topology-aware centerline loss for positive thin-string masks."""
+    positive = target.sum(dim=(1, 2, 3)) > 0.0
+    if not torch.any(positive):
+        return probability.new_zeros(())
+    prediction = probability[positive].clamp(0.0, 1.0)
+    expected = target[positive].clamp(0.0, 1.0)
+    prediction_skeleton = _soft_skeletonize(prediction, iterations)
+    target_skeleton = _soft_skeletonize(expected, iterations)
+    epsilon = prediction.new_tensor(1e-6)
+    topology_precision = (prediction_skeleton * expected).sum(dim=(1, 2, 3)) / (
+        prediction_skeleton.sum(dim=(1, 2, 3)) + epsilon
+    )
+    topology_recall = (target_skeleton * prediction).sum(dim=(1, 2, 3)) / (
+        target_skeleton.sum(dim=(1, 2, 3)) + epsilon
+    )
+    score = (2.0 * topology_precision * topology_recall) / (
+        topology_precision + topology_recall + epsilon
+    )
+    return (1.0 - score).mean()
+
+
 def save_checkpoint(
     path: Path,
     model: nn.Module,

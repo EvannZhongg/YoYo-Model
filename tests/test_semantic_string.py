@@ -19,6 +19,7 @@ from string_segmentation.semantic_model import (
     augment_video_degradation,
     build_string_model,
     focal_dice_loss,
+    soft_cldice_loss,
     fuse_calibrated_probabilities,
     letterbox,
     load_checkpoint,
@@ -37,6 +38,20 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_soft_cldice_loss_handles_empty_batch_and_backpropagates(self):
+        empty_probability = torch.full((2, 1, 16, 16), 0.5, requires_grad=True)
+        empty_target = torch.zeros_like(empty_probability)
+        empty_loss = soft_cldice_loss(empty_probability, empty_target)
+        self.assertEqual(float(empty_loss), 0.0)
+
+        probability = torch.full((1, 1, 16, 16), 0.5, requires_grad=True)
+        target = torch.zeros_like(probability)
+        target[:, :, 7:9, 2:14] = 1.0
+        loss = soft_cldice_loss(probability, target, iterations=3)
+        self.assertGreater(float(loss.detach()), 0.0)
+        loss.backward()
+        self.assertIsNotNone(probability.grad)
+
     def test_video_degradation_augmentation_preserves_tensor_contract(self):
         image = np.tile(np.arange(96, dtype=np.uint8), (64, 1))
         image = np.repeat(image[:, :, None], 3, axis=2)

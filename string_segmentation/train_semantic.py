@@ -23,6 +23,7 @@ from string_segmentation.semantic_model import (
     ReviewedStringDataset,
     build_string_model,
     focal_dice_loss,
+    soft_cldice_loss,
     load_dataset_manifest,
     load_checkpoint,
     save_checkpoint,
@@ -134,6 +135,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
     parser.add_argument("--hard-negative-weight", type=float, default=0.05)
     parser.add_argument("--centerline-weight", type=float, default=0.0)
+    parser.add_argument("--cldice-weight", type=float, default=0.0)
+    parser.add_argument("--cldice-iterations", type=int, default=5)
     parser.add_argument(
         "--negative-sample-weight",
         type=float,
@@ -176,6 +179,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("hard-negative weight must be non-negative")
     if args.centerline_weight < 0:
         raise ValueError("centerline weight must be non-negative")
+    if args.cldice_weight < 0:
+        raise ValueError("clDice weight must be non-negative")
+    if args.cldice_iterations < 1:
+        raise ValueError("clDice iterations must be positive")
     if args.negative_sample_weight <= 0:
         raise ValueError("negative sample weight must be positive")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
@@ -319,7 +326,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         if args.architecture == "mobilenet_v3_fpn":
             model.encoder.requires_grad_(not backbone_frozen)
         model.train()
-        loss_total = focal_total = dice_total = hard_negative_total = 0.0
+        loss_total = focal_total = dice_total = hard_negative_total = cldice_total = 0.0
         batch_count = 0
         for batch_data in train_loader:
             images = batch_data["image"].to(device, non_blocking=True)
@@ -328,6 +335,12 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 logits = model(images)
                 loss, parts = focal_dice_loss(logits, masks, args.hard_negative_weight)
+                if args.cldice_weight > 0.0:
+                    cldice_loss = soft_cldice_loss(
+                        torch.sigmoid(logits), masks, args.cldice_iterations,
+                    )
+                    loss = loss + float(args.cldice_weight) * cldice_loss
+                    parts["cldice"] = float(cldice_loss.detach().cpu())
                 if args.centerline_weight > 0.0:
                     centerline = batch_data["centerline"].to(device, non_blocking=True)
                     probability = torch.sigmoid(logits)
@@ -347,6 +360,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             focal_total += parts["focal"]
             dice_total += parts["dice_loss"]
             hard_negative_total += parts["hard_negative"]
+            cldice_total += parts.get("cldice", 0.0)
             batch_count += 1
         scheduler.step()
         validation_samples = collect_probabilities(model, val_loader, device)
@@ -365,6 +379,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "train_focal": focal_total / max(1, batch_count),
             "train_dice_loss": dice_total / max(1, batch_count),
             "train_hard_negative": hard_negative_total / max(1, batch_count),
+            "train_cldice": cldice_total / max(1, batch_count),
             "is_best": improved,
             "validation": validation_metrics,
             "threshold_sweep": threshold_sweep,
@@ -438,6 +453,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
             "centerline_weight": float(args.centerline_weight),
+            "cldice_weight": float(args.cldice_weight),
+            "cldice_iterations": int(args.cldice_iterations),
             "negative_sample_weight": float(args.negative_sample_weight),
             "freeze_backbone_epochs": int(args.freeze_backbone_epochs),
             "backbone_lr_multiplier": float(args.backbone_lr_multiplier),
