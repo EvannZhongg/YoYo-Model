@@ -1,5 +1,17 @@
 # 悠悠球模型与追踪报告：2026-08-26
 
+## 2026-08-28 绳线联合硬负样本与中心线正则微调晋升
+
+在同一 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以 `semantic_centerline_regularized_r3` 初始化，联合使用 hard-negative loss 权重 `0.20` 与中心线一致性权重 `0.20`，保持 MobileNetV3-FPN、输入尺寸、后处理和推理流程不变，训练 3 epoch。晋升权重为：
+
+`runs/experiments/semantic_centerline_hn20_joint_r1/weights/best.pt`
+
+SHA-256：`d86472606e679e912371ef2d687aa81aa2ee68d1a0296c4c11b385928171f90c`。
+
+独立 test（108 张）Tolerant F1@3 `0.945482 -> 0.945635`，Pixel Dice `0.737985 -> 0.738492`，Presence F1 保持 `0.980198`，负图平均误检像素 `43.667 -> 43.889`。固定 `threshold=0.30`、颜色/亮脊/时序协议下，连续集 856 帧 pooled F1@8 `0.625490 -> 0.628751`，帧加权 Chamfer `33.9871 -> 33.7127 px`。周博文、namdongxun、DSCF、池高宇 67/120 帧和邬聪聪等弱组中，邬聪聪组 F1@8 `0.818555 -> 0.812568`、池高宇 100 帧组 `0.578891 -> 0.569986`，其余组提升或保持同一量级。
+
+邬聪聪 99 帧完整 pipeline 仅替换绳线权重：绳线 F1@8 `0.811188 -> 0.820686`，Chamfer `106.2445 -> 102.9853 px`；悠悠球指标逐帧一致，GPU 端到端 FPS `6.4734 -> 6.4651`（约 `0.1%` 下降）。完整复现证据位于 `runs/experiments/semantic_centerline_hn20_joint_r1/run_manifest.json`、`runs/experiments/semantic_centerline_hn20_joint_r1_test/test_semantic_metrics.json`、`runs/experiments/semantic_centerline_hn20_joint_r1_consecutive856/summary.json` 和 `runs/experiments/semantic_centerline_hn20_joint_r1_pipeline_wu99/`。默认 `tracking.string_weights_path` 与 `config.py` 回退值已同步更新。
+
 ## 2026-08-28 绳线中心线一致性正则微调晋升
 
 在 `7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c` manifest 上，以硬负样本生产权重初始化，保持模型结构、输入尺寸、后处理和推理流程不变，训练期加入中心线一致性 Dice 正则（权重 `0.2`），微调 3 epoch。晋升权重为：

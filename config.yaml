@@ -55,7 +55,7 @@ tracking:
   # orientation paths do not consume it, so keep it off unless explicitly needed.
   enable_pose: false
   # High-resolution MobileNetV3-FPN semantic string model.
-  string_weights_path: "runs/experiments/semantic_centerline_regularized_r3/weights/best.pt"
+  string_weights_path: "runs/experiments/semantic_centerline_hn20_joint_r1/weights/best.pt"
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.20

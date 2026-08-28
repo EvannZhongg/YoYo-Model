@@ -135,7 +135,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_WEIGHTS_PATH",
             "tracking.string_weights_path",
-            "runs/experiments/semantic_centerline_regularized_r3/weights/best.pt",
+            "runs/experiments/semantic_centerline_hn20_joint_r1/weights/best.pt",
         )
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
