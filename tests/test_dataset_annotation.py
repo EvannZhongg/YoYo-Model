@@ -257,7 +257,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             self.assertEqual(result["annotation"]["yoyo_not_visible_reason"], "occluded")
             self.assertIsNone(result["annotation"]["yoyo_bbox_pixel"])
 
-    def test_uncertain_yoyo_cannot_be_verified(self):
+    def test_uncertain_yoyo_can_be_manually_verified_without_changing_label(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             dataset, key = make_annotation_dataset(root)
@@ -271,8 +271,13 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 patch("workbench.dataset_annotation.DATASETS_DIR", root),
                 patch("workbench.dataset_annotation.REVIEW_MAP_PATH", root / REVIEW_MAP_FILENAME),
             ):
-                with self.assertRaisesRegex(ValueError, "must be resolved"):
-                    set_annotation_sample_reviewed(str(dataset), key, "reviewer")
+                result = set_annotation_sample_reviewed(str(dataset), key, "reviewer")
+                loaded = load_annotation_sample(str(dataset), key)
+
+            self.assertTrue(result["reviewed"])
+            self.assertTrue(loaded["reviewed"])
+            self.assertEqual(loaded["annotation"]["visibility"], "uncertain")
+            self.assertEqual(loaded["annotation"]["bbox_review_status"], "needs_review")
 
 
 if __name__ == "__main__":

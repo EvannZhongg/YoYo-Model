@@ -128,9 +128,11 @@ Yoyo visibility combines an observability state with an optional reason:
   `occluded`, `out_of_frame`, or `absent`.
 - `uncertain`: neither a positive bbox nor a reviewed negative is defensible.
 
-`uncertain` records are draft-only and must not be manually verified or used as
-detection/orientation supervision. `out_of_frame` means known outside the image;
-`occluded` means in-frame but fully hidden; `absent` means no yoyo is present.
+`uncertain` records are not used as detection/orientation supervision. The
+Workbench's separate manual verification may still confirm that a human reviewed
+and accepted the unresolved state; it does not turn the record into supervision.
+`out_of_frame` means known outside the image; `occluded` means in-frame but fully
+hidden; `absent` means no yoyo is present.
 
 ## Evidence And Orientation
 

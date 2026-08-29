@@ -286,8 +286,6 @@ def set_annotation_sample_reviewed(
     _, labels_root, _, label_path = _managed_label(dataset_path, sample_key)
     key = label_path.relative_to(labels_root).as_posix()
     reviewer_name = str(reviewer or "workbench-reviewer").strip() or "workbench-reviewer"
-    if confirmed and _read_document(label_path).get("visibility") == "uncertain":
-        raise ValueError("uncertain yoyo visibility must be resolved before verification")
     with _STORAGE_LOCK:
         document = _read_review_map()
         dataset_key = _review_dataset_key(path)
@@ -346,12 +344,8 @@ def set_all_annotation_samples_reviewed(
             if key not in current_keys:
                 samples.pop(key)
         updated_count = 0
-        removed_uncertain_count = 0
         for label_path in label_paths:
             key = label_path.relative_to(labels_root).as_posix()
-            if _read_document(label_path).get("visibility") == "uncertain":
-                removed_uncertain_count += int(samples.pop(key, None) is not None)
-                continue
             label_size_bytes, label_mtime_ns = _file_revision(label_path)
             existing = samples.get(key)
             if (
@@ -370,7 +364,7 @@ def set_all_annotation_samples_reviewed(
                 "label_mtime_ns": label_mtime_ns,
             }
             updated_count += 1
-        if updated_count or removed_orphan_count or removed_uncertain_count:
+        if updated_count or removed_orphan_count:
             document["updated_at_utc"] = confirmed_at
             payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
             atomic_write_text(REVIEW_MAP_PATH, payload)
@@ -380,7 +374,6 @@ def set_all_annotation_samples_reviewed(
         "reviewed_count": len(samples),
         "updated_count": updated_count,
         "removed_orphan_count": removed_orphan_count,
-        "removed_uncertain_count": removed_uncertain_count,
         "reviewer": reviewer_name,
     }
 
@@ -776,7 +769,7 @@ const fileUrl = path => { const config=window.gradio_config||{}; const root=Stri
 const cloneGeometry = () => ({bbox:state.bbox?state.bbox.slice():null,lines:state.lines.map(line=>line.map(point=>point.slice()))});
 const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-visibility").value,yoyoNotVisibleReason:$("#yda-yoyo-not-visible-reason").value,trickOrientation:$("#yda-trick-orientation").value,stringVisibility:$("#yda-string-visibility").value,reviewStatus:$("#yda-review-status").value,notes:$("#yda-notes").value});
 function pushHistory(){ state.history.push(cloneGeometry()); if(state.history.length>60)state.history.shift(); }
-function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed),uncertain=$("#yda-yoyo-visibility").value==="uncertain";button.disabled=!state.sample||state.dirty||uncertain;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":uncertain?"状态待确认":"核验完成"; }
+function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed);button.disabled=!state.sample||state.dirty;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":"核验完成"; }
 function syncYoyoFields(){const visibility=$("#yda-yoyo-visibility").value,notVisible=visibility==="not_visible";$("#yda-yoyo-not-visible-reason-field").hidden=!notVisible;$("#yda-yoyo-not-visible-reason").disabled=!notVisible;["x1","y1","x2","y2"].forEach(name=>$("#yda-"+name).disabled=notVisible);$("#yda-clear-box").disabled=notVisible;const boxTool=element.querySelector('#yda-tools button[data-tool="box"]');boxTool.disabled=notVisible;if(notVisible&&state.tool==="box")setTool("select");}
 function syncResetButton(){ $("#yda-reset").disabled=!state.sample||!state.dirty; }
 function syncAnnotationVisibility(){ const button=$("#yda-toggle-annotations");button.textContent=state.annotationsVisible?"隐藏标注":"显示标注";button.setAttribute("aria-pressed",String(!state.annotationsVisible)); }

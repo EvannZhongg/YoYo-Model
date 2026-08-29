@@ -141,6 +141,8 @@ manifest 校验仍然启用。需要生成发布归档哈希时，可运行模�
 - 完整视频追踪和逐帧审核
 
 数据集人工确认状态独立保存在 `workbench_state/dataset_review_status.json`。
+人工确认只表示核验者看过并认可当前标注；`uncertain` 也可以核验完成，但仍不进入
+悠悠球检测和方向训练监督。
 当前 `yoyo_dataset_review_v3` 使用标签文件大小和纳秒修改时间使编辑后的确认失效，
 不再保存标签 SHA-256。该映射不属于 `agent_yoyo_string_annotation_v5`
 标签 schema，因此无需升级或重建已有训练标签。
