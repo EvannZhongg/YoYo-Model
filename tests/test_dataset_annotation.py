@@ -134,7 +134,6 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             ):
                 set_annotation_sample_reviewed(str(dataset), key, "reviewer-1")
                 document = json.loads(label_path.read_text(encoding="utf-8"))
-                document["notes"] = "changed after review"
                 label_path.write_text(json.dumps(document), encoding="utf-8")
                 opened = open_annotation_dataset(str(dataset))
 
@@ -173,7 +172,6 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 "string_visibility": "partial",
                 "string_polylines_pixel": [[[10, 20], [30, 40]]],
                 "string_review_status": "approved",
-                "notes": "updated",
             }
             with (
                 patch("workbench.dataset_annotation.DATASETS_DIR", root),
@@ -199,7 +197,6 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 "string_review_status": "approved",
                 "bbox_review_status": "reviewed",
                 "reviewer": "tester",
-                "notes": "coordinate correction",
             }
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 result = save_annotation_sample(str(dataset), key, edit)

@@ -17,7 +17,6 @@ Allowed observations:
 - `priority_suggestion`: `quick_verify`, `clear_candidate`, `standard`,
   `hard_case`, or `uncertain`
 - `obvious_bad_cases`: `motion_blur`, `low_contrast`, `edge_clipped`, or `severe_occlusion`
-- short factual `notes`
 - scalar confidence values in `[0,1]`
 
 Prohibited output includes coordinates, boxes, points, masks, polygons,
@@ -37,8 +36,6 @@ The deterministic script may promote:
   `promotion_confidence` and `scene_is_obvious=true`
 - `motion_blur`, `low_contrast`, and `edge_clipped` when bad-case confidence
   meets `promotion_confidence`
-- a prefixed factual note when overall confidence meets `notes_confidence`; the
-  prefix states that it is an API-resolution observation and not string truth
 
 It never promotes `severe_occlusion`; that value only routes the frame to the
 hard-case queue. It never promotes any geometry or terminal status.

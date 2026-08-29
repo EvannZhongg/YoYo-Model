@@ -28,7 +28,7 @@ Repeat until approved or unresolved:
 7. Split strokes at unsupported gaps, hand/body/neck occlusions, wraps behind a hand, and ambiguous crossings.
 8. Add every other visible route segment supported by pixels.
 9. Check `yoyo_bbox_pixel` when the yoyo is visible and every yoyo path anchor against that bbox.
-10. Update anchors, visibility, path ordering, gaps, `bad_case`, and notes.
+10. Update anchors, visibility, path ordering, gaps, and `bad_case`.
 11. Verify `trick_orientation` from launch motion in nearby frames.
 12. Apply a compact patch for small edits, or a full candidate for rewrites.
 13. Render again.

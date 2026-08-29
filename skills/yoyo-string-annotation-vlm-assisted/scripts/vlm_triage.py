@@ -142,7 +142,6 @@ def normalize_assessment(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]
         }
     )
     confidence_raw = raw.get("confidence") if isinstance(raw.get("confidence"), dict) else {}
-    notes = re.sub(r"\s+", " ", str(raw.get("notes", "")).strip())[:500]
     assessment = {
         "domain_status": domain if domain in DOMAIN_STATUS else "uncertain",
         "scene_label": scene if scene in SCENE_LABELS else "unknown",
@@ -152,7 +151,6 @@ def normalize_assessment(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]
         "frame_usability": usability if usability in USABILITY else "uncertain",
         "priority_suggestion": priority if priority in PRIORITY_SUGGESTIONS else "uncertain",
         "obvious_bad_cases": bad_cases,
-        "notes": notes,
         "confidence": {
             "domain": scalar_confidence(confidence_raw.get("domain")),
             "scene": scalar_confidence(confidence_raw.get("scene")),
@@ -178,7 +176,6 @@ class Settings:
     retries: int
     promotion_confidence: float
     quick_verify_confidence: float
-    notes_confidence: float
     safe_bad_cases: tuple[str, ...]
 
 
@@ -207,7 +204,6 @@ def load_settings(config_path: Path, env_file: Path | None, model_override: str 
         retries=max(0, int(model.get("retries", 2))),
         promotion_confidence=scalar_confidence(triage.get("promotion_confidence", 0.9)),
         quick_verify_confidence=scalar_confidence(triage.get("quick_verify_confidence", 0.95)),
-        notes_confidence=scalar_confidence(triage.get("notes_confidence", 0.7)),
         safe_bad_cases=tuple(str(item) for item in triage.get("safe_bad_cases", ["motion_blur", "low_contrast", "edge_clipped"])),
     )
 
@@ -232,7 +228,6 @@ Return exactly one JSON object with these fields:
   "frame_usability": "usable|severely_degraded|uncertain",
   "priority_suggestion": "quick_verify|clear_candidate|standard|hard_case|uncertain",
   "obvious_bad_cases": ["motion_blur|low_contrast|edge_clipped|severe_occlusion"],
-  "notes": "one short factual sentence about only obvious frame-level evidence",
   "confidence": {
     "domain": 0.0,
     "scene": 0.0,
@@ -306,8 +301,6 @@ def compute_promotions(assessment: dict[str, Any], settings: Settings) -> dict[s
     safe_bad_cases = sorted(set(assessment["obvious_bad_cases"]) & set(settings.safe_bad_cases))
     if safe_bad_cases and confidence["bad_cases"] >= settings.promotion_confidence:
         promoted["bad_case"] = safe_bad_cases
-    if assessment["notes"] and confidence["overall"] >= settings.notes_confidence:
-        promoted["notes"] = f"Weak-VLM API-resolution observation, not string truth: {assessment['notes']}"
     return promoted
 
 
@@ -350,8 +343,6 @@ def compute_handoff(assessment: dict[str, Any], promotions: dict[str, Any], sett
         skipped.append("coarse scene classification")
     if promotions.get("bad_case"):
         skipped.append("obvious bad-case tagging for: " + ", ".join(promotions["bad_case"]))
-    if "notes" in promotions:
-        skipped.append("initial factual note formatting")
     return {
         "queue": queue,
         "priority_rank": rank,
@@ -392,9 +383,6 @@ def apply_safe_promotions(
         candidate["scene_label"] = promotions["scene_label"]
     if promotions.get("bad_case"):
         candidate["bad_case"] = sorted(set(candidate.get("bad_case") or []) | set(promotions["bad_case"]))
-    if promotions.get("notes"):
-        existing = str(candidate.get("notes") or "").strip()
-        candidate["notes"] = " ".join(item for item in (existing, promotions["notes"]) if item)[:2000]
     updated = labels.apply_candidate(
         label_path,
         candidate,

@@ -838,7 +838,6 @@ def initial_label(record: dict[str, Any], sampling_manifest_sha256: str) -> dict
             "unresolved_gaps": [],
         },
         "bad_case": [],
-        "notes": "",
         "review_status": "needs_review",
         "bbox_review_status": "needs_review",
         "string_review_status": "unresolved",

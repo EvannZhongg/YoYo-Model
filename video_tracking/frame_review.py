@@ -172,7 +172,6 @@ def append_tracking_frame_review(
     binding: dict[str, Any],
     decision: str,
     reviewer: str,
-    notes: str = "",
 ) -> tuple[Path, dict[str, Any]]:
     if decision not in ALLOWED_DECISIONS:
         raise ValueError(f"Unsupported frame review decision: {decision}")
@@ -201,7 +200,6 @@ def append_tracking_frame_review(
         "reviewed_at_utc": datetime.now(timezone.utc).isoformat(),
         "decision": decision,
         "reviewer": reviewer,
-        "notes": str(notes or "").strip(),
         "run_id": current_binding["run_id"],
         "run_manifest": str(manifest_path),
         "run_manifest_sha256": current_binding["run_manifest_sha256"],

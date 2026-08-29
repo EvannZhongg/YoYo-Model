@@ -103,7 +103,7 @@ The weak VLM may supply only:
 - obvious frame-level yoyo presence and string evidence for routing
 - obvious `motion_blur`, `low_contrast`, and `edge_clipped` tags
 - task priority
-- short factual notes and normalized JSON
+- normalized JSON
 
 It must never supply or promote string visibility, trick orientation,
 yoyo bbox, coordinates, masks, centerlines, paths, topology, review decisions,
@@ -128,7 +128,7 @@ For `clear_candidate`, `standard`, and `hard_case`, perform the listed
 4. Apply one complete candidate for the first geometry revision.
 5. Render, inspect every edge, and use compact patches until approved or unresolved.
 
-Keep promoted scene, bad-case, and notes fields unless direct evidence conflicts.
+Keep promoted scene and bad-case fields unless direct evidence conflicts.
 Correct them through the normal candidate or patch when needed; never edit the
 label directly.
 

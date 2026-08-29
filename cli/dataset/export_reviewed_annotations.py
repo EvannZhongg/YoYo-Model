@@ -80,7 +80,6 @@ def approved_annotation(
             "model": "human-workbench",
             "decision": "approve",
             "review_scope": list(APPROVAL_SCOPES),
-            "notes": f"Imported from Workbench confirmation for {dataset_key}",
             "created_at_utc": confirmed_at,
         }
     )

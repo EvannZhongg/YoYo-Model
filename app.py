@@ -68,7 +68,6 @@ def save_tracking_frame_review(
     binding: dict | None,
     decision: str,
     reviewer: str,
-    notes: str,
 ):
     if not metadata_path:
         return None, "Frame review failed: select a completed tracking run first."
@@ -78,7 +77,6 @@ def save_tracking_frame_review(
             binding or {},
             decision,
             reviewer,
-            notes,
         )
     except Exception as exc:
         return None, f"Frame review failed: {exc}"
@@ -306,7 +304,6 @@ def create_demo():
                                 label="Frame Decision",
                             )
                             tracking_review_reviewer = gr.Textbox(label="Reviewer", value="workbench-reviewer")
-                        tracking_review_notes = gr.Textbox(label="Frame Review Notes", lines=2)
                         tracking_review_save = gr.Button("Save Frame Review", variant="primary")
                         tracking_review_log = gr.File(label="Tracking Frame Review Log")
                         tracking_review_status = gr.Textbox(label="Frame Review Status", interactive=False)
@@ -338,7 +335,7 @@ def create_demo():
                     save_tracking_frame_review,
                     [
                         tracking_metadata_source, tracking_review_binding, tracking_review_decision,
-                        tracking_review_reviewer, tracking_review_notes,
+                        tracking_review_reviewer,
                     ],
                     [tracking_review_log, tracking_review_status],
                 )

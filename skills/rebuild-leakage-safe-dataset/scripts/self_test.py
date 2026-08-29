@@ -80,7 +80,6 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "agent_yoyo_string_annotation_v5",
-                        "notes": "manual edit" if index == 1 else "",
                         "workbench_edits": [{"actor": "reviewer"}] if index == 1 else [],
                     },
                     indent=2,
@@ -127,7 +126,6 @@ class LeakageSafeRebuildTests(unittest.TestCase):
                     " old=protected/'labels'/f'label-{index}.json'",
                     " document=json.loads(old.read_text(encoding='utf-8'))",
                     " if mode=='retain': document['dataset_management']={'dataset_id':'unexpected'}",
-                    " if mode=='mutate' and index==1: document['notes']='overwritten'",
                     " new=target/old.name",
                     " new.write_text(json.dumps(document,indent=2),encoding='utf-8')",
                     " record['canonical_label']=str(new)",
@@ -287,7 +285,6 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertTrue(backup.is_dir())
         self.assertTrue(review_snapshot.is_file())
         rebuilt = json.loads(edited_label.read_text(encoding="utf-8"))
-        self.assertEqual(rebuilt["notes"], "manual edit")
         self.assertEqual(rebuilt["schema_version"], "agent_yoyo_string_annotation_v5")
         self.assertNotIn("dataset_management", rebuilt)
         rebound = json.loads(review_map.read_text(encoding="utf-8"))
@@ -339,7 +336,6 @@ class LeakageSafeRebuildTests(unittest.TestCase):
         self.assertEqual(exit_code, 4)
         self.assertTrue(dataset.is_dir())
         self.assertFalse(backup.exists())
-        self.assertEqual(json.loads(edited_label.read_text(encoding="utf-8"))["notes"], "manual edit")
         self.assertEqual(review_map.read_bytes(), review_before)
 
     def test_protected_run_rolls_back_residual_non_task_fields(self) -> None:

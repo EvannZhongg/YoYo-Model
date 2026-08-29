@@ -79,14 +79,12 @@ class TrackingFrameReviewTests(unittest.TestCase):
                 selection["binding"],
                 "incorrect",
                 "reviewer-a",
-                "String follows the sleeve edge.",
             )
             _, second = append_tracking_frame_review(
                 frames_path,
                 selection["binding"],
                 "unresolved",
                 "reviewer-b",
-                "Raw pixels remain ambiguous.",
             )
 
             events = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]

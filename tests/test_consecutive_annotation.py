@@ -27,7 +27,6 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
             "string_review_status": "reviewed",
             "bbox_review_status": "reviewed",
             "reviewer": "tester",
-            "notes": orientation,
         }
 
     def test_lists_only_datasets_with_valid_consecutive_metadata(self):

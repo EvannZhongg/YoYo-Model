@@ -54,7 +54,7 @@ ALLOWED_LABEL_FIELDS = {
     "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "yoyo_not_visible_reason", "string_visibility",
     "string_polylines_pixel", "string_polylines_2d", "string_polyline_pixel",
     "string_polyline_2d", "string_mask_polygons_pixel", "yoyo_division",
-    "scene_label", "trick_orientation", "presentation_orientation", "string_path", "bad_case", "notes",
+    "scene_label", "trick_orientation", "presentation_orientation", "string_path", "bad_case",
     "review_status", "bbox_review_status", "string_review_status",
     "reviewed_at_utc", "reviewer", "quality", "workbench_edits",
     "workbench_review_import",
@@ -75,7 +75,6 @@ CORE_FIELDS = (
     "presentation_orientation",
     "string_path",
     "bad_case",
-    "notes",
 )
 
 
@@ -535,7 +534,6 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result["presentation_orientation"] = presentation if presentation in allowed_presentation else default_presentation
     bad_case = candidate.get("bad_case", result.get("bad_case", []))
     result["bad_case"] = sorted({str(item).strip() for item in (bad_case or []) if str(item).strip()})
-    result["notes"] = str(candidate.get("notes", result.get("notes", "")))[:2000]
     if result["string_visibility"] == "not_visible":
         result["string_polylines_pixel"] = None
         result["string_polylines_2d"] = None
@@ -606,7 +604,6 @@ def initial_label(
             "unresolved_gaps": [],
         },
         "bad_case": [],
-        "notes": "",
         "review_status": "auto_labeled_needs_review",
         "bbox_review_status": "auto_labeled_needs_review",
         "string_review_status": "auto_labeled_needs_review",
@@ -807,7 +804,6 @@ def build_candidate_from_patch(base: dict[str, Any], patch: dict[str, Any]) -> d
                 image_size=(width, height),
             )
 
-    candidate["notes"] = str(patch.get("notes", candidate.get("notes", "")))[:2000]
     return candidate
 
 
@@ -1017,10 +1013,6 @@ def command_derive_centerlines(args: argparse.Namespace) -> int:
         yoyo_bbox=label.get("yoyo_bbox_pixel"),
         image_size=(width, height),
     )
-    candidate["notes"] = (
-        str(candidate.get("notes") or "")
-        + " Centerlines derived from paired mask-boundary arcs; no endpoint shortcut chords."
-    ).strip()
     result = apply_candidate(
         label_path,
         candidate,
@@ -1360,7 +1352,6 @@ def command_review(args: argparse.Namespace) -> int:
         "role": args.role,
         "model": args.model or None,
         "decision": args.decision,
-        "notes": args.notes,
         "content_sha256": content_digest(label),
         "review_scope": (
             ["visible_geometry", "pixel_alignment", "gaps", "yoyo_bbox"]
@@ -1722,7 +1713,6 @@ def command_propagate(args: argparse.Namespace) -> int:
         "tracked_fraction": round(len(all_errors) / attempted_measurements, 4) if attempted_measurements else 0.0,
         "requires_current_frame_model_review": True,
     }
-    candidate["notes"] = (str(candidate.get("notes", "")) + " Temporal seed; refine against the current frame before approval.").strip()
     result = apply_candidate(target_path, candidate, args.actor, "temporal-propagator", args.model, args.message)
     result["temporal_seed"] = candidate["temporal_seed"]
     write_json(target_path, result)
@@ -2220,7 +2210,6 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--reviewer", required=True)
     review.add_argument("--role", choices=("geometry-critic", "semantic-critic", "temporal-verifier", "final-verifier"), required=True)
     review.add_argument("--model", default="")
-    review.add_argument("--notes", required=True)
     review.set_defaults(func=command_review)
 
     audit = subparsers.add_parser("audit", help="Validate labels, provenance, reviews, and source identity.")

@@ -27,7 +27,6 @@ def settings() -> vlm_triage.Settings:
         retries=0,
         promotion_confidence=0.9,
         quick_verify_confidence=0.95,
-        notes_confidence=0.7,
         safe_bad_cases=("motion_blur", "low_contrast", "edge_clipped"),
     )
 
@@ -68,7 +67,6 @@ def draft_label(image_path: Path) -> dict:
             "unresolved_gaps": [],
         },
         "bad_case": [],
-        "notes": "",
         "string_review_status": "auto_labeled_needs_review",
         "review_status": "partially_reviewed",
         "bbox_review_status": "auto_labeled_needs_review",
@@ -100,7 +98,6 @@ class TriageBoundaryTests(unittest.TestCase):
             "coarse_string_evidence": "obvious",
             "frame_usability": "usable",
             "obvious_bad_cases": ["motion_blur"],
-            "notes": "Obvious yoyo performance frame.",
             "string_polylines_pixel": [[[1, 2], [3, 4]]],
             "yoyo_bbox": [1, 2, 3, 4],
             "hands_pixel": {"left": [1, 2], "right": None},
@@ -123,14 +120,12 @@ class TriageBoundaryTests(unittest.TestCase):
                 "frame_usability": "usable",
                 "priority_suggestion": "clear_candidate",
                 "obvious_bad_cases": ["motion_blur", "severe_occlusion"],
-                "notes": "Obvious motion blur across the frame.",
                 "confidence": {"domain": 0.99, "scene": 0.98, "bad_cases": 0.96, "priority": 0.95, "overall": 0.92},
             }
         )
         promoted = vlm_triage.compute_promotions(assessment, settings())
         self.assertEqual(promoted["scene_label"], "trick")
         self.assertEqual(promoted["bad_case"], ["motion_blur"])
-        self.assertTrue(promoted["notes"].startswith("Weak-VLM API-resolution observation, not string truth:"))
         self.assertNotIn("string_visibility", promoted)
         self.assertNotIn("trick_orientation", promoted)
 
@@ -147,7 +142,7 @@ class TriageBoundaryTests(unittest.TestCase):
             updated, status = vlm_triage.apply_safe_promotions(
                 label_path,
                 label,
-                {"scene_label": "trick", "bad_case": ["low_contrast"], "notes": "Weak-VLM triage: low contrast."},
+                {"scene_label": "trick", "bad_case": ["low_contrast"]},
                 "replay-model",
                 "a" * 64,
             )
@@ -168,7 +163,6 @@ class TriageBoundaryTests(unittest.TestCase):
                 "coarse_string_evidence": "none_obvious",
                 "frame_usability": "usable",
                 "obvious_bad_cases": [],
-                "notes": "No obvious yoyo activity.",
                 "confidence": {"domain": 0.99, "overall": 0.95},
             }
         )
@@ -187,7 +181,6 @@ class TriageBoundaryTests(unittest.TestCase):
                 "frame_usability": "usable",
                 "priority_suggestion": "clear_candidate",
                 "obvious_bad_cases": [],
-                "notes": "No obvious yoyo at API resolution.",
                 "confidence": {"domain": 0.99, "scene": 0.98, "priority": 0.95, "overall": 0.9},
             }
         )

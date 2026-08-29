@@ -154,7 +154,6 @@ def run() -> None:
             "string_review_status": "reviewed",
             "bbox_review_status": "reviewed",
             "reviewer": "human-reviewer",
-            "notes": "manual edit that incremental append must preserve",
         })
         workbench_annotation.set_annotation_sample_reviewed(
             str(first), protected_key, "human-reviewer", confirmed=True
@@ -169,7 +168,6 @@ def run() -> None:
             "string_review_status": "needs_review",
             "bbox_review_status": "needs_review",
             "reviewer": "human-editor",
-            "notes": "manual edit without human verification must also be preserved",
         })
         protected_label = first / "canonical" / "labels" / Path(protected_key)
         edited_only_label = first / "canonical" / "labels" / Path(edited_only_key)

@@ -41,11 +41,11 @@ Inspect the normal, large, and center-crop anchor contact sheets plus raw
 frames. Use large views to retain positives, hard negatives, occlusions, motion
 blur, low contrast, edge clipping, crossings, behind-hand sections, behind-neck
 sections, behind-body sections, half-route risks, and background-edge
-distractors as reviewed cases using visibility, `bad_case`, and factual notes.
+distractors as reviewed cases using visibility and `bad_case`.
 
 Use neighbor frames for continuity checks and trick orientation. Do not classify
 horizontal play from a single static horizontal string segment.
 
 Do not create evaluation partitions in this skill. Pass source groups,
-visibility states, review metadata, and factual bad-case notes to the downstream
+visibility states, review metadata, and bad-case tags to the downstream
 partitioner so it can build leakage-free train/validation/test collections.

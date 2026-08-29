@@ -162,7 +162,6 @@ def main() -> int:
                         "unresolved_gaps": [],
                     },
                     "bad_case": [],
-                    "notes": "Synthetic rope is fully visible.",
                 }
             ),
             encoding="utf-8",
@@ -195,8 +194,6 @@ def main() -> int:
             "orientation-reviewer",
             "--role",
             "semantic-critic",
-            "--notes",
-            "A trick orientation must be established from frame context.",
             expected=2,
         )
         assert "requires trick_orientation=normal or horizontal" in orientation_review.stderr
@@ -231,7 +228,6 @@ def main() -> int:
                         ],
                         "unresolved_gaps": [],
                     },
-                    "notes": "Half-scale preview coordinates must map to original pixels.",
                 }
             ),
             encoding="utf-8",
@@ -246,7 +242,6 @@ def main() -> int:
                 {
                     "coordinate_frame": "original_pixel",
                     "stroke_ops": [{"op": "move_point", "stroke": 0, "point": 1, "value": [212, 106]}],
-                    "notes": "Move only one control point without rewriting the full label.",
                 }
             ),
             encoding="utf-8",
@@ -286,8 +281,6 @@ def main() -> int:
             "geometry-critic",
             "--model",
             "self-test-model",
-            "--notes",
-            "Centerline points follow the visible rope pixels.",
         )
         run(
             "review",
@@ -301,8 +294,6 @@ def main() -> int:
             "semantic-critic",
             "--model",
             "self-test-model",
-            "--notes",
-            "Visibility, anchors, and full path agree with the image.",
         )
         run("audit", "--labels", str(project / "labels"), "--require-approved", "--strict")
         run("render", "--label", str(label), "--output", str(review_dir))
@@ -377,7 +368,6 @@ def main() -> int:
                         "trick_orientation",
                         "string_path",
                         "bad_case",
-                        "notes",
                     )},
                     ensure_ascii=False,
                     sort_keys=True,
@@ -410,8 +400,6 @@ def main() -> int:
             "path-gate-reviewer",
             "--role",
             "geometry-critic",
-            "--notes",
-            "This must be rejected because the ordered path is absent.",
             expected=2,
         )
         assert "requires an ordered string_path" in rejected_review.stderr
@@ -431,8 +419,6 @@ def main() -> int:
             "anchor-gate-reviewer",
             "--role",
             "semantic-critic",
-            "--notes",
-            "Legacy hand anchors must be rejected.",
             expected=2,
         )
         assert "start_anchor=left_hand is unsupported" in invalid_anchor_review.stderr
@@ -446,8 +432,6 @@ def main() -> int:
             "unresolved-test",
             "--role",
             "geometry-critic",
-            "--notes",
-            "Repeated refinement cannot resolve this invalid anchor case.",
         )
         unresolved = json.loads(label.read_text(encoding="utf-8"))
         assert unresolved["string_review_status"] == "unresolved"
@@ -536,8 +520,6 @@ def main() -> int:
             "shortcut-critic",
             "--role",
             "geometry-critic",
-            "--notes",
-            "The nonexistent top edge must fail mask support.",
             expected=2,
         )
         assert "support from mask geometry" in shortcut_review.stderr

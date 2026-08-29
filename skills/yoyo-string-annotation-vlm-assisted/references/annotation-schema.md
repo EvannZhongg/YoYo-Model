@@ -68,7 +68,6 @@ Every full apply supplies the complete visible state:
     "unresolved_gaps": ["string is not visible between (602,318) and (635,340)"]
   },
   "bad_case": ["partial_occlusion"],
-  "notes": "Visible strokes are split; hidden route is metadata only."
 }
 ```
 
@@ -86,7 +85,6 @@ agent only writes changed fields or point operations:
   ],
   "set": {
     "string_visibility": "partial",
-    "notes": "Adjusted one bend and removed a blur-trail point."
   }
 }
 ```
