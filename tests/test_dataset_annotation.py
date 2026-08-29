@@ -8,6 +8,7 @@ from PIL import Image
 
 from helpers import make_annotation_dataset, make_consecutive_dataset
 from workbench.dataset_annotation import (
+    DATASET_ANNOTATION_JS,
     REVIEW_MAP_FILENAME,
     list_annotation_datasets,
     load_annotation_sample,
@@ -19,6 +20,12 @@ from workbench.dataset_annotation import (
 
 
 class DatasetAnnotationWorkbenchTests(unittest.TestCase):
+    def test_presentation_options_are_rebuilt_for_trick_orientation(self):
+        self.assertIn("presentation.replaceChildren", DATASET_ANNOTATION_JS)
+        self.assertIn('normal:["frontal","edge_vertical"]', DATASET_ANNOTATION_JS)
+        self.assertIn('horizontal:["edge_horizontal"]', DATASET_ANNOTATION_JS)
+        self.assertIn('not_applicable:["unknown"]', DATASET_ANNOTATION_JS)
+
     def test_lists_only_current_json_annotation_datasets(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
