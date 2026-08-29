@@ -528,6 +528,10 @@ def build_training_dataset(
                 "source_group": sample.source_group,
                 "split": split,
                 "trick_orientation": sample.orientation,
+                "presentation_orientation": str(
+                    sample.annotation.get("presentation_orientation")
+                    or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(sample.orientation, "unknown")
+                ),
                 "yoyo_positive": sample.has_yoyo,
                 "yoyo_negative": sample.yoyo_known and not sample.has_yoyo,
                 "yoyo_ignored": not sample.yoyo_known,

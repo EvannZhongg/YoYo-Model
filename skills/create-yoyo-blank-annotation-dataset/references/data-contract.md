@@ -21,6 +21,7 @@ Geometry is empty: boxes, polylines, masks, and paths must contain no data.
 Initialize the manual queue with `visibility=uncertain`,
 `yoyo_not_visible_reason=null`,
 `trick_orientation=normal`, `string_visibility=partial`, and
+`presentation_orientation=unknown`,
 `string_review_status=unresolved`. Quality history and reviews start empty;
 these defaults are not reviewed training truth.
 

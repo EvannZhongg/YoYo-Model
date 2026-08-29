@@ -54,7 +54,7 @@ ALLOWED_LABEL_FIELDS = {
     "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "yoyo_not_visible_reason", "string_visibility",
     "string_polylines_pixel", "string_polylines_2d", "string_polyline_pixel",
     "string_polyline_2d", "string_mask_polygons_pixel", "yoyo_division",
-    "scene_label", "trick_orientation", "string_path", "bad_case", "notes",
+    "scene_label", "trick_orientation", "presentation_orientation", "string_path", "bad_case", "notes",
     "review_status", "bbox_review_status", "string_review_status",
     "reviewed_at_utc", "reviewer", "quality", "workbench_edits",
     "workbench_review_import",
@@ -72,6 +72,7 @@ CORE_FIELDS = (
     "yoyo_division",
     "scene_label",
     "trick_orientation",
+    "presentation_orientation",
     "string_path",
     "bad_case",
     "notes",
@@ -514,6 +515,14 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result["trick_orientation"] = orientation if orientation in TRICK_ORIENTATIONS else "unknown"
     if result["scene_label"] == "non_trick":
         result["trick_orientation"] = "not_applicable"
+    presentation = str(
+        candidate.get(
+            "presentation_orientation",
+            result.get("presentation_orientation")
+            or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(result["trick_orientation"], "unknown"),
+        )
+    ).lower()
+    result["presentation_orientation"] = presentation if presentation in {"frontal", "edge_horizontal", "edge_vertical", "unknown"} else "unknown"
     bad_case = candidate.get("bad_case", result.get("bad_case", []))
     result["bad_case"] = sorted({str(item).strip() for item in (bad_case or []) if str(item).strip()})
     result["notes"] = str(candidate.get("notes", result.get("notes", "")))[:2000]
@@ -579,6 +588,7 @@ def initial_label(
         "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "unknown",
+        "presentation_orientation": "unknown",
         "string_path": {
             "topology": "uncertain",
             "reconstruction_status": "uncertain",
@@ -1180,6 +1190,8 @@ def validate_label(
         errors.append("unsupported scene_label")
     if str(label.get("trick_orientation", "unknown")) not in TRICK_ORIENTATIONS:
         errors.append("unsupported trick_orientation")
+    if str(label.get("presentation_orientation", "unknown")) not in {"frontal", "edge_horizontal", "edge_vertical", "unknown"}:
+        errors.append("unsupported presentation_orientation")
     strokes = label.get("string_polylines_pixel") or []
     valid_strokes = []
     if not isinstance(strokes, list):
@@ -1924,6 +1936,8 @@ def command_export(args: argparse.Namespace) -> int:
                 "image_sha256": label["image_sha256"],
                 "visibility": label.get("string_visibility"),
                 "trick_orientation": label.get("trick_orientation"),
+                "presentation_orientation": label.get("presentation_orientation")
+                or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(label.get("trick_orientation"), "unknown"),
             }
         )
         exported_sources[group] = {
@@ -1950,6 +1964,7 @@ def command_export(args: argparse.Namespace) -> int:
             "string_mask_polygons_pixel": "optional reviewed visible-area polygons",
             "string_path": "ordered reconstruction with per-edge evidence; temporal/inferred edges are not segmentation truth",
             "trick_orientation": "normal or horizontal throw plane for trick frames; not_applicable for non-trick frames",
+            "presentation_orientation": "frontal, edge_horizontal, edge_vertical, or unknown; independent of trick_orientation",
             "not_visible": "reviewed negative with no visible geometry",
             "uncertain": "excluded",
             "visualization": "terminal reviewed geometry overlaid on the exported source frame; full source resolution by default",

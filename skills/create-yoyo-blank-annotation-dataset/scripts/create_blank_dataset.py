@@ -838,6 +838,7 @@ def initial_label(record: dict[str, Any], sampling_manifest_sha256: str) -> dict
         "yoyo_division": "1A",
         "scene_label": "unknown",
         "trick_orientation": "normal",
+        "presentation_orientation": "unknown",
         "string_path": {
             "topology": "uncertain",
             "reconstruction_status": "uncertain",

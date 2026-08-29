@@ -40,6 +40,7 @@ datasets/1Ayoyo_dataset/
 - 悠悠球 bbox
 - 绳线可见性和几何标注
 - `trick_orientation` 三分类：`horizontal`、`normal`、`not_applicable`
+- `presentation_orientation` 画面朝向：`frontal`、`edge_horizontal`、`edge_vertical`、`unknown`
 - 人工审核状态和来源信息
 
 RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放在项目内的 `models/rtmpose/`，不会写入 C 盘用户缓存。方向模型只读取悠悠球 ROI。

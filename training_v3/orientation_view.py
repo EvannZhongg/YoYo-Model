@@ -88,6 +88,10 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
                 "source_group": record["source_group"],
                 "split": split,
                 "trick_orientation": orientation,
+                "presentation_orientation": str(
+                    annotation.get("presentation_orientation")
+                    or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(orientation, "unknown")
+                ),
                 "source_image_sha256": record["image_sha256"],
                 "crop_box_pixel": list(crop_box),
                 "image": str(target),

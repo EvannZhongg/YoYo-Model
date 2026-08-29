@@ -46,6 +46,7 @@ Every full apply supplies the complete visible state:
   "yoyo_division": "1A",
   "scene_label": "trick",
   "trick_orientation": "horizontal",
+  "presentation_orientation": "edge_horizontal",
   "string_path": {
     "topology": "open",
     "reconstruction_status": "partial",
@@ -145,6 +146,11 @@ Use `trick_orientation` from nearby launch motion:
 - `normal`: ordinary downward or non-horizontal throw plane.
 - `unknown`: draft or unresolved trick; cannot be approved.
 - `not_applicable`: required for `scene_label=non_trick`.
+
+Use `presentation_orientation` independently for the visible yoyo presentation:
+`frontal` is face-on and circular, `edge_horizontal` is side-on with a
+horizontal profile, and `edge_vertical` is side-on with a vertical profile.
+Vertical presentation does not change a normal trick into a horizontal trick.
 
 Use `bad_case` for factual issues such as `motion_blur`, `partial_occlusion`,
 `low_contrast`, `edge_clipped`, `ambiguous_string`, or `string_not_visible`.

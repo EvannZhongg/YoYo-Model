@@ -185,6 +185,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             edit = {
                 "yoyo_visibility": "visible",
                 "trick_orientation": "horizontal",
+                "presentation_orientation": "edge_horizontal",
                 "yoyo_bbox_pixel": [200, 25, 300, 75],
                 "string_visibility": "visible",
                 "string_polylines_pixel": [[[40, 20], [200, 100], [360, 180]]],
@@ -199,6 +200,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             annotation = result["annotation"]
             self.assertEqual(annotation["yoyo_bbox_pixel"], [200.0, 25.0, 300.0, 75.0])
             self.assertEqual(annotation["trick_orientation"], "horizontal")
+            self.assertEqual(annotation["presentation_orientation"], "edge_horizontal")
             self.assertEqual(annotation["yoyo_bbox_2d"], [499.5, 124.875, 749.25, 374.625])
             self.assertEqual(annotation["string_polylines_2d"][0], [[99.9, 99.9], [499.5, 499.5], [899.1, 899.1]])
             self.assertIsNone(annotation["string_mask_polygons_pixel"])
@@ -220,6 +222,23 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             }
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 with self.assertRaisesRegex(ValueError, "invalid trick orientation"):
+                    save_annotation_sample(str(dataset), key, edit)
+
+    def test_save_rejects_invalid_presentation_orientation(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = make_annotation_dataset(root)
+            edit = {
+                "yoyo_visibility": "visible",
+                "trick_orientation": "normal",
+                "presentation_orientation": "diagonal",
+                "yoyo_bbox_pixel": [100, 50, 140, 90],
+                "string_visibility": "partial",
+                "string_polylines_pixel": [[[10, 20], [30, 40]]],
+                "string_review_status": "approved",
+            }
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                with self.assertRaisesRegex(ValueError, "invalid presentation orientation"):
                     save_annotation_sample(str(dataset), key, edit)
 
     def test_save_rejects_geometry_outside_original_image(self):

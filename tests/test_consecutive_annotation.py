@@ -20,6 +20,7 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
         return {
             "yoyo_visibility": "visible",
             "trick_orientation": orientation,
+            "presentation_orientation": "frontal" if orientation == "normal" else "edge_horizontal",
             "yoyo_bbox_pixel": [x1, 10, x1 + 20, 30],
             "string_visibility": "partial",
             "string_polylines_pixel": [[[5, 5], [25, 25]]],
@@ -82,6 +83,9 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
             self.assertEqual(labels[0]["yoyo_bbox_pixel"], [20.0, 10.0, 40.0, 30.0])
             self.assertEqual([label["trick_orientation"] for label in labels], [
                 "normal", "horizontal", "horizontal", "horizontal",
+            ])
+            self.assertEqual([label["presentation_orientation"] for label in labels], [
+                "frontal", "edge_horizontal", "edge_horizontal", "edge_horizontal",
             ])
             self.assertEqual(opened["sample_count"], 4)
 
