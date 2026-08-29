@@ -28,7 +28,8 @@ PRESENTATION_TO_TRICK = {
 
 
 def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] | None:
-    bbox = annotation.get("yoyo_bbox_pixel")
+    active = annotation.get("active_yoyo") or {"bbox_pixel": annotation.get("yoyo_bbox_pixel")}
+    bbox = active.get("bbox_pixel")
     if isinstance(bbox, list) and len(bbox) == 4:
         x1, y1, x2, y2 = (float(value) for value in bbox)
         if x2 > x1 and y2 > y1:
@@ -77,17 +78,22 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         if bool(record.get("yoyo_ignored", False)):
             continue
         annotation = json.loads(Path(record["canonical_label"]).read_text(encoding="utf-8"))
+        active_yoyo = annotation.get("active_yoyo") or {
+            "visibility": annotation.get("visibility"),
+            "trick_orientation": record.get("trick_orientation") or annotation.get("trick_orientation"),
+            "presentation_orientation": annotation.get("presentation_orientation"),
+        }
         source = Path(record["canonical_image"])
         split = str(record["split"])
-        annotation_presentation = str(annotation.get("presentation_orientation") or "").strip()
+        annotation_presentation = str(active_yoyo.get("presentation_orientation") or "").strip()
         orientation = annotation_presentation or {
             "normal": "frontal",
             "horizontal": "edge_horizontal",
             "not_applicable": "unknown",
-        }.get(str(record.get("trick_orientation") or ""), "unknown")
+        }.get(str(active_yoyo.get("trick_orientation") or ""), "unknown")
         if orientation not in PRESENTATION_ORIENTATIONS:
             raise ValueError(f"invalid presentation orientation: {orientation}")
-        yoyo_visibility_counts[str(annotation.get("visibility") or "uncertain")] += 1
+        yoyo_visibility_counts[str(active_yoyo.get("visibility") or "uncertain")] += 1
         name = f"{record['source_group']}__{source.stem}.jpg"
         target = output / split / orientation / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -103,7 +109,7 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
             {
                 "source_group": record["source_group"],
                 "split": split,
-                "trick_orientation": str(record.get("trick_orientation") or ""),
+            "trick_orientation": str(active_yoyo.get("trick_orientation") or ""),
                 "presentation_orientation": orientation,
                 "source_image_sha256": record["image_sha256"],
                 "crop_box_pixel": list(crop_box),
@@ -139,11 +145,11 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "source_groups": parent["split_policy"]["source_groups"],
         "counts": {split: dict(values) for split, values in counts.items()},
         "classes": list(PRESENTATION_ORIENTATIONS),
-        "label_field": "presentation_orientation",
+        "label_field": "active_yoyo.presentation_orientation",
         "coarse_mapping": dict(PRESENTATION_TO_TRICK),
         "crop_policy": identity["crop_policy"],
         "input_dependencies": {
-            "yoyo_bbox_pixel": True,
+            "active_yoyo_bbox_pixel": True,
             "string_geometry": False,
             "no_yoyo_policy": "deterministic_center_crop",
         },

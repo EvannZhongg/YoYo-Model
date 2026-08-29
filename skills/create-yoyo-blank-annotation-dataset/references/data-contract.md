@@ -18,11 +18,12 @@ hash, source group, frame index, timestamp, sequence, image hash/size, and the
 sampling-manifest hash.
 
 Geometry is empty: boxes, polylines, masks, and paths must contain no data.
-Initialize the manual queue with `visibility=uncertain`,
-`yoyo_not_visible_reason=null`,
-`trick_orientation=normal`, `string_visibility=partial`, and
-`presentation_orientation=unknown`,
-`string_review_status=unresolved`. Quality history and reviews start empty;
+Initialize the manual queue with an `active_yoyo` record containing
+`visibility=uncertain`, `not_visible_reason=null`, `trick_orientation=normal`,
+`presentation_orientation=unknown`, `bbox_pixel=null`, `bbox_2d=null`, and
+`bbox_review_status=needs_review`; initialize `backup_yoyos` to an empty list.
+Set `string_visibility=partial` and `string_review_status=unresolved`.
+Quality history and reviews start empty;
 these defaults are not reviewed training truth.
 
 ## Deduplication

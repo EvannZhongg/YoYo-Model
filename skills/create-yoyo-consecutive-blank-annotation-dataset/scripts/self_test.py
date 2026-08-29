@@ -78,12 +78,13 @@ def keys(dataset: Path) -> set[tuple[str, int]]:
 def assert_initial_defaults(dataset: Path) -> None:
     for path in (dataset / "canonical" / "labels").rglob("*.json"):
         label = json.loads(path.read_text(encoding="utf-8"))
-        assert label["visibility"] == "visible"
-        assert label["trick_orientation"] == "normal"
+        assert label["active_yoyo"]["visibility"] == "visible"
+        assert label["active_yoyo"]["trick_orientation"] == "normal"
         assert label["string_visibility"] == "partial"
-        assert label["yoyo_bbox_pixel"] is None
-        assert label["yoyo_bbox_2d"] is None
-        assert label["bbox"] == []
+        assert label["active_yoyo"]["bbox_pixel"] is None
+        assert label["active_yoyo"]["bbox_2d"] is None
+        assert label["active_yoyo"]["bbox_review_status"] == "needs_review"
+        assert label["backup_yoyos"] == []
         assert label["string_polylines_pixel"] is None
         assert label["string_polylines_2d"] is None
         assert label["string_mask_polygons_pixel"] is None

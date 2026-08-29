@@ -25,10 +25,12 @@ fields produced by `yoyo-string-annotation-vlm-assisted`: source video hash,
 source group, frame index, timestamp, sequence, image hash and size, and sampling
 manifest hash.
 
-Geometry starts empty. Prefill yoyo visibility as `visible`, trick orientation as
-`normal`, and string visibility as `partial`, matching the canonical label values
-used in `datasets/1Ayoyo_dataset`. Boxes, polylines, masks, and paths contain
-no geometry. `string_review_status` is `unresolved`. Quality revision, history,
+Geometry starts empty. Prefill `active_yoyo` with visibility `visible`, trick
+orientation `normal`, presentation orientation `frontal`, null bounding boxes,
+and `bbox_review_status=needs_review`; initialize `backup_yoyos` to an empty
+list. Set string visibility to `partial`, matching the canonical label values
+used in `datasets/1Ayoyo_dataset`. Polylines, masks, and paths contain no
+geometry. `string_review_status` is `unresolved`. Quality revision, history,
 and reviews are empty. These categorical defaults are annotation conveniences,
 not reviewed training truth.
 

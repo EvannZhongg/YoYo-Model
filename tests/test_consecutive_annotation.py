@@ -79,11 +79,11 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
                 json.loads((dataset / "canonical" / "labels" / key).read_text(encoding="utf-8"))
                 for key in keys
             ]
-            self.assertEqual(labels[0]["yoyo_bbox_pixel"], [20.0, 10.0, 40.0, 30.0])
-            self.assertEqual([label["trick_orientation"] for label in labels], [
+            self.assertEqual(labels[0]["active_yoyo"]["bbox_pixel"], [20.0, 10.0, 40.0, 30.0])
+            self.assertEqual([label["active_yoyo"]["trick_orientation"] for label in labels], [
                 "normal", "horizontal", "horizontal", "horizontal",
             ])
-            self.assertEqual([label["presentation_orientation"] for label in labels], [
+            self.assertEqual([label["active_yoyo"]["presentation_orientation"] for label in labels], [
                 "frontal", "edge_horizontal", "edge_horizontal", "edge_horizontal",
             ])
             self.assertEqual(opened["sample_count"], 4)

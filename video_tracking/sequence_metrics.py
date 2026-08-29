@@ -463,9 +463,15 @@ def _load_snapshot_frames(snapshot_path: Path, group_id: str | None) -> list[dic
 
 
 def _known_targets(annotation: dict[str, Any]) -> tuple[bool, list[float] | None, bool, list[list[list[float]]]]:
-    visibility = str(annotation.get("visibility") or "")
-    not_visible_reason = str(annotation.get("yoyo_not_visible_reason") or "")
-    bbox = _valid_bbox(annotation.get("yoyo_bbox_pixel"))
+    active_yoyo = annotation.get("active_yoyo") or {
+        "visibility": annotation.get("visibility"),
+        "not_visible_reason": annotation.get("yoyo_not_visible_reason"),
+        "bbox_pixel": annotation.get("yoyo_bbox_pixel"),
+        "trick_orientation": annotation.get("trick_orientation"),
+    }
+    visibility = str(active_yoyo.get("visibility") or "")
+    not_visible_reason = str(active_yoyo.get("not_visible_reason") or "")
+    bbox = _valid_bbox(active_yoyo.get("bbox_pixel"))
     bbox_state = str(annotation.get("bbox_review_status") or annotation.get("review_status") or "")
     if visibility in {"visible", "partial"}:
         yoyo_known = bbox is not None and bbox_state in KNOWN_REVIEW_STATES
@@ -633,7 +639,7 @@ def evaluate_sequence(
             ),
             "string_propagation_age_frames": int((prediction.get("string") or {}).get("propagation_age_frames") or 0),
             "bad_case": sorted(str(value) for value in (prediction.get("bad_case") or [])),
-            "target_orientation": annotation.get("trick_orientation"),
+            "target_orientation": (annotation.get("active_yoyo") or {"trick_orientation": annotation.get("trick_orientation")}).get("trick_orientation"),
             "predicted_orientation": (prediction.get("trick_orientation") or {}).get("label"),
         }
         if yoyo_known:

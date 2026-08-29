@@ -170,7 +170,9 @@ def _sample_summary(
     document = _read_document(label_path)
     image_path = _resolve_source_image(label_path, labels_root, images_root, document)
     relative = label_path.relative_to(labels_root).as_posix()
-    bbox = document.get("yoyo_bbox_pixel")
+    active = document.get("active_yoyo") or {}
+    bbox = active.get("bbox_pixel")
+    backups = document.get("backup_yoyos") or []
     polylines = document.get("string_polylines_pixel") or []
     return {
         "index": index,
@@ -178,11 +180,12 @@ def _sample_summary(
         "name": image_path.name,
         "group": str(document.get("source_group") or label_path.parent.name),
         "frame_index": document.get("frame_index"),
-        "yoyo_visibility": str(document.get("visibility") or ("visible" if bbox else "uncertain")),
-        "yoyo_not_visible_reason": str(document.get("yoyo_not_visible_reason") or ""),
-        "presentation_orientation": str(document.get("presentation_orientation") or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(document.get("trick_orientation"), "unknown")),
+        "yoyo_visibility": str(active.get("visibility") or ("visible" if bbox else "uncertain")),
+        "yoyo_not_visible_reason": str(active.get("not_visible_reason") or ""),
+        "presentation_orientation": str(active.get("presentation_orientation") or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(active.get("trick_orientation"), "unknown")),
         "has_yoyo": isinstance(bbox, list) and len(bbox) == 4,
-        "yoyo_needs_review": str(document.get("visibility") or "uncertain") == "uncertain",
+        "backup_yoyo_count": len(backups) if isinstance(backups, list) else 0,
+        "yoyo_needs_review": str(active.get("visibility") or "uncertain") == "uncertain",
         "string_visibility": str(document.get("string_visibility") or "uncertain"),
         "string_count": len(polylines) if isinstance(polylines, list) else 0,
         "review_status": str(document.get("string_review_status") or "unresolved"),
@@ -419,6 +422,56 @@ def _path_anchor(value: Any, endpoint: list[float], bbox: list[float] | None, wi
     return "yoyo" if distance <= max(8.0, (width * width + height * height) ** 0.5 * 0.08) else "unknown"
 
 
+def _normalize_yoyo_record(
+    value: Any,
+    width: int,
+    height: int,
+    *,
+    default_orientation: str = "normal",
+) -> dict[str, Any]:
+    """Validate one active/backup yoyo record using one shared shape."""
+    if not isinstance(value, dict):
+        raise ValueError("yoyo record must be an object")
+    visibility = str(value.get("visibility") or "uncertain")
+    reason = str(value.get("not_visible_reason") or "")
+    orientation = str(value.get("trick_orientation") or default_orientation)
+    if visibility not in VALID_YOYO_VISIBILITY:
+        raise ValueError("invalid yoyo visibility")
+    if visibility == "not_visible":
+        if reason not in VALID_YOYO_NOT_VISIBLE_REASONS:
+            raise ValueError("not-visible yoyo requires a valid reason")
+    elif reason:
+        raise ValueError("yoyo not-visible reason requires not_visible visibility")
+    if orientation not in VALID_TRICK_ORIENTATIONS:
+        raise ValueError("invalid trick orientation")
+    allowed_presentation = PRESENTATION_ORIENTATIONS_BY_TRICK[orientation]
+    presentation = value.get("presentation_orientation")
+    if presentation and presentation not in VALID_PRESENTATION_ORIENTATIONS:
+        raise ValueError("invalid presentation orientation")
+    if not presentation:
+        presentation = {"normal": "frontal", "horizontal": "edge_horizontal", "not_applicable": "unknown"}[orientation]
+    elif presentation not in allowed_presentation:
+        raise ValueError("presentation orientation does not match trick orientation")
+    bbox = _bbox(value.get("bbox_pixel"), width, height)
+    if visibility == "not_visible":
+        bbox = None
+    elif visibility in {"visible", "partial"} and bbox is None:
+        raise ValueError("visible or partial yoyo requires a bounding box")
+    bbox_2d = None if bbox is None else [
+        round(bbox[0] / width * 999, 3), round(bbox[1] / height * 999, 3),
+        round(bbox[2] / width * 999, 3), round(bbox[3] / height * 999, 3),
+    ]
+    return {
+        "visibility": visibility,
+        "not_visible_reason": reason or None,
+        "trick_orientation": orientation,
+        "presentation_orientation": str(presentation),
+        "bbox_pixel": bbox,
+        "bbox_2d": bbox_2d,
+        "bbox_review_status": "needs_review" if visibility == "uncertain" else str(value.get("bbox_review_status") or "reviewed"),
+    }
+
+
 def _content_digest(document: dict[str, Any]) -> str:
     payload = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -448,78 +501,45 @@ def save_annotation_sample(
     if width <= 0 or height <= 0:
         raise ValueError("invalid image_size in annotation")
 
-    yoyo_visibility = str(edit.get("yoyo_visibility") or "uncertain")
-    yoyo_not_visible_reason = str(edit.get("yoyo_not_visible_reason") or "")
-    trick_orientation = str(edit.get("trick_orientation") or "")
-    allowed_presentation = PRESENTATION_ORIENTATIONS_BY_TRICK.get(trick_orientation, {"unknown"})
-    default_presentation = {
-        "normal": "frontal",
-        "horizontal": "edge_horizontal",
-        "not_applicable": "unknown",
-    }.get(trick_orientation, "unknown")
-    presentation_value = edit.get("presentation_orientation")
-    if not presentation_value:
-        existing_presentation = document.get("presentation_orientation")
-        presentation_value = (
-            existing_presentation
-            if existing_presentation in allowed_presentation
-            else default_presentation
-        )
-    elif presentation_value == "unknown" and trick_orientation in {"normal", "horizontal"}:
-        presentation_value = default_presentation
-    presentation_orientation = str(presentation_value)
+    active_edit = edit.get("active_yoyo")
+    if active_edit is None:
+        active_edit = {
+            "visibility": edit.get("yoyo_visibility"),
+            "not_visible_reason": edit.get("yoyo_not_visible_reason"),
+            "trick_orientation": edit.get("trick_orientation"),
+            "presentation_orientation": edit.get("presentation_orientation"),
+            "bbox_pixel": edit.get("yoyo_bbox_pixel"),
+            "bbox_review_status": edit.get("bbox_review_status"),
+        }
+    backup_edit = edit.get("backup_yoyos") or []
+    if not isinstance(backup_edit, list):
+        raise ValueError("backup_yoyos must be a list")
+    active_yoyo = _normalize_yoyo_record(active_edit, width, height)
+    backup_yoyos = [_normalize_yoyo_record(item, width, height, default_orientation="horizontal") for item in backup_edit]
+    yoyo_visibility = str(active_yoyo["visibility"])
     string_visibility = str(edit.get("string_visibility") or "uncertain")
     review_status = str(edit.get("string_review_status") or "unresolved")
-    if yoyo_visibility not in VALID_YOYO_VISIBILITY:
-        raise ValueError("invalid yoyo visibility")
-    if yoyo_visibility == "not_visible":
-        if yoyo_not_visible_reason not in VALID_YOYO_NOT_VISIBLE_REASONS:
-            raise ValueError("not-visible yoyo requires a valid reason")
-    elif yoyo_not_visible_reason:
-        raise ValueError("yoyo not-visible reason requires not_visible visibility")
-    if trick_orientation not in VALID_TRICK_ORIENTATIONS:
-        raise ValueError("invalid trick orientation")
-    if presentation_orientation not in VALID_PRESENTATION_ORIENTATIONS:
-        raise ValueError("invalid presentation orientation")
-    if presentation_orientation not in PRESENTATION_ORIENTATIONS_BY_TRICK[trick_orientation]:
-        raise ValueError("presentation orientation does not match trick orientation")
     if string_visibility not in VALID_STRING_VISIBILITY:
         raise ValueError("invalid string visibility")
     if review_status not in VALID_REVIEW_STATUS:
         raise ValueError("invalid string review status")
 
-    bbox = _bbox(edit.get("yoyo_bbox_pixel"), width, height)
     raw_polylines = edit.get("string_polylines_pixel") or []
     if not isinstance(raw_polylines, list):
         raise ValueError("string polylines must be a list")
     polylines = [[_point(point, width, height) for point in line] for line in raw_polylines]
     polylines = [line for line in polylines if len(line) >= 2]
-    if yoyo_visibility == "not_visible":
-        bbox = None
-    elif yoyo_visibility in {"visible", "partial"} and bbox is None:
-        raise ValueError("visible or partial yoyo requires a bounding box")
     if string_visibility == "not_visible":
         polylines = []
     elif string_visibility in {"visible", "partial"} and not polylines:
         raise ValueError("visible or partial string requires at least one polyline")
 
     before_digest = _content_digest(document)
-    bbox_2d = None
-    if bbox is not None:
-        bbox_2d = [
-            round(bbox[0] / width * 999, 3), round(bbox[1] / height * 999, 3),
-            round(bbox[2] / width * 999, 3), round(bbox[3] / height * 999, 3),
-        ]
+    bbox = active_yoyo["bbox_pixel"]
+    bbox_2d = active_yoyo["bbox_2d"]
     polylines_2d = [_to_2d(line, width, height) for line in polylines]
-    document["visibility"] = yoyo_visibility
-    document["yoyo_not_visible_reason"] = yoyo_not_visible_reason or None
-    document["trick_orientation"] = trick_orientation
-    document["presentation_orientation"] = presentation_orientation
-    document["yoyo_bbox_pixel"] = bbox
-    document["yoyo_bbox_2d"] = bbox_2d
-    document["bbox"] = [] if bbox is None else [{
-        "label": "yoyo", "sub_label": "visible yoyo body", "bbox_pixel": bbox, "bbox_2d": bbox_2d,
-    }]
+    document["active_yoyo"] = active_yoyo
+    document["backup_yoyos"] = backup_yoyos
     document["string_visibility"] = string_visibility
     document["string_polylines_pixel"] = polylines
     document["string_polylines_2d"] = polylines_2d
@@ -527,11 +547,6 @@ def save_annotation_sample(
     document["string_polyline_2d"] = polylines_2d[0] if polylines_2d else None
     document["string_mask_polygons_pixel"] = None
     document["string_review_status"] = review_status
-    document["bbox_review_status"] = (
-        "needs_review"
-        if yoyo_visibility == "uncertain"
-        else str(edit.get("bbox_review_status") or "reviewed")
-    )
     document["updated_at_utc"] = _utc_now()
 
     string_path = document.get("string_path")
@@ -561,8 +576,7 @@ def save_annotation_sample(
         "actor": str(edit.get("reviewer") or "workbench-reviewer").strip() or "workbench-reviewer",
         "before_sha256": before_digest,
         "fields": [
-            "visibility", "yoyo_not_visible_reason", "trick_orientation", "presentation_orientation", "yoyo_bbox_pixel", "string_visibility", "string_polylines_pixel",
-            "string_review_status", "bbox_review_status",
+            "active_yoyo", "backup_yoyos", "string_visibility", "string_polylines_pixel", "string_review_status",
         ],
     }
     document.setdefault("workbench_edits", []).append(edit_event)
@@ -649,6 +663,7 @@ DATASET_ANNOTATION_HTML = r"""
         <div class="yda__segmented" id="yda-tools">
           <button type="button" data-tool="select" class="is-active" title="选择和拖动标注">选择</button>
           <button type="button" data-tool="box" title="拖动绘制悠悠球框">悠悠球框</button>
+          <button type="button" data-tool="backup-box" title="拖动绘制备用悠悠球框">备用球框</button>
           <button type="button" data-tool="string" title="逐点绘制绳线">绳线</button>
         </div>
         <button type="button" id="yda-finish-line" disabled>结束当前绳线</button>
@@ -674,12 +689,14 @@ DATASET_ANNOTATION_HTML = r"""
       <fieldset id="yda-fields" disabled>
         <div class="yda__editor-scroll">
           <legend>悠悠球识别</legend>
+          <div class="yda__yoyo-selector"><button type="button" id="yda-prev-yoyo" title="上一只悠悠球">上一只</button><output id="yda-yoyo-selection">正在使用的球</output><button type="button" id="yda-next-yoyo" title="下一只悠悠球">下一只</button></div>
           <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
           <label id="yda-yoyo-not-visible-reason-field" hidden>不可见原因<select id="yda-yoyo-not-visible-reason"><option value="">请选择</option><option value="occluded">被遮挡</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option></select></label>
           <label>招式方向<select id="yda-trick-orientation"><option value="normal">常规（normal）</option><option value="horizontal">水平（horizontal）</option><option value="not_applicable">不适用（not_applicable）</option></select></label>
           <label>画面朝向<select id="yda-presentation-orientation"><option value="frontal">正面（frontal）</option><option value="edge_horizontal">侧面横向（edge_horizontal）</option><option value="edge_vertical">侧面纵向（edge_vertical）</option><option value="unknown">未知（unknown）</option></select></label>
           <div class="yda__coords"><label>X1<input id="yda-x1" type="number" min="0" step="1"></label><label>Y1<input id="yda-y1" type="number" min="0" step="1"></label><label>X2<input id="yda-x2" type="number" min="0" step="1"></label><label>Y2<input id="yda-y2" type="number" min="0" step="1"></label></div>
           <button type="button" id="yda-clear-box">清除悠悠球框</button>
+          <button type="button" id="yda-delete-backup" hidden>删除当前备用球</button>
           <legend>绳线识别</legend>
           <label>可见状态<select id="yda-string-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
           <label>审阅状态<select id="yda-review-status"><option value="approved">已批准</option><option value="reviewed">已审阅</option><option value="needs_review">需要审阅</option><option value="unresolved">未解决</option></select></label>
@@ -769,6 +786,8 @@ DATASET_ANNOTATION_CSS = r"""
 .yda__record-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
 .yda__review.is-reviewed { background:#dceee7; border-color:#84b9a7; color:#0c5a44; }
 .yda__coords { display:grid; gap:6px; grid-template-columns:1fr 1fr; margin:9px 0; }
+.yda__yoyo-selector { align-items:center; display:grid; gap:6px; grid-template-columns:auto minmax(0,1fr) auto; margin:8px 0; }
+.yda__yoyo-selector output { color:var(--muted); font-size:11px; overflow:hidden; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
 .yda__line-list { display:grid; gap:5px; margin:9px 0; }
 .yda__line-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
 .yda__line-actions #yda-clear-lines { grid-column:1/-1; }
@@ -790,65 +809,74 @@ const $ = selector => element.querySelector(selector);
 const canvas = $("#yda-canvas");
 const ctx = canvas.getContext("2d");
 const viewport = $("#yda-viewport");
-const state = {dataset:null,samples:[],filtered:[],current:-1,sample:null,image:null,tool:"select",zoom:1,annotationsVisible:true,bbox:null,lines:[],baseline:null,activeLine:null,selectedLine:null,selectedPoint:null,drag:null,history:[],redrawPending:false,loadSerial:0,dirty:false};
+const state = {dataset:null,samples:[],filtered:[],current:-1,sample:null,image:null,tool:"select",zoom:1,annotationsVisible:true,activeYoyo:null,backups:[],selectedBackup:-1,lines:[],baseline:null,activeLine:null,selectedLine:null,selectedPoint:null,drag:null,history:[],redrawPending:false,loadSerial:0,dirty:false};
 let toastTimer = null;
 let zoomAnchor = null;
 const toast = message => { const node=$("#yda-toast"); node.textContent=message; node.classList.add("is-visible"); clearTimeout(toastTimer); toastTimer=setTimeout(()=>node.classList.remove("is-visible"),1800); };
 const escapeHtml = value => String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fileUrl = path => { const config=window.gradio_config||{}; const root=String(config.root||window.location.origin).replace(/\/$/,""); const prefix=`/${String(config.api_prefix||"gradio_api").replace(/^\/+|\/+$/g,"")}`; return `${root}${prefix}/file=${encodeURIComponent(path)}`; };
-const cloneGeometry = () => ({bbox:state.bbox?state.bbox.slice():null,lines:state.lines.map(line=>line.map(point=>point.slice()))});
+const cloneYoyo = value => value?JSON.parse(JSON.stringify(value)):null;
+const selectedYoyo = () => state.selectedBackup<0?state.activeYoyo:state.backups[state.selectedBackup];
+const cloneGeometry = () => ({activeYoyo:cloneYoyo(state.activeYoyo),backups:state.backups.map(cloneYoyo),lines:state.lines.map(line=>line.map(point=>point.slice()))});
 const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-visibility").value,yoyoNotVisibleReason:$("#yda-yoyo-not-visible-reason").value,trickOrientation:$("#yda-trick-orientation").value,presentationOrientation:$("#yda-presentation-orientation").value,stringVisibility:$("#yda-string-visibility").value,reviewStatus:$("#yda-review-status").value});
 function pushHistory(){ state.history.push(cloneGeometry()); if(state.history.length>60)state.history.shift(); }
 function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed);button.disabled=!state.sample||state.dirty;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":"核验完成"; }
-function syncYoyoFields(){const visibility=$("#yda-yoyo-visibility").value,notVisible=visibility==="not_visible";$("#yda-yoyo-not-visible-reason-field").hidden=!notVisible;$("#yda-yoyo-not-visible-reason").disabled=!notVisible;["x1","y1","x2","y2"].forEach(name=>$("#yda-"+name).disabled=notVisible);$("#yda-clear-box").disabled=notVisible;const boxTool=element.querySelector('#yda-tools button[data-tool="box"]');boxTool.disabled=notVisible;if(notVisible&&state.tool==="box")setTool("select");}
+function syncYoyoFields(){const selected=selectedYoyo(),visibility=$("#yda-yoyo-visibility").value,notVisible=visibility==="not_visible",isBackup=state.selectedBackup>=0;$("#yda-yoyo-not-visible-reason-field").hidden=!notVisible;$("#yda-yoyo-not-visible-reason").disabled=!notVisible;["x1","y1","x2","y2"].forEach(name=>$("#yda-"+name).disabled=notVisible);$("#yda-clear-box").disabled=notVisible;$("#yda-delete-backup").hidden=!isBackup;$("#yda-delete-backup").disabled=!isBackup;$("#yda-yoyo-selection").textContent=isBackup?`备用球 ${state.selectedBackup+1} / ${state.backups.length}`:"正在使用的球";const boxTool=element.querySelector('#yda-tools button[data-tool="box"]');boxTool.disabled=notVisible;if(notVisible&&state.tool==="box")setTool("select");$("#yda-prev-yoyo").disabled=state.selectedBackup<0;$("#yda-next-yoyo").disabled=state.backups.length===0;}
 function syncPresentationOrientation(){const trick=$("#yda-trick-orientation").value,presentation=$("#yda-presentation-orientation"),allowed={normal:["frontal","edge_vertical"],horizontal:["edge_horizontal"],not_applicable:["unknown"]}[trick]||["unknown"],labels={frontal:"正面（frontal）",edge_horizontal:"侧面横向（edge_horizontal）",edge_vertical:"侧面纵向（edge_vertical）",unknown:"未知（unknown）"},current=presentation.value,next=allowed.includes(current)?current:allowed[0];presentation.replaceChildren(...allowed.map(value=>new Option(labels[value],value)));presentation.value=next;}
+function syncSelectedYoyo(){const selected=selectedYoyo()||{visibility:"uncertain",not_visible_reason:"",trick_orientation:state.selectedBackup>=0?"horizontal":"normal",presentation_orientation:state.selectedBackup>=0?"edge_horizontal":"frontal",bbox_pixel:null};$("#yda-yoyo-visibility").value=selected.visibility||"uncertain";$("#yda-yoyo-not-visible-reason").value=selected.not_visible_reason||"";$("#yda-trick-orientation").value=selected.trick_orientation|| (state.selectedBackup>=0?"horizontal":"normal");$("#yda-presentation-orientation").value=selected.presentation_orientation||"unknown";syncPresentationOrientation();if(selectedYoyo())selectedYoyo().presentation_orientation=$("#yda-presentation-orientation").value;syncYoyoFields();syncCoordinateInputs();renderCanvas();}
+function selectYoyo(index){if(index<-1||index>=state.backups.length)return;state.selectedBackup=index;syncSelectedYoyo();canvas.focus({preventScroll:true});}
 function syncResetButton(){ $("#yda-reset").disabled=!state.sample||!state.dirty; }
 function syncAnnotationVisibility(){ const button=$("#yda-toggle-annotations");button.textContent=state.annotationsVisible?"隐藏标注":"显示标注";button.setAttribute("aria-pressed",String(!state.annotationsVisible)); }
 function setAnnotationsVisible(visible){ state.annotationsVisible=Boolean(visible);syncAnnotationVisibility();renderCanvas(); }
 function toggleAnnotations(){ if(state.annotationsVisible&&state.activeLine!==null)finishLine();if(state.annotationsVisible&&state.tool!=="select")setTool("select");setAnnotationsVisible(!state.annotationsVisible); }
 function markDirty(){ state.dirty=true; $("#yda-dirty").textContent="未保存"; syncReviewButton();syncResetButton();renderCanvas(); renderLineList(); syncCoordinateInputs(); }
-function applyGeometry(value){ state.bbox=value.bbox?value.bbox.slice():null; state.lines=(value.lines||[]).map(line=>line.map(point=>point.slice())); state.activeLine=null; state.selectedLine=null; state.selectedPoint=null; state.redrawPending=false; markDirty(); }
+function applyGeometry(value){ state.activeYoyo=cloneYoyo(value.activeYoyo);state.backups=(value.backups||[]).map(cloneYoyo);state.lines=(value.lines||[]).map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.selectedPoint=null;state.redrawPending=false;syncSelectedYoyo();markDirty(); }
 function setTool(tool){ if(tool!=="select"&&!state.annotationsVisible)setAnnotationsVisible(true);state.tool=tool; canvas.dataset.tool=tool; element.querySelectorAll("#yda-tools button").forEach(button=>button.classList.toggle("is-active",button.dataset.tool===tool)); $("#yda-finish-line").disabled=tool!=="string"||state.activeLine===null; }
 function setZoom(value,anchor=zoomAnchor){ const percent=Math.max(10,Math.min(500,Math.round(Number(value)/10)*10));if(!state.image){state.zoom=percent/100;$("#yda-zoom").value=String(percent);$("#yda-zoom-value").textContent=`${percent}%`;return;}const beforeCanvas=canvas.getBoundingClientRect(),beforeViewport=viewport.getBoundingClientRect(),x=anchor?.x??(beforeViewport.left+beforeViewport.width/2),y=anchor?.y??(beforeViewport.top+beforeViewport.height/2),rx=Math.max(0,Math.min(1,(x-beforeCanvas.left)/beforeCanvas.width)),ry=Math.max(0,Math.min(1,(y-beforeCanvas.top)/beforeCanvas.height));state.zoom=percent/100;$("#yda-zoom").value=String(percent);$("#yda-zoom-value").textContent=`${percent}%`;renderCanvas();const afterCanvas=canvas.getBoundingClientRect(),afterViewport=viewport.getBoundingClientRect(),contentX=afterCanvas.left-afterViewport.left+viewport.scrollLeft+rx*afterCanvas.width,contentY=afterCanvas.top-afterViewport.top+viewport.scrollTop+ry*afterCanvas.height;viewport.scrollLeft=Math.max(0,contentX-(x-afterViewport.left));viewport.scrollTop=Math.max(0,contentY-(y-afterViewport.top)); }
 function canvasPoint(event){ const rect=canvas.getBoundingClientRect(); const sx=state.image.naturalWidth/rect.width, sy=state.image.naturalHeight/rect.height; return [Math.max(0,Math.min(state.image.naturalWidth,(event.clientX-rect.left)*sx)),Math.max(0,Math.min(state.image.naturalHeight,(event.clientY-rect.top)*sy))]; }
 function lineDistance(point,a,b){ const dx=b[0]-a[0],dy=b[1]-a[1],l=dx*dx+dy*dy; if(!l)return Math.hypot(point[0]-a[0],point[1]-a[1]); const t=Math.max(0,Math.min(1,((point[0]-a[0])*dx+(point[1]-a[1])*dy)/l)); return Math.hypot(point[0]-a[0]-t*dx,point[1]-a[1]-t*dy); }
-function hitTest(point){ if(!state.annotationsVisible)return null;const radius=12/state.zoom; for(let li=0;li<state.lines.length;li++){ for(let pi=0;pi<state.lines[li].length;pi++){ if(Math.hypot(point[0]-state.lines[li][pi][0],point[1]-state.lines[li][pi][1])<=radius)return {type:"point",line:li,point:pi}; } } if(state.bbox){ const corners=[[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]]; for(let i=0;i<4;i++)if(Math.hypot(point[0]-corners[i][0],point[1]-corners[i][1])<=radius)return {type:"corner",corner:i}; } for(let li=0;li<state.lines.length;li++){ const line=state.lines[li]; for(let i=1;i<line.length;i++)if(lineDistance(point,line[i-1],line[i])<=radius)return {type:"line",line:li,segment:i}; } return null; }
-function renderCanvas(){ if(!state.image)return; const w=state.image.naturalWidth,h=state.image.naturalHeight; const maxWidth=Math.max(180,$("#yda-viewport").clientWidth-24), maxHeight=Math.max(180,$("#yda-viewport").clientHeight-24); const fit=Math.min(maxWidth/w,maxHeight/h,1); const cssW=Math.round(w*fit*state.zoom),cssH=Math.round(h*fit*state.zoom); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.round(cssW*dpr));canvas.height=Math.max(1,Math.round(cssH*dpr));canvas.style.width=`${cssW}px`;canvas.style.height=`${cssH}px`;ctx.setTransform(dpr*cssW/w,0,0,dpr*cssH/h,0,0);ctx.clearRect(0,0,w,h);ctx.drawImage(state.image,0,0,w,h);if(!state.annotationsVisible)return; const scale=w/cssW; if(state.bbox){ctx.strokeStyle="#35d39a";ctx.lineWidth=3*scale;ctx.strokeRect(state.bbox[0],state.bbox[1],state.bbox[2]-state.bbox[0],state.bbox[3]-state.bbox[1]); [[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]].forEach(p=>{ctx.fillStyle="#fff";ctx.strokeStyle="#176b55";ctx.lineWidth=2*scale;ctx.beginPath();ctx.arc(p[0],p[1],5*scale,0,Math.PI*2);ctx.fill();ctx.stroke();});} state.lines.forEach((line,index)=>{if(line.length<1)return;const lineColor=index===state.selectedLine?"#ffae42":"#43b8ff";ctx.strokeStyle=lineColor;ctx.lineWidth=(index===state.selectedLine?4:3)*scale;ctx.beginPath();ctx.moveTo(line[0][0],line[0][1]);line.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.stroke();line.forEach((p,pointIndex)=>{const selected=state.selectedLine===index&&state.selectedPoint?.line===index&&state.selectedPoint?.point===pointIndex;ctx.fillStyle=selected?"#ff4d4f":lineColor;ctx.strokeStyle=selected?"#fff":lineColor;ctx.lineWidth=(selected?2:0)*scale;ctx.beginPath();ctx.arc(p[0],p[1],(selected?7:4.5)*scale,0,Math.PI*2);ctx.fill();if(selected)ctx.stroke();});}); }
+function hitTest(point){if(!state.annotationsVisible)return null;const radius=12/state.zoom;for(let li=0;li<state.lines.length;li++){for(let pi=0;pi<state.lines[li].length;pi++){if(Math.hypot(point[0]-state.lines[li][pi][0],point[1]-state.lines[li][pi][1])<=radius)return {type:"point",line:li,point:pi};}}const selected=selectedYoyo();if(selected?.bbox_pixel){const b=selected.bbox_pixel,corners=[[b[0],b[1]],[b[2],b[1]],[b[2],b[3]],[b[0],b[3]]];for(let i=0;i<4;i++)if(Math.hypot(point[0]-corners[i][0],point[1]-corners[i][1])<=radius)return {type:"corner",corner:i};}for(let li=0;li<state.lines.length;li++){const line=state.lines[li];for(let i=1;i<line.length;i++)if(lineDistance(point,line[i-1],line[i])<=radius)return {type:"line",line:li,segment:i};}return null;}
+function drawYoyoBox(record,color,selected){if(!record?.bbox_pixel)return;const b=record.bbox_pixel,scale=state.image.naturalWidth/canvas.width;ctx.strokeStyle=color;ctx.lineWidth=(selected?4:3)*scale;ctx.strokeRect(b[0],b[1],b[2]-b[0],b[3]-b[1]);}
+function renderCanvas(){ if(!state.image)return; const w=state.image.naturalWidth,h=state.image.naturalHeight; const maxWidth=Math.max(180,$("#yda-viewport").clientWidth-24), maxHeight=Math.max(180,$("#yda-viewport").clientHeight-24); const fit=Math.min(maxWidth/w,maxHeight/h,1); const cssW=Math.round(w*fit*state.zoom),cssH=Math.round(h*fit*state.zoom); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.round(cssW*dpr));canvas.height=Math.max(1,Math.round(cssH*dpr));canvas.style.width=`${cssW}px`;canvas.style.height=`${cssH}px`;ctx.setTransform(dpr*cssW/w,0,0,dpr*cssH/h,0,0);ctx.clearRect(0,0,w,h);ctx.drawImage(state.image,0,0,w,h);if(!state.annotationsVisible)return;const scale=w/cssW;drawYoyoBox(state.activeYoyo,"#35d39a",state.selectedBackup<0);state.backups.forEach((item,index)=>drawYoyoBox(item,"#f0a64b",state.selectedBackup===index));state.lines.forEach((line,index)=>{if(line.length<1)return;const lineColor=index===state.selectedLine?"#ffae42":"#43b8ff";ctx.strokeStyle=lineColor;ctx.lineWidth=(index===state.selectedLine?4:3)*scale;ctx.beginPath();ctx.moveTo(line[0][0],line[0][1]);line.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.stroke();line.forEach((p,pointIndex)=>{const selected=state.selectedLine===index&&state.selectedPoint?.line===index&&state.selectedPoint?.point===pointIndex;ctx.fillStyle=selected?"#ff4d4f":lineColor;ctx.strokeStyle=selected?"#fff":lineColor;ctx.lineWidth=(selected?2:0)*scale;ctx.beginPath();ctx.arc(p[0],p[1],(selected?7:4.5)*scale,0,Math.PI*2);ctx.fill();if(selected)ctx.stroke();});}); }
 function renderLineList(){ const node=$("#yda-line-list"); node.innerHTML=state.lines.length?state.lines.map((line,index)=>`<button type="button" class="yda__line-row ${index===state.selectedLine?'is-active':''}" data-line="${index}"><span>绳线 ${index+1}</span><span>${line.length} 个点</span></button>`).join(""):"<div class='yda__line-row'><span>没有绳线</span></div>"; node.querySelectorAll("button").forEach(button=>button.onclick=()=>{state.selectedLine=Number(button.dataset.line);state.selectedPoint=null;renderCanvas();renderLineList();}); }
-function syncCoordinateInputs(){ const values=state.bbox||["","","",""]; ["x1","y1","x2","y2"].forEach((name,index)=>$("#yda-"+name).value=values[index]); }
+function syncCoordinateInputs(){ const values=selectedYoyo()?.bbox_pixel||["","","",""]; ["x1","y1","x2","y2"].forEach((name,index)=>$("#yda-"+name).value=values[index]); }
 function filteredSamples(){ const query=$("#yda-search").value.trim().toLowerCase(),filter=$("#yda-filter").value; return state.samples.filter(sample=>{ const text=`${sample.name} ${sample.group}`.toLowerCase(); if(query&&!text.includes(query))return false; if(filter==="needs_yoyo"&&!sample.yoyo_needs_review)return false; if(filter==="needs_string"&&sample.string_count>0)return false; if(filter==="unresolved"&&!['unresolved','needs_review'].includes(sample.review_status))return false; if(filter==="unreviewed"&&sample.reviewed)return false; if(filter==="reviewed"&&!sample.reviewed)return false; return true; }); }
 function yoyoStateText(sample){if(sample.yoyo_visibility==="visible")return "完整可见";if(sample.yoyo_visibility==="partial")return "部分可见";if(sample.yoyo_visibility==="uncertain")return "不确定";return {occluded:"被遮挡",out_of_frame:"画面外",absent:"不存在"}[sample.yoyo_not_visible_reason]||"不可见";}
-function renderSamples(){ state.filtered=filteredSamples(); const reviewed=state.samples.filter(sample=>sample.reviewed).length;$("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条 · 已核验 ${reviewed}`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.yoyo_needs_review?'yda__badge--warn':'yda__badge--ok'}">悠悠球 ${yoyoStateText(sample)}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span><span class="yda__badge ${sample.reviewed?'yda__badge--ok':'yda__badge--warn'}">${sample.reviewed?'已核验':'未核验'}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
+function renderSamples(){ state.filtered=filteredSamples(); const reviewed=state.samples.filter(sample=>sample.reviewed).length;$("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条 · 已核验 ${reviewed}`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.yoyo_needs_review?'yda__badge--warn':'yda__badge--ok'}">悠悠球 ${yoyoStateText(sample)}</span><span class="yda__badge">备用球 ${sample.backup_yoyo_count||0}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span><span class="yda__badge ${sample.reviewed?'yda__badge--ok':'yda__badge--warn'}">${sample.reviewed?'已核验':'未核验'}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
 const normalizedDatasetPath = value => String(value||"").replace(/\\/g,"/").replace(/\/+$/,"").toLowerCase();
 const datasetNameFromPath = value => String(value||"").split(/[\\/]/).filter(Boolean).at(-1)||String(value||"");
 function syncDatasetChoice(path){ const select=$("#yda-dataset-select"),normalized=normalizedDatasetPath(path);let option=Array.from(select.options).find(item=>normalizedDatasetPath(item.value)===normalized);if(!option&&path){option=new Option(datasetNameFromPath(path),path);select.add(option);}if(option)select.value=option.value; }
 let datasetListRequest=0;
 async function refreshDatasetOptions(preferredPath=""){ const request=++datasetListRequest,datasets=await server.ui_list_annotation_datasets();if(request!==datasetListRequest)return datasets;const select=$("#yda-dataset-select"),selectedPath=preferredPath||select.value||$("#yda-dataset-path").value.trim();select.replaceChildren();datasets.forEach(item=>select.add(new Option(item.name,item.path)));if(!datasets.length&&!selectedPath)select.add(new Option("未发现数据集",""));syncDatasetChoice(selectedPath);return datasets; }
-async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;state.zoom=1;zoomAnchor=null;viewport.scrollLeft=0;viewport.scrollTop=0;$("#yda-zoom").value="100";$("#yda-zoom-value").textContent="100%";canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.bbox=Array.isArray(annotation.yoyo_bbox_pixel)?annotation.yoyo_bbox_pixel.map(Number):null; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent=result.reviewed?"已核验":"已加载"; $("#yda-fields").disabled=false; $("#yda-yoyo-visibility").value=annotation.visibility|| (state.bbox?"visible":"uncertain"); $("#yda-yoyo-not-visible-reason").value=annotation.yoyo_not_visible_reason||"";syncYoyoFields(); $("#yda-trick-orientation").value=annotation.trick_orientation; $("#yda-presentation-orientation").value=annotation.presentation_orientation || ({normal:"frontal",horizontal:"edge_horizontal"}[annotation.trick_orientation] || "unknown"); syncPresentationOrientation(); $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-validation").textContent="";state.baseline=editorSnapshot();syncReviewButton();syncResetButton(); const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial){$("#yda-empty").textContent="图像加载失败";toast("图像加载失败");}}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
+async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;state.zoom=1;zoomAnchor=null;viewport.scrollLeft=0;viewport.scrollTop=0;$("#yda-zoom").value="100";$("#yda-zoom-value").textContent="100%";canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.activeYoyo=cloneYoyo(annotation.active_yoyo); state.backups=(annotation.backup_yoyos||[]).map(cloneYoyo);state.selectedBackup=-1; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent=result.reviewed?"已核验":"已加载"; $("#yda-fields").disabled=false; syncSelectedYoyo(); $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-validation").textContent="";state.baseline=editorSnapshot();syncReviewButton();syncResetButton(); const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial){$("#yda-empty").textContent="图像加载失败";toast("图像加载失败");}}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
 async function openDataset(){ const path=$("#yda-dataset-path").value.trim(); if(!path)return toast("请输入或选择数据集路径");if(state.dirty&&!window.confirm("当前修改尚未保存，确定打开其他数据集吗？"))return; $("#yda-status").textContent="正在扫描数据集..."; try{ const result=await server.ui_open_annotation_dataset({dataset_path:path}); $("#yda-dataset-path").value=result.dataset_path;syncDatasetChoice(result.dataset_path);refreshDatasetOptions(result.dataset_path).catch(error=>toast(`刷新数据集失败：${error?.message||error}`));state.dataset=result;state.samples=result.samples;state.sample=null;state.dirty=false;renderSamples(); $("#yda-status").textContent=`已加载 ${result.sample_count} 条数据${result.error_count?`，${result.error_count} 条无法读取`:''}`; await selectSample(result.samples[0].key); }catch(error){$("#yda-status").textContent="数据集打开失败";toast(error?.message||error);} }
 function finishLine(){ if(state.activeLine===null)return; if(state.lines[state.activeLine].length<2)state.lines.splice(state.activeLine,1); state.activeLine=null;$("#yda-finish-line").disabled=true;markDirty(); }
 function startNewLine(recordHistory=true){ if(!state.image)return toast("请先加载图像");if(state.activeLine!==null)finishLine();if(recordHistory)pushHistory();state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;state.redrawPending=false;setTool("string");$("#yda-finish-line").disabled=false;renderCanvas();renderLineList();toast("在图像上逐点绘制，双击或点击结束当前绳线"); }
 function deleteSelectedPoint(){const selected=state.selectedPoint;if(!selected||state.selectedLine!==selected.line)return false;const line=state.lines[selected.line];if(!line||selected.point<0||selected.point>=line.length){state.selectedPoint=null;return false;}if(line.length<=2){toast("一条绳线至少保留两个点");return true;}pushHistory();line.splice(selected.point,1);state.selectedPoint=null;markDirty();toast("已删除标注点并连接相邻点");return true;}
-function resetUnsavedChanges(){ if(!state.sample||!state.dirty||!state.baseline)return;if(!window.confirm("放弃当前图片的全部未保存修改并恢复原始标注吗？"))return;const baseline=state.baseline;state.bbox=baseline.bbox?baseline.bbox.slice():null;state.lines=baseline.lines.map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.drag=null;state.history=[];state.redrawPending=false;$("#yda-yoyo-visibility").value=baseline.yoyoVisibility;$("#yda-yoyo-not-visible-reason").value=baseline.yoyoNotVisibleReason;syncYoyoFields();$("#yda-trick-orientation").value=baseline.trickOrientation;$("#yda-presentation-orientation").value=baseline.presentationOrientation;syncPresentationOrientation();$("#yda-string-visibility").value=baseline.stringVisibility;$("#yda-review-status").value=baseline.reviewStatus;state.dirty=false;$("#yda-dirty").textContent=state.sample.reviewed?"已核验":"已加载";$("#yda-validation").textContent="";setTool("select");syncReviewButton();syncResetButton();renderCanvas();renderLineList();syncCoordinateInputs();toast("已恢复到保存前的原始标注"); }
-canvas.addEventListener("pointerdown",event=>{if(!state.image)return;const point=canvasPoint(event);if(state.tool==="box"){pushHistory();state.drag={type:"drawbox",start:point};state.bbox=[point[0],point[1],point[0]+1,point[1]+1];$("#yda-yoyo-visibility").value="visible";$("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();canvas.setPointerCapture(event.pointerId);markDirty();return;}if(state.tool==="string"){if(state.activeLine===null){if(!state.redrawPending)pushHistory();state.redrawPending=false;state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;}state.lines[state.activeLine].push(point);$("#yda-finish-line").disabled=false;markDirty();return;}const hit=hitTest(point);if(!hit){state.selectedLine=null;renderCanvas();renderLineList();return;}pushHistory();state.drag={...hit,start:point,original:cloneGeometry()};if(hit.line!==undefined)state.selectedLine=hit.line;canvas.setPointerCapture(event.pointerId);});
-canvas.addEventListener("pointermove",event=>{if(!state.drag||!state.image)return;const p=canvasPoint(event),d=state.drag;if(d.type==="drawbox"){state.bbox=[Math.min(d.start[0],p[0]),Math.min(d.start[1],p[1]),Math.max(d.start[0],p[0]),Math.max(d.start[1],p[1])];}else if(d.type==="point"){state.lines[d.line][d.point]=p;}else if(d.type==="corner"){const b=state.bbox.slice();if(d.corner===0||d.corner===3)b[0]=p[0];else b[2]=p[0];if(d.corner===0||d.corner===1)b[1]=p[1];else b[3]=p[1];state.bbox=[Math.min(b[0],b[2]),Math.min(b[1],b[3]),Math.max(b[0],b[2]),Math.max(b[1],b[3])];}else if(d.type==="line"){const dx=p[0]-d.start[0],dy=p[1]-d.start[1],w=state.image.naturalWidth,h=state.image.naturalHeight;state.lines[d.line]=d.original.lines[d.line].map(q=>[Math.max(0,Math.min(w,q[0]+dx)),Math.max(0,Math.min(h,q[1]+dy))]);}markDirty();});
+function resetUnsavedChanges(){ if(!state.sample||!state.dirty||!state.baseline)return;if(!window.confirm("放弃当前图片的全部未保存修改并恢复原始标注吗？"))return;const baseline=state.baseline;state.activeYoyo=cloneYoyo(baseline.activeYoyo);state.backups=(baseline.backups||[]).map(cloneYoyo);state.selectedBackup=-1;state.lines=baseline.lines.map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.drag=null;state.history=[];state.redrawPending=false;syncSelectedYoyo();$("#yda-string-visibility").value=baseline.stringVisibility;$("#yda-review-status").value=baseline.reviewStatus;state.dirty=false;$("#yda-dirty").textContent=state.sample.reviewed?"已核验":"已加载";$("#yda-validation").textContent="";setTool("select");syncReviewButton();syncResetButton();renderCanvas();renderLineList();syncCoordinateInputs();toast("已恢复到保存前的原始标注"); }
+canvas.addEventListener("pointerdown",event=>{if(!state.image)return;const point=canvasPoint(event);if(state.tool==="box"||state.tool==="backup-box"){pushHistory();if(state.tool==="backup-box"){state.backups.push({visibility:"visible",not_visible_reason:null,trick_orientation:"horizontal",presentation_orientation:"edge_horizontal",bbox_pixel:[point[0],point[1],point[0]+1,point[1]+1],bbox_2d:null,bbox_review_status:"reviewed"});state.selectedBackup=state.backups.length-1;}else{state.activeYoyo=state.activeYoyo||{};state.activeYoyo.bbox_pixel=[point[0],point[1],point[0]+1,point[1]+1];state.activeYoyo.visibility="visible";}state.drag={type:"drawbox",start:point};syncSelectedYoyo();canvas.setPointerCapture(event.pointerId);markDirty();return;}if(state.tool==="string"){if(state.activeLine===null){if(!state.redrawPending)pushHistory();state.redrawPending=false;state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;}state.lines[state.activeLine].push(point);$("#yda-finish-line").disabled=false;markDirty();return;}const hit=hitTest(point);if(!hit){state.selectedLine=null;renderCanvas();renderLineList();return;}pushHistory();state.drag={...hit,start:point,original:cloneGeometry()};if(hit.line!==undefined)state.selectedLine=hit.line;canvas.setPointerCapture(event.pointerId);});
+canvas.addEventListener("pointermove",event=>{if(!state.drag||!state.image)return;const p=canvasPoint(event),d=state.drag;if(d.type==="drawbox"){const target=selectedYoyo();if(target)target.bbox_pixel=[Math.min(d.start[0],p[0]),Math.min(d.start[1],p[1]),Math.max(d.start[0],p[0]),Math.max(d.start[1],p[1])];}else if(d.type==="point"){state.lines[d.line][d.point]=p;}else if(d.type==="corner"){const target=selectedYoyo(),b=target?.bbox_pixel?.slice();if(!b)return;if(d.corner===0||d.corner===3)b[0]=p[0];else b[2]=p[0];if(d.corner===0||d.corner===1)b[1]=p[1];else b[3]=p[1];target.bbox_pixel=[Math.min(b[0],b[2]),Math.min(b[1],b[3]),Math.max(b[0],b[2]),Math.max(b[1],b[3])];}else if(d.type==="line"){const dx=p[0]-d.start[0],dy=p[1]-d.start[1],w=state.image.naturalWidth,h=state.image.naturalHeight;state.lines[d.line]=d.original.lines[d.line].map(q=>[Math.max(0,Math.min(w,q[0]+dx)),Math.max(0,Math.min(h,q[1]+dy))]);}markDirty();});
 canvas.addEventListener("pointerup",()=>{state.drag=null;}); canvas.addEventListener("dblclick",event=>{event.preventDefault();if(state.tool==="string"){const line=state.lines[state.activeLine];if(line?.length>1&&Math.hypot(line.at(-1)[0]-line.at(-2)[0],line.at(-1)[1]-line.at(-2)[1])<4)line.pop();finishLine();return;}if(state.tool==="select"){const point=canvasPoint(event),hit=hitTest(point);if(hit?.type==="line"){pushHistory();state.lines[hit.line].splice(hit.segment,0,point);state.selectedLine=hit.line;markDirty();}}});
 canvas.addEventListener("contextmenu",event=>{if(state.tool!=="select"||!state.image)return;const hit=hitTest(canvasPoint(event));if(hit?.type!=="point")return;event.preventDefault();const line=state.lines[hit.line];if(line.length<=2)return toast("一条绳线至少保留两个点");pushHistory();line.splice(hit.point,1);state.selectedLine=hit.line;markDirty();});
-canvas.addEventListener("pointerup",event=>{if(state.tool!=="select"||!state.image)return;const hit=hitTest(canvasPoint(event));state.selectedPoint=hit?.type==="point"?{line:hit.line,point:hit.point}:null;if(state.selectedPoint)state.selectedLine=state.selectedPoint.line;canvas.focus({preventScroll:true});renderCanvas();renderLineList();});
+canvas.addEventListener("pointerup",event=>{if(state.tool!=="select"||!state.image)return;const point=canvasPoint(event);for(let index=0;index<state.backups.length;index++){const b=state.backups[index]?.bbox_pixel;if(b&&point[0]>=b[0]&&point[0]<=b[2]&&point[1]>=b[1]&&point[1]<=b[3]){selectYoyo(index);return;}}const activeBox=state.activeYoyo?.bbox_pixel;if(activeBox&&point[0]>=activeBox[0]&&point[0]<=activeBox[2]&&point[1]>=activeBox[1]&&point[1]<=activeBox[3]){selectYoyo(-1);return;}const hit=hitTest(point);state.selectedPoint=hit?.type==="point"?{line:hit.line,point:hit.point}:null;if(state.selectedPoint)state.selectedLine=state.selectedPoint.line;canvas.focus({preventScroll:true});renderCanvas();renderLineList();});
 canvas.addEventListener("contextmenu",()=>{state.selectedPoint=null;renderCanvas();});
 element.querySelectorAll("#yda-tools button").forEach(button=>button.onclick=()=>{if(state.activeLine!==null)finishLine();setTool(button.dataset.tool);});
 $("#yda-finish-line").onclick=finishLine; $("#yda-undo").onclick=()=>{const value=state.history.pop();if(value)applyGeometry(value);};
 $("#yda-reset").onclick=resetUnsavedChanges;
 $("#yda-delete").onclick=()=>{if(state.selectedLine===null)return toast("请先选择一条绳线");pushHistory();state.lines.splice(state.selectedLine,1);state.selectedLine=null;markDirty();};
 $("#yda-toggle-annotations").onclick=toggleAnnotations;
-$("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="uncertain";$("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();markDirty();};
+$("#yda-clear-box").onclick=()=>{const selected=selectedYoyo();if(!selected)return;pushHistory();selected.bbox_pixel=null;selected.visibility="uncertain";selected.not_visible_reason=null;syncSelectedYoyo();markDirty();};
+function deleteSelectedBackup(){if(state.selectedBackup<0||state.selectedBackup>=state.backups.length)return false;pushHistory();state.backups.splice(state.selectedBackup,1);state.selectedBackup=Math.min(state.selectedBackup,state.backups.length-1);syncSelectedYoyo();markDirty();toast("已删除当前备用球");return true;}
+$("#yda-delete-backup").onclick=deleteSelectedBackup;
+$("#yda-prev-yoyo").onclick=()=>{if(state.selectedBackup===0)selectYoyo(-1);else if(state.selectedBackup>0)selectYoyo(state.selectedBackup-1);};
+$("#yda-next-yoyo").onclick=()=>{if(state.backups.length)selectYoyo(state.selectedBackup<0?0:Math.min(state.backups.length-1,state.selectedBackup+1));};
 $("#yda-add-line").onclick=()=>startNewLine();
 $("#yda-redraw-lines").onclick=()=>{if(state.lines.length&&!window.confirm("清空现有绳线并重新绘制吗？可使用撤销恢复。"))return;pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="partial";startNewLine(false);markDirty();};
 $("#yda-clear-lines").onclick=()=>{pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="not_visible";markDirty();};
-['x1','y1','x2','y2'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{const values=['x1','y1','x2','y2'].map(key=>Number($("#yda-"+key).value));if(values.every(Number.isFinite)){pushHistory();state.bbox=values;markDirty();}}));
-$("#yda-yoyo-visibility").addEventListener("change",()=>{const visibility=$("#yda-yoyo-visibility").value;if(visibility==="not_visible"){pushHistory();state.bbox=null;}else $("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();markDirty();});
-['yoyo-not-visible-reason','trick-orientation','presentation-orientation','string-visibility','review-status'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{if(name==="trick-orientation")syncPresentationOrientation();state.dirty=true;$("#yda-dirty").textContent="未保存";syncReviewButton();syncResetButton();}));
-$("#yda-save").onclick=async()=>{if(!state.sample)return; if(state.activeLine!==null)finishLine();const edit={yoyo_visibility:$("#yda-yoyo-visibility").value,yoyo_not_visible_reason:$("#yda-yoyo-not-visible-reason").value,trick_orientation:$("#yda-trick-orientation").value,presentation_orientation:$("#yda-presentation-orientation").value,yoyo_bbox_pixel:state.bbox,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,bbox_review_status:"reviewed",reviewer:$("#yda-reviewer").value}; $("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.sample.reviewed=false;state.dirty=false;state.baseline=editorSnapshot();$("#yda-dirty").textContent="已保存，待核验";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();syncReviewButton();syncResetButton();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
+['x1','y1','x2','y2'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{const values=['x1','y1','x2','y2'].map(key=>Number($("#yda-"+key).value));if(values.every(Number.isFinite)&&selectedYoyo()){pushHistory();selectedYoyo().bbox_pixel=values;markDirty();}}));
+$("#yda-yoyo-visibility").addEventListener("change",()=>{const selected=selectedYoyo();if(!selected)return;const visibility=$("#yda-yoyo-visibility").value;if(visibility==="not_visible"){pushHistory();selected.bbox_pixel=null;}else $("#yda-yoyo-not-visible-reason").value="";selected.visibility=visibility;selected.not_visible_reason=visibility==="not_visible"?$("#yda-yoyo-not-visible-reason").value:null;syncYoyoFields();markDirty();});
+['yoyo-not-visible-reason','trick-orientation','presentation-orientation','string-visibility','review-status'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{const selected=selectedYoyo();if(selected){if(name==="trick-orientation"){selected.trick_orientation=$("#yda-trick-orientation").value;syncPresentationOrientation();selected.presentation_orientation=$("#yda-presentation-orientation").value;}if(name==="yoyo-not-visible-reason")selected.not_visible_reason=$("#yda-yoyo-not-visible-reason").value||null;if(name==="presentation-orientation")selected.presentation_orientation=$("#yda-presentation-orientation").value;}state.dirty=true;$("#yda-dirty").textContent="未保存";syncReviewButton();syncResetButton();}));
+$("#yda-save").onclick=async()=>{if(!state.sample)return;if(state.activeLine!==null)finishLine();const edit={active_yoyo:state.activeYoyo,backup_yoyos:state.backups,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,reviewer:$("#yda-reviewer").value};$("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.sample.reviewed=false;state.dirty=false;state.baseline=editorSnapshot();$("#yda-dirty").textContent="已保存，待核验";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();syncReviewButton();syncResetButton();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
 $("#yda-review").onclick=async()=>{if(!state.sample||state.dirty)return;const confirmed=!state.sample.reviewed;$("#yda-review").disabled=true;try{const result=await server.ui_set_annotation_sample_reviewed({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,reviewer:$("#yda-reviewer").value,confirmed});state.sample={...state.sample,...result};const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result};$("#yda-dirty").textContent=result.reviewed?"已核验":"已取消核验";renderSamples();syncReviewButton();toast(result.reviewed?"已记录为核验完成":"已取消核验");if(result.reviewed&&index<state.samples.length-1)await selectSample(state.samples[index+1].key);}catch(error){toast(`核验状态保存失败：${error?.message||error}`);syncReviewButton();}};
 $("#yda-prev").onclick=()=>{if(state.current>0)selectSample(state.samples[state.current-1].key);}; $("#yda-next").onclick=()=>{if(state.current<state.samples.length-1)selectSample(state.samples[state.current+1].key);};
 $("#yda-search").addEventListener("input",renderSamples);$("#yda-filter").addEventListener("change",renderSamples);$("#yda-open").onclick=openDataset;
@@ -858,7 +886,7 @@ viewport.addEventListener("pointermove",event=>{zoomAnchor={x:event.clientX,y:ev
 $("#yda-zoom").addEventListener("input",event=>setZoom(Number(event.target.value)));
 viewport.addEventListener("wheel",event=>{if(!state.image)return;event.preventDefault();event.stopPropagation();setZoom(state.zoom*100+(event.deltaY<0?10:-10),{x:event.clientX,y:event.clientY});},{passive:false,capture:true});
 new ResizeObserver(()=>renderCanvas()).observe($("#yda-viewport"));
-element.addEventListener("keydown",event=>{if(event.key!=="Delete"||event.target.matches("input,select,textarea"))return;if(deleteSelectedPoint())event.preventDefault();});
+element.addEventListener("keydown",event=>{if(event.key!=="Delete"||event.target.matches("input,select,textarea"))return;if(deleteSelectedBackup()||deleteSelectedPoint())event.preventDefault();});
 element.addEventListener("keydown",event=>{if(event.target.matches("input,select,textarea"))return;if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();$("#yda-save").click();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();$("#yda-undo").click();return;}if(event.key.toLowerCase()==='h'){event.preventDefault();toggleAnnotations();}if(event.key==='ArrowLeft'){event.preventDefault();$("#yda-prev").click();}if(event.key==='ArrowRight'){event.preventDefault();$("#yda-next").click();}});
 (async()=>{try{const datasets=await refreshDatasetOptions();if(datasets.length){$("#yda-dataset-path").value=datasets[0].path;syncDatasetChoice(datasets[0].path);await openDataset();}}catch(error){toast(`扫描失败：${error?.message||error}`);}})();
 """

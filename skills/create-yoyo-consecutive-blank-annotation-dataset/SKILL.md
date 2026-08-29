@@ -7,6 +7,8 @@ description: Create or incrementally extend Workbench-compatible agent_yoyo_stri
 
 Use the repository virtual environment. The generator writes directly to
 `datasets/<dataset-name>` and always selects one uninterrupted run per source.
+Generated labels initialize one `active_yoyo` record and an empty
+`backup_yoyos` list; backup balls can be added later during manual review.
 
 ```powershell
 & PROJECT\.venv\Scripts\python.exe `

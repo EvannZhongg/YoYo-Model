@@ -124,7 +124,7 @@ For `clear_candidate`, `standard`, and `hard_case`, perform the listed
 
 1. Inspect raw pixels plus relevant temporal context.
 2. Trace every defensible visible string section and split all unsupported gaps.
-3. Set final string visibility, yoyo bbox, yoyo/unknown path anchors, ordered path, hidden gaps, and orientation.
+3. Set final string visibility, the `active_yoyo` bbox/orientation, any manually reviewed `backup_yoyos`, yoyo/unknown path anchors, ordered path, and hidden gaps.
 4. Apply one complete candidate for the first geometry revision.
 5. Render, inspect every edge, and use compact patches until approved or unresolved.
 

@@ -235,7 +235,7 @@ def main() -> int:
         run("apply", "--label", str(label), "--candidate", str(scaled_candidate), "--actor", "scale-gate-test")
         scaled_saved = json.loads(label.read_text(encoding="utf-8"))
         assert scaled_saved["string_polylines_pixel"][0][0] == [140.0, 60.0]
-        assert scaled_saved["yoyo_bbox_pixel"] == [300.0, 245.0, 340.0, 285.0]
+        assert scaled_saved["active_yoyo"]["bbox_pixel"] == [300.0, 245.0, 340.0, 285.0]
         patch = root / "point-patch.json"
         patch.write_text(
             json.dumps(

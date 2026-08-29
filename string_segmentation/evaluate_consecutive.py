@@ -39,7 +39,7 @@ def _group_artifact_stem(group_id: str) -> str:
 
 
 def _yoyo(annotation: dict[str, Any]) -> dict[str, Any] | None:
-    bbox = annotation.get("yoyo_bbox_pixel") or []
+    bbox = ((annotation.get("active_yoyo") or {}).get("bbox_pixel") if annotation.get("active_yoyo") else annotation.get("yoyo_bbox_pixel")) or []
     if not isinstance(bbox, list) or len(bbox) != 4:
         return None
     values = [float(value) for value in bbox]

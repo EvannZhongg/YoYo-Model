@@ -59,12 +59,17 @@ def _predict_dataset(
             image_path = dataset_dir / Path(item["image"])
             image = _read_image(image_path)
             height, width = image.shape[:2]
-            bbox = annotation.get("yoyo_bbox_pixel")
+            active_yoyo = annotation.get("active_yoyo") or {
+                "bbox_pixel": annotation.get("yoyo_bbox_pixel"),
+                "presentation_orientation": annotation.get("presentation_orientation"),
+                "trick_orientation": annotation.get("trick_orientation"),
+            }
+            bbox = active_yoyo.get("bbox_pixel")
             yoyo = {"bbox": [float(value) for value in bbox]} if isinstance(bbox, list) and len(bbox) == 4 else None
             left, top, right, bottom = orientation_crop_box(width, height, yoyo)
             crops.append(image[top:bottom, left:right])
-            presentation_target = str(annotation.get("presentation_orientation") or "")
-            trick_target = str(annotation.get("trick_orientation") or PRESENTATION_TO_TRICK.get(presentation_target, "unknown"))
+            presentation_target = str(active_yoyo.get("presentation_orientation") or "")
+            trick_target = str(active_yoyo.get("trick_orientation") or PRESENTATION_TO_TRICK.get(presentation_target, "unknown"))
             records.append({
                 "group_id": str(group["group_id"]),
                 "source_group": str(group.get("source_group") or group["group_id"]),

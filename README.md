@@ -37,7 +37,8 @@ datasets/1Ayoyo_dataset/
 
 当前标签包含：
 
-- 悠悠球 bbox
+- `active_yoyo`（当前使用悠悠球）的可见性、bbox、方向和审核字段
+- `backup_yoyos`（备用悠悠球数组），每项与 `active_yoyo` 使用相同结构
 - 绳线可见性和几何标注
 - `trick_orientation` 三分类：`horizontal`、`normal`、`not_applicable`
 - `presentation_orientation` 画面朝向：`frontal`、`edge_horizontal`、`edge_vertical`、`unknown`

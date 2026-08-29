@@ -202,15 +202,15 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 result = save_annotation_sample(str(dataset), key, edit)
 
             annotation = result["annotation"]
-            self.assertEqual(annotation["yoyo_bbox_pixel"], [200.0, 25.0, 300.0, 75.0])
-            self.assertEqual(annotation["trick_orientation"], "horizontal")
-            self.assertEqual(annotation["presentation_orientation"], "edge_horizontal")
-            self.assertEqual(annotation["yoyo_bbox_2d"], [499.5, 124.875, 749.25, 374.625])
+            self.assertEqual(annotation["active_yoyo"]["bbox_pixel"], [200.0, 25.0, 300.0, 75.0])
+            self.assertEqual(annotation["active_yoyo"]["trick_orientation"], "horizontal")
+            self.assertEqual(annotation["active_yoyo"]["presentation_orientation"], "edge_horizontal")
+            self.assertEqual(annotation["active_yoyo"]["bbox_2d"], [499.5, 124.875, 749.25, 374.625])
             self.assertEqual(annotation["string_polylines_2d"][0], [[99.9, 99.9], [499.5, 499.5], [899.1, 899.1]])
             self.assertIsNone(annotation["string_mask_polygons_pixel"])
             self.assertEqual(annotation["string_path"]["paths"][0]["edges"][0]["evidence"], "observed")
             self.assertEqual(annotation["workbench_edits"][-1]["actor"], "tester")
-            self.assertIn("trick_orientation", annotation["workbench_edits"][-1]["fields"])
+            self.assertIn("active_yoyo", annotation["workbench_edits"][-1]["fields"])
 
     def test_save_defaults_presentation_orientation_when_trick_changes(self):
         with TemporaryDirectory() as directory:
@@ -227,7 +227,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 result = save_annotation_sample(str(dataset), key, edit)
 
-            self.assertEqual(result["annotation"]["presentation_orientation"], "edge_horizontal")
+            self.assertEqual(result["annotation"]["active_yoyo"]["presentation_orientation"], "edge_horizontal")
 
     def test_save_rejects_invalid_trick_orientation(self):
         with TemporaryDirectory() as directory:
@@ -310,9 +310,9 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             }
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 result = save_annotation_sample(str(dataset), key, edit)
-            self.assertEqual(result["annotation"]["visibility"], "not_visible")
-            self.assertEqual(result["annotation"]["yoyo_not_visible_reason"], "occluded")
-            self.assertIsNone(result["annotation"]["yoyo_bbox_pixel"])
+            self.assertEqual(result["annotation"]["active_yoyo"]["visibility"], "not_visible")
+            self.assertEqual(result["annotation"]["active_yoyo"]["not_visible_reason"], "occluded")
+            self.assertIsNone(result["annotation"]["active_yoyo"]["bbox_pixel"])
 
     def test_uncertain_yoyo_can_be_manually_verified_without_changing_label(self):
         with TemporaryDirectory() as directory:

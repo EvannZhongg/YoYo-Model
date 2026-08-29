@@ -34,9 +34,16 @@ Every full apply supplies the complete visible state:
 ```json
 {
   "coordinate_frame": "original_pixel",
-  "visibility": "visible",
-  "yoyo_not_visible_reason": null,
-  "yoyo_bbox_pixel": [742, 430, 790, 480],
+  "active_yoyo": {
+    "visibility": "visible",
+    "not_visible_reason": null,
+    "bbox_pixel": [742, 430, 790, 480],
+    "bbox_2d": [193, 199, 206, 222],
+    "trick_orientation": "horizontal",
+    "presentation_orientation": "edge_horizontal",
+    "bbox_review_status": "reviewed"
+  },
+  "backup_yoyos": [],
   "string_visibility": "partial",
   "string_polylines_pixel": [
     [[510, 190], [548, 250], [602, 318]],
@@ -45,8 +52,6 @@ Every full apply supplies the complete visible state:
   "string_mask_polygons_pixel": null,
   "yoyo_division": "1A",
   "scene_label": "trick",
-  "trick_orientation": "horizontal",
-  "presentation_orientation": "edge_horizontal",
   "string_path": {
     "topology": "open",
     "reconstruction_status": "partial",
@@ -113,7 +118,7 @@ be included when pixels support them.
 For motion blur, keep one defensible physical centerline. Do not encode blur
 trails as multiple parallel strings.
 
-Use `yoyo_bbox_pixel` whenever the yoyo body is clearly visible and defensibly
+Use `active_yoyo.bbox_pixel` whenever the active yoyo body is clearly visible and defensibly
 bounded, including a localized motion-blurred disc. Leave it null only when the
 yoyo is outside frame, fully hidden, or too blurred/ambiguous to bound. A
 `string_path` endpoint with `start_anchor` or `end_anchor` equal to `yoyo`
@@ -123,7 +128,7 @@ Yoyo visibility combines an observability state with an optional reason:
 
 - `visible`: complete body is visible and bounded.
 - `partial`: part of the body is visible and bounded, including edge clipping.
-- `not_visible`: no defensible body pixels; `yoyo_not_visible_reason` must be
+- `not_visible`: no defensible body pixels; `*.not_visible_reason` must be
   `occluded`, `out_of_frame`, or `absent`.
 - `uncertain`: neither a positive bbox nor a reviewed negative is defensible.
 
@@ -138,14 +143,14 @@ hidden; `absent` means no yoyo is present.
 Each path edge connects consecutive points and uses `observed`, `temporal`, or
 `inferred`. `observed` requires full current-frame pixel support.
 
-Use `trick_orientation` from nearby launch motion:
+Use `active_yoyo.trick_orientation` from nearby launch motion:
 
 - `horizontal`: lateral launch direction is clear in a short temporal window.
 - `normal`: ordinary downward or non-horizontal throw plane.
 - `unknown`: draft or unresolved trick; cannot be approved.
 - `not_applicable`: required for `scene_label=non_trick`.
 
-Use `presentation_orientation` for the visible yoyo presentation, with the
+Use `*.presentation_orientation` for each visible yoyo presentation, with the
 following constrained combinations:
 
 - `trick_orientation=normal`: `frontal` (default) or `edge_vertical`.

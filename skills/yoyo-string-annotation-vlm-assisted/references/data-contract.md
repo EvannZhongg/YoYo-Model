@@ -23,10 +23,12 @@ Required top-level fields:
 | `sampling_role` | `anchor` or `temporal_context` |
 | `anchor_frame_index` | Anchor frame for this sampling sequence |
 | `sampling_manifest_sha256` | Identity of the manifest that supplied provenance |
-| `trick_orientation` | `normal`, `horizontal`, `unknown`, or `not_applicable` |
-| `presentation_orientation` | `normal` -> `frontal` (default) or `edge_vertical`; `horizontal` -> `edge_horizontal`; `not_applicable` -> `unknown` |
-| `visibility` | `visible`, `partial`, `not_visible`, or `uncertain` |
-| `yoyo_not_visible_reason` | `occluded`, `out_of_frame`, or `absent` only when `visibility=not_visible` |
+| `active_yoyo` | Object describing the one currently used yoyo: visibility, bbox, trick and presentation orientation, and bbox review status |
+| `backup_yoyos` | List of additional yoyo objects using the same shape; backup orientation defaults to `horizontal` |
+| `active_yoyo.trick_orientation` | `normal`, `horizontal`, `unknown`, or `not_applicable` |
+| `*.presentation_orientation` | `normal` -> `frontal` (default) or `edge_vertical`; `horizontal` -> `edge_horizontal`; `not_applicable` -> `unknown` |
+| `*.visibility` | `visible`, `partial`, `not_visible`, or `uncertain` |
+| `*.not_visible_reason` | `occluded`, `out_of_frame`, or `absent` only when `*.visibility=not_visible` |
 | `string_visibility` | `visible`, `partial`, `not_visible`, or `uncertain` |
 | `string_polylines_pixel` | Separate visible centerline strokes only |
 | `string_mask_polygons_pixel` | Optional visible rope-area polygons |
@@ -59,9 +61,9 @@ when the annotated segment is well aligned.
 For motion blur, keep one defensible physical centerline. Do not encode blur
 trails as multiple parallel strings.
 
-`yoyo_bbox_pixel` is required when the yoyo body is clearly visible and
+`active_yoyo.bbox_pixel` is required when the active yoyo body is clearly visible and
 defensibly bounded. Yoyo path anchors must be close to that bbox. If the yoyo
-is outside frame, hidden, or too ambiguous to bound, the bbox remains null and
+is outside frame, hidden, or too ambiguous to bound, the active bbox remains null and
 path anchors should use `unknown` rather than a guessed yoyo endpoint.
 
 ## Provenance Authority

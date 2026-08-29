@@ -50,12 +50,11 @@ ALLOWED_LABEL_FIELDS = {
     "source_image_original", "visualization", "image_sha256", "image_size",
     "source_video", "source_video_sha256", "source_group", "video_id",
     "frame_index", "timestamp_s", "sequence_id", "sampling_role",
-    "anchor_frame_index", "sampling_manifest_sha256", "visibility",
-    "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "yoyo_not_visible_reason", "string_visibility",
+    "anchor_frame_index", "sampling_manifest_sha256", "active_yoyo", "backup_yoyos", "string_visibility",
     "string_polylines_pixel", "string_polylines_2d", "string_polyline_pixel",
     "string_polyline_2d", "string_mask_polygons_pixel", "yoyo_division",
-    "scene_label", "trick_orientation", "presentation_orientation", "string_path", "bad_case",
-    "review_status", "bbox_review_status", "string_review_status",
+    "scene_label", "string_path", "bad_case",
+    "review_status", "string_review_status",
     "reviewed_at_utc", "reviewer", "quality", "workbench_edits",
     "workbench_review_import",
 }
@@ -63,9 +62,8 @@ CORE_FIELDS = (
     "image_sha256",
     "image_size",
     "source_group",
-    "visibility",
-    "yoyo_not_visible_reason",
-    "yoyo_bbox_pixel",
+    "active_yoyo",
+    "backup_yoyos",
     "string_visibility",
     "string_polylines_pixel",
     "string_mask_polygons_pixel",
@@ -76,6 +74,48 @@ CORE_FIELDS = (
     "string_path",
     "bad_case",
 )
+
+
+def normalize_yoyo_record(raw: Any, width: int, height: int, default_orientation: str = "normal") -> dict[str, Any]:
+    """Normalize one active or backup yoyo using the canonical nested shape."""
+    raw = raw if isinstance(raw, dict) else {}
+    visibility = str(raw.get("visibility", "uncertain")).lower()
+    if visibility not in YOYO_VISIBILITY:
+        visibility = "uncertain"
+    reason = str(raw.get("not_visible_reason") or "").lower()
+    reason = reason if visibility == "not_visible" and reason in YOYO_NOT_VISIBLE_REASONS else None
+    orientation = str(raw.get("trick_orientation") or default_orientation).lower()
+    if orientation not in TRICK_ORIENTATIONS:
+        orientation = default_orientation if default_orientation in TRICK_ORIENTATIONS else "unknown"
+    presentation = str(raw.get("presentation_orientation") or "").lower()
+    allowed = {
+        "normal": {"frontal", "edge_vertical"},
+        "horizontal": {"edge_horizontal"},
+        "not_applicable": {"unknown"},
+        "unknown": {"unknown"},
+    }.get(orientation, {"unknown"})
+    default_presentation = {"normal": "frontal", "horizontal": "edge_horizontal", "not_applicable": "unknown"}.get(orientation, "unknown")
+    if presentation not in allowed:
+        presentation = default_presentation
+    raw_box = bbox(raw.get("bbox_pixel"))
+    if raw_box is None:
+        normalized_box = bbox(raw.get("bbox_2d"))
+        if normalized_box:
+            left_top = normalized_to_pixel(normalized_box[:2], width, height)
+            right_bottom = normalized_to_pixel(normalized_box[2:], width, height)
+            raw_box = left_top + right_bottom
+    if visibility == "not_visible":
+        raw_box = None
+    box = [round(item, 3) for item in raw_box] if raw_box else None
+    return {
+        "visibility": visibility,
+        "not_visible_reason": reason,
+        "trick_orientation": orientation,
+        "presentation_orientation": presentation,
+        "bbox_pixel": box,
+        "bbox_2d": (pixel_to_normalized(box[:2], width, height) + pixel_to_normalized(box[2:], width, height)) if box else None,
+        "bbox_review_status": str(raw.get("bbox_review_status") or "needs_review"),
+    }
 
 
 def utc_now() -> str:
@@ -351,17 +391,31 @@ def transform_candidate_coordinates(candidate: dict[str, Any], width: int, heigh
         converted["string_polyline_pixel"] = convert_points(converted.get("string_polyline_pixel"))
     if "string_mask_polygons_pixel" in converted:
         converted["string_mask_polygons_pixel"] = convert_polylines(converted.get("string_mask_polygons_pixel"))
-    if converted.get("yoyo_bbox_pixel"):
-        raw_box = bbox(converted.get("yoyo_bbox_pixel"))
-        if raw_box:
-            left_top = transform(raw_box[:2])
-            right_bottom = transform(raw_box[2:])
-            converted["yoyo_bbox_pixel"] = [
-                round(min(left_top[0], right_bottom[0]), 3),
-                round(min(left_top[1], right_bottom[1]), 3),
-                round(max(left_top[0], right_bottom[0]), 3),
-                round(max(left_top[1], right_bottom[1]), 3),
-            ]
+    for key in ("active_yoyo", "backup_yoyos"):
+        records = converted.get(key)
+        if key == "active_yoyo":
+            records = [records] if isinstance(records, dict) else []
+        if not isinstance(records, list):
+            continue
+        transformed = []
+        for record in records:
+            item = copy.deepcopy(record) if isinstance(record, dict) else {}
+            raw_box = bbox(item.get("bbox_pixel"))
+            if raw_box:
+                left_top = transform(raw_box[:2])
+                right_bottom = transform(raw_box[2:])
+                item["bbox_pixel"] = [
+                    round(min(left_top[0], right_bottom[0]), 3),
+                    round(min(left_top[1], right_bottom[1]), 3),
+                    round(max(left_top[0], right_bottom[0]), 3),
+                    round(max(left_top[1], right_bottom[1]), 3),
+                ]
+            transformed.append(item)
+        converted[key] = transformed[0] if key == "active_yoyo" and transformed else (transformed if key == "backup_yoyos" else None)
+    if "yoyo_bbox_pixel" in converted and bbox(converted.get("yoyo_bbox_pixel")):
+        raw_box = bbox(converted["yoyo_bbox_pixel"])
+        left_top, right_bottom = transform(raw_box[:2]), transform(raw_box[2:])
+        converted["yoyo_bbox_pixel"] = [round(min(left_top[0], right_bottom[0]), 3), round(min(left_top[1], right_bottom[1]), 3), round(max(left_top[0], right_bottom[0]), 3), round(max(left_top[1], right_bottom[1]), 3)]
     path_data = converted.get("string_path")
     if isinstance(path_data, dict):
         for path_item in path_data.get("paths") or []:
@@ -464,10 +518,27 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
         result.pop(field, None)
     string_visibility = str(candidate.get("string_visibility", result.get("string_visibility", "uncertain"))).lower()
     result["string_visibility"] = string_visibility if string_visibility in STRING_VISIBILITY else "uncertain"
-    yoyo_visibility = str(candidate.get("visibility", result.get("visibility", "uncertain"))).lower()
-    result["visibility"] = yoyo_visibility if yoyo_visibility in YOYO_VISIBILITY else "uncertain"
-    reason = str(candidate.get("yoyo_not_visible_reason", result.get("yoyo_not_visible_reason") or "")).lower()
-    result["yoyo_not_visible_reason"] = reason if result["visibility"] == "not_visible" and reason in YOYO_NOT_VISIBLE_REASONS else None
+    explicit_active = isinstance(candidate.get("active_yoyo"), dict)
+    active_source = candidate.get("active_yoyo", result.get("active_yoyo"))
+    if not isinstance(active_source, dict):
+        active_source = result.get("active_yoyo") or {}
+    # Candidate payloads are normalized into the canonical nested record.
+    # This also lets review tools submit only the active-yoyo fields.
+    legacy_map = {
+        "visibility": "visibility", "yoyo_not_visible_reason": "not_visible_reason",
+        "yoyo_bbox_pixel": "bbox_pixel", "yoyo_bbox_2d": "bbox_2d",
+        "trick_orientation": "trick_orientation", "presentation_orientation": "presentation_orientation",
+        "bbox_review_status": "bbox_review_status",
+    }
+    active_source = copy.deepcopy(active_source)
+    for old_key, new_key in legacy_map.items():
+        if old_key in candidate and (not explicit_active or not active_source.get(new_key)):
+            active_source[new_key] = candidate[old_key]
+    result["active_yoyo"] = normalize_yoyo_record(active_source, width, height, "normal")
+    backup_source = candidate.get("backup_yoyos", result.get("backup_yoyos", []))
+    if not isinstance(backup_source, list):
+        backup_source = []
+    result["backup_yoyos"] = [normalize_yoyo_record(item, width, height, "horizontal") for item in backup_source]
 
     strokes = normalize_polylines(candidate, width, height)
     result["string_polylines_pixel"] = strokes or None
@@ -477,27 +548,6 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result["string_polyline_pixel"] = strokes[0] if strokes else None
     result["string_polyline_2d"] = result["string_polylines_2d"][0] if strokes else None
 
-    raw_bbox = bbox(candidate.get("yoyo_bbox_pixel"))
-    if raw_bbox is None:
-        normalized_bbox = bbox(candidate.get("yoyo_bbox_2d"))
-        if normalized_bbox:
-            left_top = normalized_to_pixel(normalized_bbox[:2], width, height)
-            right_bottom = normalized_to_pixel(normalized_bbox[2:], width, height)
-            raw_bbox = left_top + right_bottom
-    result["yoyo_bbox_pixel"] = [round(item, 3) for item in raw_bbox] if raw_bbox else None
-    if result["visibility"] == "not_visible":
-        result["yoyo_bbox_pixel"] = None
-    result["yoyo_bbox_2d"] = (
-        pixel_to_normalized(result["yoyo_bbox_pixel"][:2], width, height)
-        + pixel_to_normalized(result["yoyo_bbox_pixel"][2:], width, height)
-        if result["yoyo_bbox_pixel"]
-        else None
-    )
-    result["bbox"] = (
-        [{"label": "yoyo", "sub_label": "visible yoyo body", "bbox_pixel": result["yoyo_bbox_pixel"], "bbox_2d": result["yoyo_bbox_2d"]}]
-        if result["yoyo_bbox_pixel"]
-        else []
-    )
 
     masks = []
     for polygon in candidate.get("string_mask_polygons_pixel") or []:
@@ -510,28 +560,9 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result["yoyo_division"] = division if division in YOYO_DIVISIONS else "1A"
     scene = str(candidate.get("scene_label", result.get("scene_label", "unknown"))).lower()
     result["scene_label"] = scene if scene in SCENE_LABELS else "unknown"
-    orientation = str(candidate.get("trick_orientation", result.get("trick_orientation", "unknown"))).lower()
-    result["trick_orientation"] = orientation if orientation in TRICK_ORIENTATIONS else "unknown"
     if result["scene_label"] == "non_trick":
-        result["trick_orientation"] = "not_applicable"
-    presentation = str(
-        candidate.get(
-            "presentation_orientation",
-            result.get("presentation_orientation")
-            or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(result["trick_orientation"], "unknown"),
-        )
-    ).lower()
-    allowed_presentation = {
-        "normal": {"frontal", "edge_vertical"},
-        "horizontal": {"edge_horizontal"},
-        "not_applicable": {"unknown"},
-    }.get(result["trick_orientation"], {"unknown"})
-    default_presentation = {
-        "normal": "frontal",
-        "horizontal": "edge_horizontal",
-        "not_applicable": "unknown",
-    }.get(result["trick_orientation"], "unknown")
-    result["presentation_orientation"] = presentation if presentation in allowed_presentation else default_presentation
+        result["active_yoyo"]["trick_orientation"] = "not_applicable"
+        result["active_yoyo"]["presentation_orientation"] = "unknown"
     bad_case = candidate.get("bad_case", result.get("bad_case", []))
     result["bad_case"] = sorted({str(item).strip() for item in (bad_case or []) if str(item).strip()})
     if result["string_visibility"] == "not_visible":
@@ -582,11 +613,16 @@ def initial_label(
         "sampling_role": str(provenance["role"]),
         "anchor_frame_index": int(provenance["anchor_frame_index"]),
         "sampling_manifest_sha256": sampling_manifest_sha256,
-        "visibility": "uncertain",
-        "yoyo_not_visible_reason": None,
-        "yoyo_bbox_pixel": None,
-        "yoyo_bbox_2d": None,
-        "bbox": [],
+        "active_yoyo": {
+            "visibility": "uncertain",
+            "not_visible_reason": None,
+            "trick_orientation": "unknown",
+            "presentation_orientation": "unknown",
+            "bbox_pixel": None,
+            "bbox_2d": None,
+            "bbox_review_status": "auto_labeled_needs_review",
+        },
+        "backup_yoyos": [],
         "string_visibility": "uncertain",
         "string_polylines_pixel": None,
         "string_polylines_2d": None,
@@ -595,8 +631,6 @@ def initial_label(
         "string_mask_polygons_pixel": None,
         "yoyo_division": "1A",
         "scene_label": "unknown",
-        "trick_orientation": "unknown",
-        "presentation_orientation": "unknown",
         "string_path": {
             "topology": "uncertain",
             "reconstruction_status": "uncertain",
@@ -605,7 +639,6 @@ def initial_label(
         },
         "bad_case": [],
         "review_status": "auto_labeled_needs_review",
-        "bbox_review_status": "auto_labeled_needs_review",
         "string_review_status": "auto_labeled_needs_review",
         "quality": {
             "revision": 0,
@@ -681,7 +714,7 @@ def apply_candidate(
     quality["revision"] = int(quality.get("revision", 0)) + 1
     after["updated_at_utc"] = utc_now()
     after["string_review_status"] = "auto_labeled_needs_review"
-    after["review_status"] = "partially_reviewed" if after.get("bbox_review_status") in ACCEPTED_REVIEW else "auto_labeled_needs_review"
+    after["review_status"] = "partially_reviewed" if (after.get("active_yoyo") or {}).get("bbox_review_status") in ACCEPTED_REVIEW else "auto_labeled_needs_review"
     after["reviewed_at_utc"] = None
     after["reviewer"] = None
     after_digest = content_digest(after)
@@ -800,7 +833,7 @@ def build_candidate_from_patch(base: dict[str, Any], patch: dict[str, Any]) -> d
         if patch.get("rebuild_string_path", True):
             candidate["string_path"] = observed_path_from_strokes(
                 strokes,
-                yoyo_bbox=candidate.get("yoyo_bbox_pixel"),
+                yoyo_bbox=(candidate.get("active_yoyo") or {}).get("bbox_pixel"),
                 image_size=(width, height),
             )
 
@@ -1010,7 +1043,7 @@ def command_derive_centerlines(args: argparse.Namespace) -> int:
     candidate["string_polylines_pixel"] = strokes
     candidate["string_path"] = observed_path_from_strokes(
         strokes,
-        yoyo_bbox=label.get("yoyo_bbox_pixel"),
+        yoyo_bbox=(label.get("active_yoyo") or {}).get("bbox_pixel"),
         image_size=(width, height),
     )
     result = apply_candidate(
@@ -1090,7 +1123,7 @@ def current_approvals(label: dict[str, Any]) -> list[dict[str, Any]]:
 
 def approval_semantic_errors(label: dict[str, Any]) -> list[str]:
     scene = str(label.get("scene_label", "unknown"))
-    orientation = str(label.get("trick_orientation", "unknown"))
+    orientation = str((label.get("active_yoyo") or {}).get("trick_orientation", "unknown"))
     errors = []
     if scene == "trick" and orientation not in {"normal", "horizontal"}:
         errors.append("scene_label=trick requires trick_orientation=normal or horizontal before approval")
@@ -1175,37 +1208,45 @@ def validate_label(
     visibility = str(label.get("string_visibility", "uncertain"))
     if visibility not in STRING_VISIBILITY:
         errors.append(f"unsupported string_visibility={visibility}")
-    yoyo_visibility = str(label.get("visibility", "uncertain"))
-    if yoyo_visibility not in YOYO_VISIBILITY:
-        errors.append("unsupported yoyo visibility")
-    yoyo_reason = str(label.get("yoyo_not_visible_reason") or "")
-    if yoyo_visibility == "not_visible" and yoyo_reason not in YOYO_NOT_VISIBLE_REASONS:
-        errors.append("not_visible yoyo requires yoyo_not_visible_reason")
-    elif yoyo_visibility != "not_visible" and yoyo_reason:
-        errors.append("yoyo_not_visible_reason requires not_visible yoyo visibility")
-    yoyo_bbox = bbox(label.get("yoyo_bbox_pixel"))
-    if yoyo_visibility in {"visible", "partial"} and yoyo_bbox is None:
-        errors.append(f"yoyo visibility={yoyo_visibility} requires a bounding box")
-    if yoyo_visibility == "not_visible" and yoyo_bbox is not None:
-        errors.append("not_visible yoyo must not retain a bounding box")
+    active = label.get("active_yoyo")
+    backups = label.get("backup_yoyos")
+    if not isinstance(active, dict):
+        errors.append("active_yoyo must be an object")
+        active = {}
+    if not isinstance(backups, list):
+        errors.append("backup_yoyos must be a list")
+        backups = []
+    yoyo_records = [("active_yoyo", active)] + [(f"backup_yoyos[{index}]", item) for index, item in enumerate(backups)]
+    for name, record in yoyo_records:
+        if not isinstance(record, dict):
+            errors.append(f"{name} must be an object")
+            continue
+        yoyo_visibility = str(record.get("visibility", "uncertain"))
+        if yoyo_visibility not in YOYO_VISIBILITY:
+            errors.append(f"unsupported {name}.visibility")
+        yoyo_reason = str(record.get("not_visible_reason") or "")
+        if yoyo_visibility == "not_visible" and yoyo_reason not in YOYO_NOT_VISIBLE_REASONS:
+            errors.append(f"{name}.not_visible requires not_visible_reason")
+        elif yoyo_visibility != "not_visible" and yoyo_reason:
+            errors.append(f"{name}.not_visible_reason requires not_visible visibility")
+        yoyo_bbox = bbox(record.get("bbox_pixel"))
+        if yoyo_visibility in {"visible", "partial"} and yoyo_bbox is None:
+            errors.append(f"{name}.visibility={yoyo_visibility} requires a bounding box")
+        if yoyo_visibility == "not_visible" and yoyo_bbox is not None:
+            errors.append(f"{name}.not_visible must not retain a bounding box")
+        orientation = str(record.get("trick_orientation", "unknown"))
+        if orientation not in TRICK_ORIENTATIONS:
+            errors.append(f"unsupported {name}.trick_orientation")
+        presentation_orientation = str(record.get("presentation_orientation") or {"normal": "frontal", "horizontal": "edge_horizontal", "not_applicable": "unknown"}.get(orientation, "unknown"))
+        if presentation_orientation not in {"frontal", "edge_horizontal", "edge_vertical", "unknown"}:
+            errors.append(f"unsupported {name}.presentation_orientation")
+        allowed_presentation = {"normal": {"frontal", "edge_vertical"}, "horizontal": {"edge_horizontal"}, "not_applicable": {"unknown"}}.get(orientation, {"unknown"})
+        if presentation_orientation not in allowed_presentation:
+            errors.append(f"{name}.presentation_orientation does not match trick_orientation")
     if str(label.get("scene_label", "unknown")) not in SCENE_LABELS:
         errors.append("unsupported scene_label")
-    if str(label.get("trick_orientation", "unknown")) not in TRICK_ORIENTATIONS:
-        errors.append("unsupported trick_orientation")
-    trick_orientation = str(label.get("trick_orientation", "unknown"))
-    presentation_orientation = str(
-        label.get("presentation_orientation")
-        or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(trick_orientation, "unknown")
-    )
-    if presentation_orientation not in {"frontal", "edge_horizontal", "edge_vertical", "unknown"}:
-        errors.append("unsupported presentation_orientation")
-    allowed_presentation = {
-        "normal": {"frontal", "edge_vertical"},
-        "horizontal": {"edge_horizontal"},
-        "not_applicable": {"unknown"},
-    }.get(trick_orientation, {"unknown"})
-    if presentation_orientation not in allowed_presentation:
-        errors.append("presentation_orientation does not match trick_orientation")
+    yoyo_visibility = str(active.get("visibility", "uncertain"))
+    trick_orientation = str(active.get("trick_orientation", "unknown"))
     strokes = label.get("string_polylines_pixel") or []
     valid_strokes = []
     if not isinstance(strokes, list):
@@ -1264,7 +1305,7 @@ def validate_label(
     observed_edge_count = 0
     yoyo_anchored = False
     anchor_threshold = max(8.0, math.hypot(width, height) * 0.08)
-    label_yoyo_bbox = label.get("yoyo_bbox_pixel")
+    label_yoyo_bbox = (label.get("active_yoyo") or {}).get("bbox_pixel")
     for path_index, path_item in enumerate(path_data.get("paths") or []):
         if not isinstance(path_item, dict):
             errors.append(f"string_path.paths[{path_index}] must be an object")
@@ -1354,9 +1395,9 @@ def command_review(args: argparse.Namespace) -> int:
         "decision": args.decision,
         "content_sha256": content_digest(label),
         "review_scope": (
-            ["visible_geometry", "pixel_alignment", "gaps", "yoyo_bbox"]
+            ["visible_geometry", "pixel_alignment", "gaps", "active_yoyo", "backup_yoyos"]
             if args.role == "geometry-critic"
-            else ["visibility", "topology", "anchors", "scene_label", "trick_orientation"]
+            else ["active_yoyo", "topology", "anchors", "scene_label"]
         ),
     }
     quality["reviews"].append(review)
@@ -1377,7 +1418,7 @@ def command_review(args: argparse.Namespace) -> int:
         label["string_review_status"] = "unresolved"
     else:
         label["string_review_status"] = "auto_labeled_needs_review"
-    label["review_status"] = "approved" if label.get("bbox_review_status") in ACCEPTED_REVIEW and label["string_review_status"] == "approved" else "partially_reviewed"
+    label["review_status"] = "approved" if (label.get("active_yoyo") or {}).get("bbox_review_status") in ACCEPTED_REVIEW and label["string_review_status"] == "approved" else "partially_reviewed"
     label["updated_at_utc"] = utc_now()
     write_json(path, label)
     print(json.dumps({"label": str(path), "string_review_status": label["string_review_status"], "current_approvals": len(current_approvals(label)), "gate": gate}, ensure_ascii=False, indent=2))
@@ -1460,11 +1501,15 @@ def render_layer(
                 draw_dashed(draw, points[start], points[end], colors[evidence], line_width)
             else:
                 draw.line([points[start], points[end]], fill=colors.get(evidence, "white"), width=line_width)
-    raw_bbox = label.get("yoyo_bbox_pixel")
-    if raw_bbox:
-        draw.rectangle([round(item * scale) for item in raw_bbox], outline=(50, 255, 70, 255), width=line_width + 1)
+    active_bbox = (label.get("active_yoyo") or {}).get("bbox_pixel")
+    if active_bbox:
+        draw.rectangle([round(item * scale) for item in active_bbox], outline=(50, 255, 70, 255), width=line_width + 1)
+    for backup in label.get("backup_yoyos") or []:
+        backup_bbox = backup.get("bbox_pixel") if isinstance(backup, dict) else None
+        if backup_bbox:
+            draw.rectangle([round(item * scale) for item in backup_bbox], outline=(255, 180, 40, 255), width=line_width + 1)
     header = (
-        f"string={label.get('string_visibility')} plane={label.get('trick_orientation')} "
+        f"string={label.get('string_visibility')} plane={(label.get('active_yoyo') or {}).get('trick_orientation')} "
         f"status={label.get('string_review_status')} "
         f"rev={(label.get('quality') or {}).get('revision', 0)} digest={content_digest(label)[:10]}"
     )
@@ -1479,9 +1524,10 @@ def geometry_bounds(label: dict[str, Any]) -> tuple[float, float, float, float] 
         points.extend(stroke)
     for path_item in (label.get("string_path") or {}).get("paths") or []:
         points.extend(path_item.get("points_pixel") or [])
-    raw_bbox = label.get("yoyo_bbox_pixel")
-    if raw_bbox:
-        points.extend([raw_bbox[:2], raw_bbox[2:]])
+    for record in [(label.get("active_yoyo") or {}), *(label.get("backup_yoyos") or [])]:
+        raw_bbox = record.get("bbox_pixel") if isinstance(record, dict) else None
+        if raw_bbox:
+            points.extend([raw_bbox[:2], raw_bbox[2:]])
     if not points:
         return None
     return min(item[0] for item in points), min(item[1] for item in points), max(item[0] for item in points), max(item[1] for item in points)
@@ -1524,9 +1570,10 @@ def command_render(args: argparse.Namespace) -> int:
             for item in polygon:
                 item[0] -= offset_x
                 item[1] -= offset_y
-        if detail_label.get("yoyo_bbox_pixel"):
-            box = detail_label["yoyo_bbox_pixel"]
-            detail_label["yoyo_bbox_pixel"] = [box[0] - offset_x, box[1] - offset_y, box[2] - offset_x, box[3] - offset_y]
+        for record in [(detail_label.get("active_yoyo") or {}), *(detail_label.get("backup_yoyos") or [])]:
+            if isinstance(record, dict) and record.get("bbox_pixel"):
+                box = record["bbox_pixel"]
+                record["bbox_pixel"] = [box[0] - offset_x, box[1] - offset_y, box[2] - offset_x, box[3] - offset_y]
         for path_item in (detail_label.get("string_path") or {}).get("paths") or []:
             for item in path_item.get("points_pixel") or []:
                 item[0] -= offset_x
@@ -1561,7 +1608,7 @@ def command_render(args: argparse.Namespace) -> int:
             "content_sha256": content_digest(label),
             "revision": int((label.get("quality") or {}).get("revision", 0)),
             "string_review_status": label.get("string_review_status"),
-            "trick_orientation": label.get("trick_orientation"),
+            "trick_orientation": (label.get("active_yoyo") or {}).get("trick_orientation"),
             "artifacts": {key: result[key] for key in ("grid", "overlay", "detail")},
         },
     )
@@ -1671,16 +1718,15 @@ def command_propagate(args: argparse.Namespace) -> int:
         candidate["bad_case"] = sorted(set((candidate.get("bad_case") or []) + ["temporal_propagation_failed"]))
     elif propagated_strokes and previous.get("string_visibility") == "visible":
         candidate["string_visibility"] = "partial"
-    raw_bbox = previous.get("yoyo_bbox_pixel")
-    if raw_bbox:
+    for record in [(candidate.get("active_yoyo") or {}), *(candidate.get("backup_yoyos") or [])]:
+        raw_bbox = record.get("bbox_pixel") if isinstance(record, dict) else None
+        if not raw_bbox:
+            continue
         corners = [raw_bbox[:2], raw_bbox[2:]]
         tracked_box, box_errors = flow_points(previous_gray, current_gray, corners, args.max_error)
         attempted_measurements += len(tracked_box)
         all_errors.extend(item for item in box_errors if item is not None)
-        if all(item is not None for item in tracked_box):
-            candidate["yoyo_bbox_pixel"] = tracked_box[0] + tracked_box[1]
-        else:
-            candidate["yoyo_bbox_pixel"] = None
+        record["bbox_pixel"] = tracked_box[0] + tracked_box[1] if all(item is not None for item in tracked_box) else None
     propagated_path = copy.deepcopy(previous.get("string_path") or {})
     for path_item in propagated_path.get("paths") or []:
         tracked, errors = flow_points(previous_gray, current_gray, path_item.get("points_pixel") or [], args.max_error)
@@ -1756,7 +1802,7 @@ def audit_collection(
             hash_groups[digest].add(group)
         counts["labels"] += 1
         counts[f"visibility:{label.get('string_visibility', 'missing')}"] += 1
-        counts[f"trick_orientation:{label.get('trick_orientation', 'missing')}"] += 1
+        counts[f"trick_orientation:{(label.get('active_yoyo') or {}).get('trick_orientation', 'missing')}"] += 1
         counts[f"status:{label.get('string_review_status', 'missing')}"] += 1
         counts["labels_with_errors"] += int(bool(gate["errors"]))
         counts["labels_with_warnings"] += int(bool(gate["warnings"]))
@@ -1947,9 +1993,9 @@ def command_export(args: argparse.Namespace) -> int:
                 "anchor_frame_index": label["anchor_frame_index"],
                 "image_sha256": label["image_sha256"],
                 "visibility": label.get("string_visibility"),
-                "trick_orientation": label.get("trick_orientation"),
-                "presentation_orientation": label.get("presentation_orientation")
-                or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(label.get("trick_orientation"), "unknown"),
+                "trick_orientation": (label.get("active_yoyo") or {}).get("trick_orientation"),
+                "presentation_orientation": (label.get("active_yoyo") or {}).get("presentation_orientation"),
+                "backup_yoyo_count": len(label.get("backup_yoyos") or []),
             }
         )
         exported_sources[group] = {

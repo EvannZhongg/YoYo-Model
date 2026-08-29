@@ -27,9 +27,9 @@ Repeat until approved or unresolved:
 6. Delete background, motion-trail, clothing, finger, floor, or blur-ghost edges.
 7. Split strokes at unsupported gaps, hand/body/neck occlusions, wraps behind a hand, and ambiguous crossings.
 8. Add every other visible route segment supported by pixels.
-9. Check `yoyo_bbox_pixel` when the yoyo is visible and every yoyo path anchor against that bbox.
+9. Check `active_yoyo.bbox_pixel` when the active yoyo is visible and every yoyo path anchor against that bbox; inspect every `backup_yoyos` bbox and orientation independently.
 10. Update anchors, visibility, path ordering, gaps, and `bad_case`.
-11. Verify `trick_orientation` from launch motion in nearby frames.
+11. Verify `active_yoyo.trick_orientation` from launch motion in nearby frames; backup yoyos default to horizontal unless manually corrected.
 12. Apply a compact patch for small edits, or a full candidate for rewrites.
 13. Render again.
 
@@ -48,7 +48,7 @@ The geometry critic checks pixel alignment, curvature, gaps, masks, shortcut
 edges, coordinate-frame correctness, and hidden-section leakage into visible
 geometry. The semantic critic checks visibility, negative status, attachment
 claims, topology, ordered route, `bad_case`, `scene_label`,
-`trick_orientation`, and neighbor coherence.
+`active_yoyo.trick_orientation`, backup-yoyo consistency, and neighbor coherence.
 
 The geometry critic must explicitly reject:
 
