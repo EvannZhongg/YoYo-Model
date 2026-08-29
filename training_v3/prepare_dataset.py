@@ -342,17 +342,42 @@ def _relative_stem(sample: Sample) -> Path:
     return Path(_safe_name(sample.source_group)) / f"{stem}{digest_suffix}"
 
 
-def _bbox_line(sample: Sample) -> str:
-    bbox = _valid_bbox(_active_yoyo(sample.annotation).get("bbox_pixel"))
-    if bbox is None:
-        return ""
+def _backup_bboxes(annotation: dict[str, Any]) -> list[tuple[float, float, float, float]]:
+    """Return reviewed visible backup-yoyo boxes suitable for detection labels."""
+    result: list[tuple[float, float, float, float]] = []
+    for item in annotation.get("backup_yoyos") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("visibility") or "") not in {"visible", "partial"}:
+            continue
+        if str(item.get("bbox_review_status") or "") not in {"reviewed", "approved"}:
+            continue
+        bbox = _valid_bbox(item.get("bbox_pixel"))
+        if bbox is not None:
+            result.append(bbox)
+    return result
+
+
+def _detection_lines(
+    sample: Sample,
+    include_backup: bool = False,
+) -> tuple[str, int]:
+    """Serialize active and optionally selected backup boxes as YOLO rows."""
     width, height = (int(value) for value in sample.annotation["image_size"])
-    x1, y1, x2, y2 = bbox
-    x1, x2 = sorted((max(0.0, min(x1, width)), max(0.0, min(x2, width))))
-    y1, y2 = sorted((max(0.0, min(y1, height)), max(0.0, min(y2, height))))
-    if x2 <= x1 or y2 <= y1:
-        return ""
-    return f"0 {((x1+x2)/2)/width:.6f} {((y1+y2)/2)/height:.6f} {(x2-x1)/width:.6f} {(y2-y1)/height:.6f}\n"
+    boxes: list[tuple[float, float, float, float]] = []
+    active = _valid_bbox(_active_yoyo(sample.annotation).get("bbox_pixel"))
+    if active is not None:
+        boxes.append(active)
+    if include_backup:
+        boxes.extend(_backup_bboxes(sample.annotation))
+    lines: list[str] = []
+    for x1, y1, x2, y2 in boxes:
+        x1, x2 = sorted((max(0.0, min(x1, width)), max(0.0, min(x2, width))))
+        y1, y2 = sorted((max(0.0, min(y1, height)), max(0.0, min(y2, height))))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        lines.append(f"0 {((x1+x2)/2)/width:.6f} {((y1+y2)/2)/height:.6f} {(x2-x1)/width:.6f} {(y2-y1)/height:.6f}\n")
+    return "".join(lines), max(0, len(lines) - int(active is not None))
 
 
 def _normalized_polygons(annotation: dict[str, Any], line_width_px: int) -> list[list[tuple[float, float]]]:
@@ -425,6 +450,7 @@ def build_training_dataset(
     line_width_px: int = 8,
     clear: bool = False,
     freeze_splits_from: Path | None = None,
+    include_backup_yoyos: bool = False,
 ) -> dict[str, Any]:
     roots = sorted({Path(value).resolve() for value in source_roots}, key=lambda path: path.name)
     if not roots:
@@ -451,6 +477,17 @@ def build_training_dataset(
         test_ratio,
         frozen_assignment=frozen_assignment,
     )
+    backup_training_keys: set[Path] = set()
+    if include_backup_yoyos:
+        # One representative frame per source video prevents near-identical
+        # backup annotations from dominating the training distribution.
+        candidates: dict[str, list[Sample]] = defaultdict(list)
+        for sample in samples:
+            if assignment[sample.source_group] == "train" and _backup_bboxes(sample.annotation):
+                candidates[sample.source_group].append(sample)
+        for group, values in candidates.items():
+            selected = max(values, key=lambda item: (len(_backup_bboxes(item.annotation)), str(item.label_path)))
+            backup_training_keys.add(selected.label_path)
     new_train_source_groups = sorted(set(assignment) - set(frozen_assignment or {}))
     annotation_sha256 = _annotation_digest(samples)
     identity = {
@@ -461,6 +498,7 @@ def build_training_dataset(
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
         "line_width_px": line_width_px,
+        "include_backup_yoyos": bool(include_backup_yoyos),
         "assignment": assignment,
     }
     dataset_id = f"yoyo_unified_{hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()[:12]}"
@@ -502,13 +540,18 @@ def build_training_dataset(
         detection_label = detection_root / "labels" / split / relative.with_suffix(".txt")
         string_label = string_root / "labels" / split / relative.with_suffix(".txt")
         string_label.parent.mkdir(parents=True, exist_ok=True)
-        if sample.yoyo_known:
+        include_backup_for_sample = include_backup_yoyos and sample.label_path in backup_training_keys
+        if sample.yoyo_known or include_backup_for_sample:
             detection_label.parent.mkdir(parents=True, exist_ok=True)
-            detection_label.write_text(_bbox_line(sample), encoding="utf-8")
+            detection_lines, backup_count = _detection_lines(sample, include_backup_for_sample)
+            detection_label.write_text(detection_lines, encoding="utf-8")
+        else:
+            backup_count = 0
         string_label.write_text(_string_lines(sample, line_width_px), encoding="utf-8")
         counts[split]["samples"] += 1
         counts[split][f"orientation:{sample.orientation}"] += int(sample.yoyo_known)
         counts[split]["detection_samples"] += int(sample.yoyo_known)
+        counts[split]["backup_detection_boxes"] += backup_count
         counts[split]["orientation_samples"] += int(sample.yoyo_known)
         counts[split]["yoyo_positive"] += int(sample.has_yoyo)
         counts[split]["yoyo_negative"] += int(sample.yoyo_known and not sample.has_yoyo)
@@ -547,6 +590,8 @@ def build_training_dataset(
                     or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(sample.orientation, "unknown")
                 ),
                 "yoyo_positive": sample.has_yoyo,
+                "backup_yoyo_count": len(_backup_bboxes(sample.annotation)),
+                "backup_yoyos_used_for_detection": backup_count,
                 "yoyo_negative": sample.yoyo_known and not sample.has_yoyo,
                 "yoyo_ignored": not sample.yoyo_known,
                 "yoyo_visibility": str(_active_yoyo(sample.annotation).get("visibility")),
@@ -648,14 +693,19 @@ def build_training_dataset(
         "image_materialization": dict(transfer_modes),
         "records": records,
         "label_semantics": {
-            "detection": "visible or partial yoyo uses quality-approved bbox; reviewed not_visible is negative; uncertain is excluded",
+            "detection": "active visible or partial yoyo uses quality-approved bbox; optional backup visible or partial boxes use reviewed bbox and one representative train frame per source_group; reviewed not_visible is negative; uncertain is excluded",
             "string_segmentation": "approved masks or buffered visible centerlines; not_visible is a reviewed negative",
             "orientation": "three-way trick_orientation including not_applicable; uncertain yoyo is excluded",
         },
         "task_input_dependencies": {
-            "detection": ["image", "active_yoyo.visibility", "active_yoyo.not_visible_reason", "active_yoyo.bbox_pixel"],
+            "detection": ["image", "active_yoyo.visibility", "active_yoyo.not_visible_reason", "active_yoyo.bbox_pixel", "backup_yoyos[].visibility", "backup_yoyos[].bbox_pixel"],
             "string_segmentation": ["image", "string_mask_or_polyline"],
             "orientation": ["image", "active_yoyo.visibility", "active_yoyo.bbox_pixel_or_fixed_negative_crop", "active_yoyo.trick_orientation"],
+        },
+        "backup_yoyo_training": {
+            "enabled": bool(include_backup_yoyos),
+            "selection": "max_reviewed_backup_boxes_per_train_source_group",
+            "selected_frame_count": len(backup_training_keys),
         },
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -677,6 +727,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--test-ratio", type=float, default=0.15)
     parser.add_argument("--line-width-px", type=int, default=8)
+    parser.add_argument(
+        "--include-backup-yoyos",
+        action="store_true",
+        help="Add reviewed backup-yoyo boxes to one representative train frame per source group.",
+    )
     parser.add_argument("--clear", action="store_true")
     split_group = parser.add_mutually_exclusive_group()
     split_group.add_argument(
@@ -712,6 +767,7 @@ def main() -> int:
         line_width_px=args.line_width_px,
         clear=args.clear,
         freeze_splits_from=freeze_splits_from,
+        include_backup_yoyos=args.include_backup_yoyos,
     )
     print(json.dumps({key: manifest[key] for key in ("dataset_id", "sample_count", "source_group_count", "counts", "output_dir")}, ensure_ascii=False, indent=2))
     return 0

@@ -146,6 +146,49 @@ class FreshTrainingDatasetTests(unittest.TestCase):
             self.assertFalse((base / "output" / "detection" / "labels" / split / relative.with_suffix(".txt")).exists())
             self.assertFalse(any((base / "output" / "orientation" / split / "normal").glob("a__sample_0*")))
 
+    def test_backup_yoyos_are_added_once_per_train_source_group_when_enabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "annotations" / "source"
+            self._write_source(source, ["a", "b", "c", "d", "e", "f"])
+            for group in ("a", "b", "c"):
+                for index in (1, 2):
+                    label = source / "labels" / group / f"sample_{index}.json"
+                    annotation = json.loads(label.read_text(encoding="utf-8"))
+                    annotation["backup_yoyos"] = [
+                        {
+                            "visibility": "visible",
+                            "bbox_pixel": [4, 4, 12, 12],
+                            "bbox_review_status": "reviewed",
+                        },
+                        {
+                            "visibility": "partial",
+                            "bbox_pixel": [16, 8, 24, 20],
+                            "bbox_review_status": "reviewed",
+                        },
+                    ]
+                    label.write_text(json.dumps(annotation), encoding="utf-8")
+            manifest = build_training_dataset(
+                [source],
+                base / "output",
+                seed=7,
+                include_backup_yoyos=True,
+            )
+            self.assertTrue(manifest["backup_yoyo_training"]["enabled"])
+            expected_groups = sum(
+                group in {"a", "b", "c"}
+                for group in manifest["split_policy"]["source_groups"]["train"]
+            )
+            self.assertEqual(manifest["backup_yoyo_training"]["selected_frame_count"], expected_groups)
+            train_records = [item for item in manifest["records"] if item["split"] == "train"]
+            used = [item for item in train_records if item["backup_yoyos_used_for_detection"]]
+            self.assertEqual(len(used), expected_groups)
+            self.assertEqual(sum(item["backup_yoyos_used_for_detection"] for item in used), expected_groups * 2)
+            for item in used:
+                label = Path(item["canonical_label"]).relative_to(base / "output" / "canonical" / "labels")
+                detection = base / "output" / "detection" / "labels" / "train" / label.with_suffix(".txt")
+                self.assertEqual(len([line for line in detection.read_text().splitlines() if line.strip()]), 3)
+
     def test_canonical_rebuild_keeps_image_hash_suffix_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
