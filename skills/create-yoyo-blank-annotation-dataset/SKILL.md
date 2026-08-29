@@ -8,7 +8,7 @@ description: Create or append deduplicated blank agent_yoyo_string_annotation_v5
 Create samples under `datasets/<dataset-name>` with empty geometry and these
 manual-queue defaults:
 
-- `visibility=visible`
+- `visibility=uncertain` and `yoyo_not_visible_reason=null`
 - `trick_orientation=normal`
 - `string_visibility=partial`
 

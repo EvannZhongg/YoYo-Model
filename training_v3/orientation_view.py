@@ -65,12 +65,13 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
     train_paths: dict[str, list[Path]] = defaultdict(list)
     records: list[dict[str, Any]] = []
     for record in parent["records"]:
+        if bool(record.get("yoyo_ignored", False)):
+            continue
         annotation = json.loads(Path(record["canonical_label"]).read_text(encoding="utf-8"))
         source = Path(record["canonical_image"])
         split = str(record["split"])
         orientation = str(record["trick_orientation"])
-        yoyo_visibility_counts["visible"] += int(_yoyo_bbox(annotation) is not None)
-        yoyo_visibility_counts["not_visible"] += int(_yoyo_bbox(annotation) is None)
+        yoyo_visibility_counts[str(annotation.get("visibility") or "uncertain")] += 1
         name = f"{record['source_group']}__{source.stem}.jpg"
         target = output / split / orientation / name
         target.parent.mkdir(parents=True, exist_ok=True)

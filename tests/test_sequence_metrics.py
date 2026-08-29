@@ -129,6 +129,26 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["excluded_unknown"]["string"], 1)
         self.assertEqual(result["string"]["presence"]["known_frames"], 3)
 
+    def test_uncertain_yoyo_is_excluded_but_reviewed_absent_is_negative(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset, predictions = self._dataset(Path(directory))
+            uncertain_path = dataset / "canonical" / "labels" / "video-a" / "frame-002.json"
+            uncertain = json.loads(uncertain_path.read_text(encoding="utf-8"))
+            uncertain["visibility"] = "uncertain"
+            uncertain["yoyo_bbox_pixel"] = None
+            uncertain["bbox_review_status"] = "needs_review"
+            uncertain_path.write_text(json.dumps(uncertain), encoding="utf-8")
+            absent_path = dataset / "canonical" / "labels" / "video-a" / "frame-003.json"
+            absent = json.loads(absent_path.read_text(encoding="utf-8"))
+            absent["visibility"] = "not_visible"
+            absent["yoyo_not_visible_reason"] = "absent"
+            absent["yoyo_bbox_pixel"] = None
+            absent_path.write_text(json.dumps(absent), encoding="utf-8")
+            result = evaluate_sequence(dataset, predictions)
+        self.assertEqual(result["excluded_unknown"]["yoyo"], 1)
+        self.assertEqual(result["yoyo"]["presence"]["known_frames"], 3)
+        self.assertEqual(result["yoyo"]["presence"]["fp"], 1)
+
     def test_frame_range_can_hold_out_a_contiguous_subsequence(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset, predictions = self._dataset(Path(directory))

@@ -478,7 +478,7 @@ def main() -> int:
         v_candidate.write_text(
             json.dumps(
                 {
-                    "visibility": "visible",
+                    "visibility": "uncertain",
                     "string_visibility": "visible",
                     "string_mask_polygons_pixel": [v_polygon],
                     "string_path": {
@@ -503,7 +503,7 @@ def main() -> int:
         shortcut_candidate.write_text(
             json.dumps(
                 {
-                    "visibility": "visible",
+                    "visibility": "uncertain",
                     "string_visibility": "visible",
                     "string_polylines_pixel": [[[100, 80], [540, 80]]],
                     "string_mask_polygons_pixel": [v_polygon],

@@ -17,9 +17,8 @@ from config import BASE_DIR
 
 DATASETS_DIR = BASE_DIR / "datasets"
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
-VALID_YOYO_VISIBILITY = {
-    "visible", "partially_visible", "occluded", "out_of_frame", "absent", "uncertain",
-}
+VALID_YOYO_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
+VALID_YOYO_NOT_VISIBLE_REASONS = {"occluded", "out_of_frame", "absent"}
 VALID_TRICK_ORIENTATIONS = {"normal", "horizontal", "not_applicable"}
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
 VALID_REVIEW_STATUS = {"approved", "reviewed", "unresolved", "needs_review"}
@@ -174,7 +173,9 @@ def _sample_summary(
         "group": str(document.get("source_group") or label_path.parent.name),
         "frame_index": document.get("frame_index"),
         "yoyo_visibility": str(document.get("visibility") or ("visible" if bbox else "uncertain")),
+        "yoyo_not_visible_reason": str(document.get("yoyo_not_visible_reason") or ""),
         "has_yoyo": isinstance(bbox, list) and len(bbox) == 4,
+        "yoyo_needs_review": str(document.get("visibility") or "uncertain") == "uncertain",
         "string_visibility": str(document.get("string_visibility") or "uncertain"),
         "string_count": len(polylines) if isinstance(polylines, list) else 0,
         "review_status": str(document.get("string_review_status") or "unresolved"),
@@ -285,6 +286,8 @@ def set_annotation_sample_reviewed(
     _, labels_root, _, label_path = _managed_label(dataset_path, sample_key)
     key = label_path.relative_to(labels_root).as_posix()
     reviewer_name = str(reviewer or "workbench-reviewer").strip() or "workbench-reviewer"
+    if confirmed and _read_document(label_path).get("visibility") == "uncertain":
+        raise ValueError("uncertain yoyo visibility must be resolved before verification")
     with _STORAGE_LOCK:
         document = _read_review_map()
         dataset_key = _review_dataset_key(path)
@@ -343,8 +346,12 @@ def set_all_annotation_samples_reviewed(
             if key not in current_keys:
                 samples.pop(key)
         updated_count = 0
+        removed_uncertain_count = 0
         for label_path in label_paths:
             key = label_path.relative_to(labels_root).as_posix()
+            if _read_document(label_path).get("visibility") == "uncertain":
+                removed_uncertain_count += int(samples.pop(key, None) is not None)
+                continue
             label_size_bytes, label_mtime_ns = _file_revision(label_path)
             existing = samples.get(key)
             if (
@@ -363,7 +370,7 @@ def set_all_annotation_samples_reviewed(
                 "label_mtime_ns": label_mtime_ns,
             }
             updated_count += 1
-        if updated_count or removed_orphan_count:
+        if updated_count or removed_orphan_count or removed_uncertain_count:
             document["updated_at_utc"] = confirmed_at
             payload = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
             atomic_write_text(REVIEW_MAP_PATH, payload)
@@ -373,6 +380,7 @@ def set_all_annotation_samples_reviewed(
         "reviewed_count": len(samples),
         "updated_count": updated_count,
         "removed_orphan_count": removed_orphan_count,
+        "removed_uncertain_count": removed_uncertain_count,
         "reviewer": reviewer_name,
     }
 
@@ -441,11 +449,17 @@ def save_annotation_sample(
         raise ValueError("invalid image_size in annotation")
 
     yoyo_visibility = str(edit.get("yoyo_visibility") or "uncertain")
+    yoyo_not_visible_reason = str(edit.get("yoyo_not_visible_reason") or "")
     trick_orientation = str(edit.get("trick_orientation") or "")
     string_visibility = str(edit.get("string_visibility") or "uncertain")
     review_status = str(edit.get("string_review_status") or "unresolved")
     if yoyo_visibility not in VALID_YOYO_VISIBILITY:
         raise ValueError("invalid yoyo visibility")
+    if yoyo_visibility == "not_visible":
+        if yoyo_not_visible_reason not in VALID_YOYO_NOT_VISIBLE_REASONS:
+            raise ValueError("not-visible yoyo requires a valid reason")
+    elif yoyo_not_visible_reason:
+        raise ValueError("yoyo not-visible reason requires not_visible visibility")
     if trick_orientation not in VALID_TRICK_ORIENTATIONS:
         raise ValueError("invalid trick orientation")
     if string_visibility not in VALID_STRING_VISIBILITY:
@@ -459,10 +473,10 @@ def save_annotation_sample(
         raise ValueError("string polylines must be a list")
     polylines = [[_point(point, width, height) for point in line] for line in raw_polylines]
     polylines = [line for line in polylines if len(line) >= 2]
-    if yoyo_visibility in {"absent", "out_of_frame"}:
+    if yoyo_visibility == "not_visible":
         bbox = None
-    elif yoyo_visibility == "visible" and bbox is None:
-        raise ValueError("visible yoyo requires a bounding box")
+    elif yoyo_visibility in {"visible", "partial"} and bbox is None:
+        raise ValueError("visible or partial yoyo requires a bounding box")
     if string_visibility == "not_visible":
         polylines = []
     elif string_visibility in {"visible", "partial"} and not polylines:
@@ -477,6 +491,7 @@ def save_annotation_sample(
         ]
     polylines_2d = [_to_2d(line, width, height) for line in polylines]
     document["visibility"] = yoyo_visibility
+    document["yoyo_not_visible_reason"] = yoyo_not_visible_reason or None
     document["trick_orientation"] = trick_orientation
     document["yoyo_bbox_pixel"] = bbox
     document["yoyo_bbox_2d"] = bbox_2d
@@ -490,7 +505,11 @@ def save_annotation_sample(
     document["string_polyline_2d"] = polylines_2d[0] if polylines_2d else None
     document["string_mask_polygons_pixel"] = None
     document["string_review_status"] = review_status
-    document["bbox_review_status"] = str(edit.get("bbox_review_status") or "reviewed")
+    document["bbox_review_status"] = (
+        "needs_review"
+        if yoyo_visibility == "uncertain"
+        else str(edit.get("bbox_review_status") or "reviewed")
+    )
     document["notes"] = str(edit.get("notes") or "").strip()
     document["updated_at_utc"] = _utc_now()
 
@@ -521,7 +540,7 @@ def save_annotation_sample(
         "actor": str(edit.get("reviewer") or "workbench-reviewer").strip() or "workbench-reviewer",
         "before_sha256": before_digest,
         "fields": [
-            "visibility", "trick_orientation", "yoyo_bbox_pixel", "string_visibility", "string_polylines_pixel",
+            "visibility", "yoyo_not_visible_reason", "trick_orientation", "yoyo_bbox_pixel", "string_visibility", "string_polylines_pixel",
             "string_review_status", "bbox_review_status", "notes",
         ],
     }
@@ -596,7 +615,7 @@ DATASET_ANNOTATION_HTML = r"""
       <div class="yda__list-tools">
         <input id="yda-search" type="search" placeholder="搜索文件或分组">
         <select id="yda-filter" aria-label="筛选标注状态">
-          <option value="all">全部数据</option><option value="needs_yoyo">缺少悠悠球框</option>
+          <option value="all">全部数据</option><option value="needs_yoyo">悠悠球待确认</option>
           <option value="needs_string">缺少绳线</option><option value="unresolved">待审阅</option>
           <option value="unreviewed">未核验</option><option value="reviewed">已核验</option>
         </select>
@@ -634,7 +653,8 @@ DATASET_ANNOTATION_HTML = r"""
       <fieldset id="yda-fields" disabled>
         <div class="yda__editor-scroll">
           <legend>悠悠球识别</legend>
-          <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">可见</option><option value="partially_visible">部分可见</option><option value="occluded">被遮挡</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option><option value="uncertain">不确定</option></select></label>
+          <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
+          <label id="yda-yoyo-not-visible-reason-field" hidden>不可见原因<select id="yda-yoyo-not-visible-reason"><option value="">请选择</option><option value="occluded">被遮挡</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option></select></label>
           <label>方向<select id="yda-trick-orientation"><option value="normal">常规（normal）</option><option value="horizontal">水平（horizontal）</option><option value="not_applicable">不适用（not_applicable）</option></select></label>
           <div class="yda__coords"><label>X1<input id="yda-x1" type="number" min="0" step="1"></label><label>Y1<input id="yda-y1" type="number" min="0" step="1"></label><label>X2<input id="yda-x2" type="number" min="0" step="1"></label><label>Y2<input id="yda-y2" type="number" min="0" step="1"></label></div>
           <button type="button" id="yda-clear-box">清除悠悠球框</button>
@@ -754,9 +774,10 @@ const toast = message => { const node=$("#yda-toast"); node.textContent=message;
 const escapeHtml = value => String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fileUrl = path => { const config=window.gradio_config||{}; const root=String(config.root||window.location.origin).replace(/\/$/,""); const prefix=`/${String(config.api_prefix||"gradio_api").replace(/^\/+|\/+$/g,"")}`; return `${root}${prefix}/file=${encodeURIComponent(path)}`; };
 const cloneGeometry = () => ({bbox:state.bbox?state.bbox.slice():null,lines:state.lines.map(line=>line.map(point=>point.slice()))});
-const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-visibility").value,trickOrientation:$("#yda-trick-orientation").value,stringVisibility:$("#yda-string-visibility").value,reviewStatus:$("#yda-review-status").value,notes:$("#yda-notes").value});
+const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-visibility").value,yoyoNotVisibleReason:$("#yda-yoyo-not-visible-reason").value,trickOrientation:$("#yda-trick-orientation").value,stringVisibility:$("#yda-string-visibility").value,reviewStatus:$("#yda-review-status").value,notes:$("#yda-notes").value});
 function pushHistory(){ state.history.push(cloneGeometry()); if(state.history.length>60)state.history.shift(); }
-function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed);button.disabled=!state.sample||state.dirty;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":"核验完成"; }
+function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed),uncertain=$("#yda-yoyo-visibility").value==="uncertain";button.disabled=!state.sample||state.dirty||uncertain;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":uncertain?"状态待确认":"核验完成"; }
+function syncYoyoFields(){const visibility=$("#yda-yoyo-visibility").value,notVisible=visibility==="not_visible";$("#yda-yoyo-not-visible-reason-field").hidden=!notVisible;$("#yda-yoyo-not-visible-reason").disabled=!notVisible;["x1","y1","x2","y2"].forEach(name=>$("#yda-"+name).disabled=notVisible);$("#yda-clear-box").disabled=notVisible;const boxTool=element.querySelector('#yda-tools button[data-tool="box"]');boxTool.disabled=notVisible;if(notVisible&&state.tool==="box")setTool("select");}
 function syncResetButton(){ $("#yda-reset").disabled=!state.sample||!state.dirty; }
 function syncAnnotationVisibility(){ const button=$("#yda-toggle-annotations");button.textContent=state.annotationsVisible?"隐藏标注":"显示标注";button.setAttribute("aria-pressed",String(!state.annotationsVisible)); }
 function setAnnotationsVisible(visible){ state.annotationsVisible=Boolean(visible);syncAnnotationVisibility();renderCanvas(); }
@@ -771,20 +792,21 @@ function hitTest(point){ if(!state.annotationsVisible)return null;const radius=1
 function renderCanvas(){ if(!state.image)return; const w=state.image.naturalWidth,h=state.image.naturalHeight; const maxWidth=Math.max(180,$("#yda-viewport").clientWidth-24), maxHeight=Math.max(180,$("#yda-viewport").clientHeight-24); const fit=Math.min(maxWidth/w,maxHeight/h,1); const cssW=Math.round(w*fit*state.zoom),cssH=Math.round(h*fit*state.zoom); const dpr=window.devicePixelRatio||1; canvas.width=Math.max(1,Math.round(cssW*dpr));canvas.height=Math.max(1,Math.round(cssH*dpr));canvas.style.width=`${cssW}px`;canvas.style.height=`${cssH}px`;ctx.setTransform(dpr*cssW/w,0,0,dpr*cssH/h,0,0);ctx.clearRect(0,0,w,h);ctx.drawImage(state.image,0,0,w,h);if(!state.annotationsVisible)return; const scale=w/cssW; if(state.bbox){ctx.strokeStyle="#35d39a";ctx.lineWidth=3*scale;ctx.strokeRect(state.bbox[0],state.bbox[1],state.bbox[2]-state.bbox[0],state.bbox[3]-state.bbox[1]); [[state.bbox[0],state.bbox[1]],[state.bbox[2],state.bbox[1]],[state.bbox[2],state.bbox[3]],[state.bbox[0],state.bbox[3]]].forEach(p=>{ctx.fillStyle="#fff";ctx.strokeStyle="#176b55";ctx.lineWidth=2*scale;ctx.beginPath();ctx.arc(p[0],p[1],5*scale,0,Math.PI*2);ctx.fill();ctx.stroke();});} state.lines.forEach((line,index)=>{if(line.length<1)return;const lineColor=index===state.selectedLine?"#ffae42":"#43b8ff";ctx.strokeStyle=lineColor;ctx.lineWidth=(index===state.selectedLine?4:3)*scale;ctx.beginPath();ctx.moveTo(line[0][0],line[0][1]);line.slice(1).forEach(p=>ctx.lineTo(p[0],p[1]));ctx.stroke();line.forEach((p,pointIndex)=>{const selected=state.selectedLine===index&&state.selectedPoint?.line===index&&state.selectedPoint?.point===pointIndex;ctx.fillStyle=selected?"#ff4d4f":lineColor;ctx.strokeStyle=selected?"#fff":lineColor;ctx.lineWidth=(selected?2:0)*scale;ctx.beginPath();ctx.arc(p[0],p[1],(selected?7:4.5)*scale,0,Math.PI*2);ctx.fill();if(selected)ctx.stroke();});}); }
 function renderLineList(){ const node=$("#yda-line-list"); node.innerHTML=state.lines.length?state.lines.map((line,index)=>`<button type="button" class="yda__line-row ${index===state.selectedLine?'is-active':''}" data-line="${index}"><span>绳线 ${index+1}</span><span>${line.length} 个点</span></button>`).join(""):"<div class='yda__line-row'><span>没有绳线</span></div>"; node.querySelectorAll("button").forEach(button=>button.onclick=()=>{state.selectedLine=Number(button.dataset.line);state.selectedPoint=null;renderCanvas();renderLineList();}); }
 function syncCoordinateInputs(){ const values=state.bbox||["","","",""]; ["x1","y1","x2","y2"].forEach((name,index)=>$("#yda-"+name).value=values[index]); }
-function filteredSamples(){ const query=$("#yda-search").value.trim().toLowerCase(),filter=$("#yda-filter").value; return state.samples.filter(sample=>{ const text=`${sample.name} ${sample.group}`.toLowerCase(); if(query&&!text.includes(query))return false; if(filter==="needs_yoyo"&&sample.has_yoyo)return false; if(filter==="needs_string"&&sample.string_count>0)return false; if(filter==="unresolved"&&!['unresolved','needs_review'].includes(sample.review_status))return false; if(filter==="unreviewed"&&sample.reviewed)return false; if(filter==="reviewed"&&!sample.reviewed)return false; return true; }); }
-function renderSamples(){ state.filtered=filteredSamples(); const reviewed=state.samples.filter(sample=>sample.reviewed).length;$("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条 · 已核验 ${reviewed}`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.has_yoyo?'':'yda__badge--warn'}">悠悠球${sample.has_yoyo?'有框':'无框'}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span><span class="yda__badge ${sample.reviewed?'yda__badge--ok':'yda__badge--warn'}">${sample.reviewed?'已核验':'未核验'}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
+function filteredSamples(){ const query=$("#yda-search").value.trim().toLowerCase(),filter=$("#yda-filter").value; return state.samples.filter(sample=>{ const text=`${sample.name} ${sample.group}`.toLowerCase(); if(query&&!text.includes(query))return false; if(filter==="needs_yoyo"&&!sample.yoyo_needs_review)return false; if(filter==="needs_string"&&sample.string_count>0)return false; if(filter==="unresolved"&&!['unresolved','needs_review'].includes(sample.review_status))return false; if(filter==="unreviewed"&&sample.reviewed)return false; if(filter==="reviewed"&&!sample.reviewed)return false; return true; }); }
+function yoyoStateText(sample){if(sample.yoyo_visibility==="visible")return "完整可见";if(sample.yoyo_visibility==="partial")return "部分可见";if(sample.yoyo_visibility==="uncertain")return "不确定";return {occluded:"被遮挡",out_of_frame:"画面外",absent:"不存在"}[sample.yoyo_not_visible_reason]||"不可见";}
+function renderSamples(){ state.filtered=filteredSamples(); const reviewed=state.samples.filter(sample=>sample.reviewed).length;$("#yda-list-summary").textContent=`${state.filtered.length} / ${state.samples.length} 条 · 已核验 ${reviewed}`; $("#yda-sample-list").innerHTML=state.filtered.map(sample=>`<li><button type="button" data-key="${escapeHtml(sample.key)}" class="${state.sample?.key===sample.key?'is-active':''}"><span class="yda__sample-title">${escapeHtml(sample.name)}</span><span class="yda__sample-meta"><span>${escapeHtml(sample.group)}</span><span>f${sample.frame_index??'-'}</span></span><span class="yda__badges"><span class="yda__badge ${sample.yoyo_needs_review?'yda__badge--warn':'yda__badge--ok'}">悠悠球 ${yoyoStateText(sample)}</span><span class="yda__badge ${sample.string_count?'':'yda__badge--warn'}">绳线 ${sample.string_count}</span><span class="yda__badge ${sample.reviewed?'yda__badge--ok':'yda__badge--warn'}">${sample.reviewed?'已核验':'未核验'}</span></span></button></li>`).join(""); $("#yda-sample-list").querySelectorAll("button").forEach(button=>button.onclick=()=>selectSample(button.dataset.key)); }
 const normalizedDatasetPath = value => String(value||"").replace(/\\/g,"/").replace(/\/+$/,"").toLowerCase();
 const datasetNameFromPath = value => String(value||"").split(/[\\/]/).filter(Boolean).at(-1)||String(value||"");
 function syncDatasetChoice(path){ const select=$("#yda-dataset-select"),normalized=normalizedDatasetPath(path);let option=Array.from(select.options).find(item=>normalizedDatasetPath(item.value)===normalized);if(!option&&path){option=new Option(datasetNameFromPath(path),path);select.add(option);}if(option)select.value=option.value; }
 let datasetListRequest=0;
 async function refreshDatasetOptions(preferredPath=""){ const request=++datasetListRequest,datasets=await server.ui_list_annotation_datasets();if(request!==datasetListRequest)return datasets;const select=$("#yda-dataset-select"),selectedPath=preferredPath||select.value||$("#yda-dataset-path").value.trim();select.replaceChildren();datasets.forEach(item=>select.add(new Option(item.name,item.path)));if(!datasets.length&&!selectedPath)select.add(new Option("未发现数据集",""));syncDatasetChoice(selectedPath);return datasets; }
-async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.bbox=Array.isArray(annotation.yoyo_bbox_pixel)?annotation.yoyo_bbox_pixel.map(Number):null; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent=result.reviewed?"已核验":"已加载"; $("#yda-fields").disabled=false; $("#yda-yoyo-visibility").value=annotation.visibility|| (state.bbox?"visible":"uncertain"); $("#yda-trick-orientation").value=annotation.trick_orientation; $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-notes").value=annotation.notes||""; $("#yda-validation").textContent="";state.baseline=editorSnapshot();syncReviewButton();syncResetButton(); const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial){$("#yda-empty").textContent="图像加载失败";toast("图像加载失败");}}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
+async function selectSample(key){ if(state.dirty&&!window.confirm("当前修改尚未保存，确定切换数据吗？"))return; const request=++state.loadSerial;state.image=null;canvas.classList.remove("is-ready");$("#yda-empty").hidden=false;$("#yda-empty").textContent="正在加载图像...";$("#yda-status").textContent="正在加载标注..."; try{ const result=await server.ui_load_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:key});if(request!==state.loadSerial)return; state.sample=result; const annotation=result.annotation; state.bbox=Array.isArray(annotation.yoyo_bbox_pixel)?annotation.yoyo_bbox_pixel.map(Number):null; state.lines=(annotation.string_polylines_pixel||[]).map(line=>line.map(point=>point.map(Number))); state.activeLine=null;state.selectedLine=null;state.history=[];state.dirty=false; $("#yda-dirty").textContent=result.reviewed?"已核验":"已加载"; $("#yda-fields").disabled=false; $("#yda-yoyo-visibility").value=annotation.visibility|| (state.bbox?"visible":"uncertain"); $("#yda-yoyo-not-visible-reason").value=annotation.yoyo_not_visible_reason||"";syncYoyoFields(); $("#yda-trick-orientation").value=annotation.trick_orientation; $("#yda-string-visibility").value=annotation.string_visibility||"uncertain"; const status=annotation.string_review_status||"unresolved"; $("#yda-review-status").value=['approved','reviewed','needs_review','unresolved'].includes(status)?status:"unresolved"; $("#yda-notes").value=annotation.notes||""; $("#yda-validation").textContent="";state.baseline=editorSnapshot();syncReviewButton();syncResetButton(); const image=new Image(); image.onload=()=>{if(request!==state.loadSerial)return;state.image=image;canvas.classList.add("is-ready");$("#yda-empty").hidden=true;renderCanvas();}; image.onerror=()=>{if(request===state.loadSerial){$("#yda-empty").textContent="图像加载失败";toast("图像加载失败");}}; image.src=fileUrl(result.image_path); state.current=state.samples.findIndex(item=>item.key===key); $("#yda-position").textContent=`${state.current+1} / ${state.samples.length}`; $("#yda-prev").disabled=state.current<=0;$("#yda-next").disabled=state.current>=state.samples.length-1; renderSamples();renderLineList();syncCoordinateInputs(); $("#yda-status").textContent=result.label_path; }catch(error){if(request===state.loadSerial)toast(`加载失败：${error?.message||error}`);} }
 async function openDataset(){ const path=$("#yda-dataset-path").value.trim(); if(!path)return toast("请输入或选择数据集路径");if(state.dirty&&!window.confirm("当前修改尚未保存，确定打开其他数据集吗？"))return; $("#yda-status").textContent="正在扫描数据集..."; try{ const result=await server.ui_open_annotation_dataset({dataset_path:path}); $("#yda-dataset-path").value=result.dataset_path;syncDatasetChoice(result.dataset_path);refreshDatasetOptions(result.dataset_path).catch(error=>toast(`刷新数据集失败：${error?.message||error}`));state.dataset=result;state.samples=result.samples;state.sample=null;state.dirty=false;renderSamples(); $("#yda-status").textContent=`已加载 ${result.sample_count} 条数据${result.error_count?`，${result.error_count} 条无法读取`:''}`; await selectSample(result.samples[0].key); }catch(error){$("#yda-status").textContent="数据集打开失败";toast(error?.message||error);} }
 function finishLine(){ if(state.activeLine===null)return; if(state.lines[state.activeLine].length<2)state.lines.splice(state.activeLine,1); state.activeLine=null;$("#yda-finish-line").disabled=true;markDirty(); }
 function startNewLine(recordHistory=true){ if(!state.image)return toast("请先加载图像");if(state.activeLine!==null)finishLine();if(recordHistory)pushHistory();state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;state.redrawPending=false;setTool("string");$("#yda-finish-line").disabled=false;renderCanvas();renderLineList();toast("在图像上逐点绘制，双击或点击结束当前绳线"); }
 function deleteSelectedPoint(){const selected=state.selectedPoint;if(!selected||state.selectedLine!==selected.line)return false;const line=state.lines[selected.line];if(!line||selected.point<0||selected.point>=line.length){state.selectedPoint=null;return false;}if(line.length<=2){toast("一条绳线至少保留两个点");return true;}pushHistory();line.splice(selected.point,1);state.selectedPoint=null;markDirty();toast("已删除标注点并连接相邻点");return true;}
-function resetUnsavedChanges(){ if(!state.sample||!state.dirty||!state.baseline)return;if(!window.confirm("放弃当前图片的全部未保存修改并恢复原始标注吗？"))return;const baseline=state.baseline;state.bbox=baseline.bbox?baseline.bbox.slice():null;state.lines=baseline.lines.map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.drag=null;state.history=[];state.redrawPending=false;$("#yda-yoyo-visibility").value=baseline.yoyoVisibility;$("#yda-trick-orientation").value=baseline.trickOrientation;$("#yda-string-visibility").value=baseline.stringVisibility;$("#yda-review-status").value=baseline.reviewStatus;$("#yda-notes").value=baseline.notes;state.dirty=false;$("#yda-dirty").textContent=state.sample.reviewed?"已核验":"已加载";$("#yda-validation").textContent="";setTool("select");syncReviewButton();syncResetButton();renderCanvas();renderLineList();syncCoordinateInputs();toast("已恢复到保存前的原始标注"); }
-canvas.addEventListener("pointerdown",event=>{if(!state.image)return;const point=canvasPoint(event);if(state.tool==="box"){pushHistory();state.drag={type:"drawbox",start:point};state.bbox=[point[0],point[1],point[0]+1,point[1]+1];canvas.setPointerCapture(event.pointerId);markDirty();return;}if(state.tool==="string"){if(state.activeLine===null){if(!state.redrawPending)pushHistory();state.redrawPending=false;state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;}state.lines[state.activeLine].push(point);$("#yda-finish-line").disabled=false;markDirty();return;}const hit=hitTest(point);if(!hit){state.selectedLine=null;renderCanvas();renderLineList();return;}pushHistory();state.drag={...hit,start:point,original:cloneGeometry()};if(hit.line!==undefined)state.selectedLine=hit.line;canvas.setPointerCapture(event.pointerId);});
+function resetUnsavedChanges(){ if(!state.sample||!state.dirty||!state.baseline)return;if(!window.confirm("放弃当前图片的全部未保存修改并恢复原始标注吗？"))return;const baseline=state.baseline;state.bbox=baseline.bbox?baseline.bbox.slice():null;state.lines=baseline.lines.map(line=>line.map(point=>point.slice()));state.activeLine=null;state.selectedLine=null;state.drag=null;state.history=[];state.redrawPending=false;$("#yda-yoyo-visibility").value=baseline.yoyoVisibility;$("#yda-yoyo-not-visible-reason").value=baseline.yoyoNotVisibleReason;syncYoyoFields();$("#yda-trick-orientation").value=baseline.trickOrientation;$("#yda-string-visibility").value=baseline.stringVisibility;$("#yda-review-status").value=baseline.reviewStatus;$("#yda-notes").value=baseline.notes;state.dirty=false;$("#yda-dirty").textContent=state.sample.reviewed?"已核验":"已加载";$("#yda-validation").textContent="";setTool("select");syncReviewButton();syncResetButton();renderCanvas();renderLineList();syncCoordinateInputs();toast("已恢复到保存前的原始标注"); }
+canvas.addEventListener("pointerdown",event=>{if(!state.image)return;const point=canvasPoint(event);if(state.tool==="box"){pushHistory();state.drag={type:"drawbox",start:point};state.bbox=[point[0],point[1],point[0]+1,point[1]+1];$("#yda-yoyo-visibility").value="visible";$("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();canvas.setPointerCapture(event.pointerId);markDirty();return;}if(state.tool==="string"){if(state.activeLine===null){if(!state.redrawPending)pushHistory();state.redrawPending=false;state.lines.push([]);state.activeLine=state.lines.length-1;state.selectedLine=state.activeLine;}state.lines[state.activeLine].push(point);$("#yda-finish-line").disabled=false;markDirty();return;}const hit=hitTest(point);if(!hit){state.selectedLine=null;renderCanvas();renderLineList();return;}pushHistory();state.drag={...hit,start:point,original:cloneGeometry()};if(hit.line!==undefined)state.selectedLine=hit.line;canvas.setPointerCapture(event.pointerId);});
 canvas.addEventListener("pointermove",event=>{if(!state.drag||!state.image)return;const p=canvasPoint(event),d=state.drag;if(d.type==="drawbox"){state.bbox=[Math.min(d.start[0],p[0]),Math.min(d.start[1],p[1]),Math.max(d.start[0],p[0]),Math.max(d.start[1],p[1])];}else if(d.type==="point"){state.lines[d.line][d.point]=p;}else if(d.type==="corner"){const b=state.bbox.slice();if(d.corner===0||d.corner===3)b[0]=p[0];else b[2]=p[0];if(d.corner===0||d.corner===1)b[1]=p[1];else b[3]=p[1];state.bbox=[Math.min(b[0],b[2]),Math.min(b[1],b[3]),Math.max(b[0],b[2]),Math.max(b[1],b[3])];}else if(d.type==="line"){const dx=p[0]-d.start[0],dy=p[1]-d.start[1],w=state.image.naturalWidth,h=state.image.naturalHeight;state.lines[d.line]=d.original.lines[d.line].map(q=>[Math.max(0,Math.min(w,q[0]+dx)),Math.max(0,Math.min(h,q[1]+dy))]);}markDirty();});
 canvas.addEventListener("pointerup",()=>{state.drag=null;}); canvas.addEventListener("dblclick",event=>{event.preventDefault();if(state.tool==="string"){const line=state.lines[state.activeLine];if(line?.length>1&&Math.hypot(line.at(-1)[0]-line.at(-2)[0],line.at(-1)[1]-line.at(-2)[1])<4)line.pop();finishLine();return;}if(state.tool==="select"){const point=canvasPoint(event),hit=hitTest(point);if(hit?.type==="line"){pushHistory();state.lines[hit.line].splice(hit.segment,0,point);state.selectedLine=hit.line;markDirty();}}});
 canvas.addEventListener("contextmenu",event=>{if(state.tool!=="select"||!state.image)return;const hit=hitTest(canvasPoint(event));if(hit?.type!=="point")return;event.preventDefault();const line=state.lines[hit.line];if(line.length<=2)return toast("一条绳线至少保留两个点");pushHistory();line.splice(hit.point,1);state.selectedLine=hit.line;markDirty();});
@@ -795,13 +817,14 @@ $("#yda-finish-line").onclick=finishLine; $("#yda-undo").onclick=()=>{const valu
 $("#yda-reset").onclick=resetUnsavedChanges;
 $("#yda-delete").onclick=()=>{if(state.selectedLine===null)return toast("请先选择一条绳线");pushHistory();state.lines.splice(state.selectedLine,1);state.selectedLine=null;markDirty();};
 $("#yda-toggle-annotations").onclick=toggleAnnotations;
-$("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="uncertain";markDirty();};
+$("#yda-clear-box").onclick=()=>{pushHistory();state.bbox=null;$("#yda-yoyo-visibility").value="uncertain";$("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();markDirty();};
 $("#yda-add-line").onclick=()=>startNewLine();
 $("#yda-redraw-lines").onclick=()=>{if(state.lines.length&&!window.confirm("清空现有绳线并重新绘制吗？可使用撤销恢复。"))return;pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="partial";startNewLine(false);markDirty();};
 $("#yda-clear-lines").onclick=()=>{pushHistory();state.lines=[];state.activeLine=null;state.selectedLine=null;$("#yda-string-visibility").value="not_visible";markDirty();};
 ['x1','y1','x2','y2'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{const values=['x1','y1','x2','y2'].map(key=>Number($("#yda-"+key).value));if(values.every(Number.isFinite)){pushHistory();state.bbox=values;markDirty();}}));
-['yoyo-visibility','trick-orientation','string-visibility','review-status','notes'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{state.dirty=true;$("#yda-dirty").textContent="未保存";syncReviewButton();syncResetButton();}));
-$("#yda-save").onclick=async()=>{if(!state.sample)return; if(state.activeLine!==null)finishLine();const edit={yoyo_visibility:$("#yda-yoyo-visibility").value,trick_orientation:$("#yda-trick-orientation").value,yoyo_bbox_pixel:state.bbox,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,bbox_review_status:"reviewed",reviewer:$("#yda-reviewer").value,notes:$("#yda-notes").value}; $("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.sample.reviewed=false;state.dirty=false;state.baseline=editorSnapshot();$("#yda-dirty").textContent="已保存，待核验";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();syncReviewButton();syncResetButton();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
+$("#yda-yoyo-visibility").addEventListener("change",()=>{const visibility=$("#yda-yoyo-visibility").value;if(visibility==="not_visible"){pushHistory();state.bbox=null;}else $("#yda-yoyo-not-visible-reason").value="";syncYoyoFields();markDirty();});
+['yoyo-not-visible-reason','trick-orientation','string-visibility','review-status','notes'].forEach(name=>$("#yda-"+name).addEventListener("change",()=>{state.dirty=true;$("#yda-dirty").textContent="未保存";syncReviewButton();syncResetButton();}));
+$("#yda-save").onclick=async()=>{if(!state.sample)return; if(state.activeLine!==null)finishLine();const edit={yoyo_visibility:$("#yda-yoyo-visibility").value,yoyo_not_visible_reason:$("#yda-yoyo-not-visible-reason").value,trick_orientation:$("#yda-trick-orientation").value,yoyo_bbox_pixel:state.bbox,string_visibility:$("#yda-string-visibility").value,string_polylines_pixel:state.lines,string_review_status:$("#yda-review-status").value,bbox_review_status:"reviewed",reviewer:$("#yda-reviewer").value,notes:$("#yda-notes").value}; $("#yda-validation").textContent="正在保存...";try{const result=await server.ui_save_annotation_sample({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,edit});state.sample.annotation=result.annotation;state.sample.reviewed=false;state.dirty=false;state.baseline=editorSnapshot();$("#yda-dirty").textContent="已保存，待核验";$("#yda-validation").textContent="";const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result.summary,index};renderSamples();syncReviewButton();syncResetButton();toast("当前标注已保存");}catch(error){$("#yda-validation").textContent=error?.message||String(error);}};
 $("#yda-review").onclick=async()=>{if(!state.sample||state.dirty)return;const confirmed=!state.sample.reviewed;$("#yda-review").disabled=true;try{const result=await server.ui_set_annotation_sample_reviewed({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,reviewer:$("#yda-reviewer").value,confirmed});state.sample={...state.sample,...result};const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result};$("#yda-dirty").textContent=result.reviewed?"已核验":"已取消核验";renderSamples();syncReviewButton();toast(result.reviewed?"已记录为核验完成":"已取消核验");if(result.reviewed&&index<state.samples.length-1)await selectSample(state.samples[index+1].key);}catch(error){toast(`核验状态保存失败：${error?.message||error}`);syncReviewButton();}};
 $("#yda-prev").onclick=()=>{if(state.current>0)selectSample(state.samples[state.current-1].key);}; $("#yda-next").onclick=()=>{if(state.current<state.samples.length-1)selectSample(state.samples[state.current+1].key);};
 $("#yda-search").addEventListener("input",renderSamples);$("#yda-filter").addEventListener("change",renderSamples);$("#yda-open").onclick=openDataset;

@@ -27,6 +27,8 @@ SCHEMA_VERSION = "yoyo_multitask_dataset_v6"
 ANNOTATION_SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SOURCE_POLICY = "quality_approved; image_sha256_deduplicated; source_group_isolated; annotation_schema_v5"
 VALID_ORIENTATIONS = ("normal", "horizontal", "not_applicable")
+VALID_YOYO_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
+VALID_YOYO_NOT_VISIBLE_REASONS = {"occluded", "out_of_frame", "absent"}
 VALID_STRING_VISIBILITY = {"visible", "partial", "not_visible"}
 SPLITS = ("train", "val", "test")
 EXCLUDED_ANNOTATION_DIRS = {"score_annotations"}
@@ -50,7 +52,14 @@ class Sample:
 
     @property
     def has_yoyo(self) -> bool:
-        return _valid_bbox(self.annotation.get("yoyo_bbox_pixel")) is not None
+        return (
+            str(self.annotation.get("visibility")) in {"visible", "partial"}
+            and _valid_bbox(self.annotation.get("yoyo_bbox_pixel")) is not None
+        )
+
+    @property
+    def yoyo_known(self) -> bool:
+        return str(self.annotation.get("visibility")) != "uncertain"
 
     @property
     def has_string(self) -> bool:
@@ -109,7 +118,10 @@ def _load_samples(source_roots: Iterable[Path]) -> tuple[list[Sample], list[dict
                 continue
             group = str(annotation.get("source_group") or "").strip()
             orientation = str(annotation.get("trick_orientation") or "").strip()
+            yoyo_visibility = str(annotation.get("visibility") or "").strip()
+            yoyo_not_visible_reason = str(annotation.get("yoyo_not_visible_reason") or "").strip()
             string_visibility = str(annotation.get("string_visibility") or "").strip()
+            yoyo_bbox = _valid_bbox(annotation.get("yoyo_bbox_pixel"))
             scopes = _approved_scopes(annotation)
             reason = ""
             if annotation.get("schema_version") != ANNOTATION_SCHEMA_VERSION:
@@ -120,12 +132,24 @@ def _load_samples(source_roots: Iterable[Path]) -> tuple[list[Sample], list[dict
                 reason = "missing_source_group"
             elif orientation not in VALID_ORIENTATIONS:
                 reason = f"invalid_trick_orientation={orientation}"
+            elif yoyo_visibility not in VALID_YOYO_VISIBILITY:
+                reason = f"invalid_yoyo_visibility={yoyo_visibility}"
+            elif yoyo_visibility == "not_visible" and yoyo_not_visible_reason not in VALID_YOYO_NOT_VISIBLE_REASONS:
+                reason = f"invalid_yoyo_not_visible_reason={yoyo_not_visible_reason}"
+            elif yoyo_visibility != "not_visible" and yoyo_not_visible_reason:
+                reason = "unexpected_yoyo_not_visible_reason"
+            elif yoyo_visibility in {"visible", "partial"} and yoyo_bbox is None:
+                reason = f"yoyo_visibility={yoyo_visibility}_without_bbox"
+            elif yoyo_visibility == "not_visible" and yoyo_bbox is not None:
+                reason = "not_visible_yoyo_with_bbox"
             elif str(annotation.get("string_review_status", "")).lower() not in {"approved", "reviewed"}:
                 reason = f"string_review_status={annotation.get('string_review_status')}"
             elif string_visibility not in VALID_STRING_VISIBILITY:
                 reason = f"invalid_string_visibility={string_visibility}"
-            elif not {"visible_geometry", "yoyo_bbox"}.issubset(scopes):
-                reason = "missing_geometry_or_yoyo_quality_approval"
+            elif "visible_geometry" not in scopes:
+                reason = "missing_visible_geometry_quality_approval"
+            elif yoyo_visibility in {"visible", "partial"} and "yoyo_bbox" not in scopes:
+                reason = "missing_yoyo_bbox_quality_approval"
             image_path = _resolve_image(label_path, root, annotation)
             if not reason and image_path is None:
                 reason = "source_image_missing"
@@ -181,9 +205,10 @@ def _group_features(samples: list[Sample]) -> dict[str, Counter[str]]:
     for sample in samples:
         values = result[sample.source_group]
         values["samples"] += 1
-        values[f"orientation:{sample.orientation}"] += 1
+        values[f"orientation:{sample.orientation}"] += int(sample.yoyo_known)
         values["yoyo_positive"] += int(sample.has_yoyo)
-        values["yoyo_negative"] += int(not sample.has_yoyo)
+        values["yoyo_negative"] += int(sample.yoyo_known and not sample.has_yoyo)
+        values["yoyo_ignored"] += int(not sample.yoyo_known)
         values["string_positive"] += int(sample.has_string)
         values["string_negative"] += int(not sample.has_string)
         values[f"string_visibility:{sample.annotation['string_visibility']}"] += 1
@@ -197,7 +222,7 @@ def _assignment_score(
 ) -> float:
     totals = sum(features.values(), Counter())
     keys = [
-        "samples", "yoyo_positive", "yoyo_negative", "string_positive", "string_negative",
+        "samples", "yoyo_positive", "yoyo_negative", "yoyo_ignored", "string_positive", "string_negative",
         *(f"orientation:{value}" for value in VALID_ORIENTATIONS),
         *(f"string_visibility:{value}" for value in sorted(VALID_STRING_VISIBILITY)),
     ]
@@ -451,33 +476,41 @@ def build_training_dataset(
         orientation_name = f"{_safe_name(sample.source_group)}__{relative.name}{extension}"
         orientation_image = orientation_root / split / sample.orientation / orientation_name
         transfer_modes[f"canonical_{_link_or_copy(sample.image_path, canonical_image)}"] += 1
-        transfer_modes[f"task_{_link_or_copy(canonical_image, detection_image)}"] += 1
         transfer_modes[f"task_{_link_or_copy(canonical_image, string_image)}"] += 1
-        transfer_modes[f"task_{_link_or_copy(canonical_image, orientation_image)}"] += 1
-        if split == "train":
-            orientation_train_images[sample.orientation].append(orientation_image)
+        if sample.yoyo_known:
+            transfer_modes[f"task_{_link_or_copy(canonical_image, detection_image)}"] += 1
+            transfer_modes[f"task_{_link_or_copy(canonical_image, orientation_image)}"] += 1
+            if split == "train":
+                orientation_train_images[sample.orientation].append(orientation_image)
         canonical_label.parent.mkdir(parents=True, exist_ok=True)
         canonical_annotation = dict(sample.annotation)
         canonical_label.write_text(json.dumps(canonical_annotation, ensure_ascii=False, indent=2), encoding="utf-8")
         detection_label = detection_root / "labels" / split / relative.with_suffix(".txt")
         string_label = string_root / "labels" / split / relative.with_suffix(".txt")
-        detection_label.parent.mkdir(parents=True, exist_ok=True)
         string_label.parent.mkdir(parents=True, exist_ok=True)
-        detection_label.write_text(_bbox_line(sample), encoding="utf-8")
+        if sample.yoyo_known:
+            detection_label.parent.mkdir(parents=True, exist_ok=True)
+            detection_label.write_text(_bbox_line(sample), encoding="utf-8")
         string_label.write_text(_string_lines(sample, line_width_px), encoding="utf-8")
         counts[split]["samples"] += 1
-        counts[split][f"orientation:{sample.orientation}"] += 1
+        counts[split][f"orientation:{sample.orientation}"] += int(sample.yoyo_known)
+        counts[split]["detection_samples"] += int(sample.yoyo_known)
+        counts[split]["orientation_samples"] += int(sample.yoyo_known)
         counts[split]["yoyo_positive"] += int(sample.has_yoyo)
-        counts[split]["yoyo_negative"] += int(not sample.has_yoyo)
+        counts[split]["yoyo_negative"] += int(sample.yoyo_known and not sample.has_yoyo)
+        counts[split]["yoyo_ignored"] += int(not sample.yoyo_known)
         counts[split]["string_positive"] += int(sample.has_string)
         counts[split]["string_negative"] += int(not sample.has_string)
         counts[split][f"string_visibility:{sample.annotation['string_visibility']}"] += 1
         counts[split][f"source_dataset:{sample.dataset}"] += 1
         distribution_values = {
             "samples": 1,
-            f"orientation:{sample.orientation}": 1,
+            f"orientation:{sample.orientation}": int(sample.yoyo_known),
+            "detection_samples": int(sample.yoyo_known),
+            "orientation_samples": int(sample.yoyo_known),
             "yoyo_positive": int(sample.has_yoyo),
-            "yoyo_negative": int(not sample.has_yoyo),
+            "yoyo_negative": int(sample.yoyo_known and not sample.has_yoyo),
+            "yoyo_ignored": int(not sample.yoyo_known),
             "string_positive": int(sample.has_string),
             "string_negative": int(not sample.has_string),
             f"string_visibility:{sample.annotation['string_visibility']}": 1,
@@ -496,6 +529,10 @@ def build_training_dataset(
                 "split": split,
                 "trick_orientation": sample.orientation,
                 "yoyo_positive": sample.has_yoyo,
+                "yoyo_negative": sample.yoyo_known and not sample.has_yoyo,
+                "yoyo_ignored": not sample.yoyo_known,
+                "yoyo_visibility": str(sample.annotation["visibility"]),
+                "yoyo_not_visible_reason": str(sample.annotation.get("yoyo_not_visible_reason") or ""),
                 "string_positive": sample.has_string,
                 "string_visibility": str(sample.annotation["string_visibility"]),
             }
@@ -593,14 +630,14 @@ def build_training_dataset(
         "image_materialization": dict(transfer_modes),
         "records": records,
         "label_semantics": {
-            "detection": "quality-approved yoyo_bbox_pixel; empty label is a reviewed negative",
+            "detection": "visible or partial yoyo uses quality-approved bbox; reviewed not_visible is negative; uncertain is excluded",
             "string_segmentation": "approved masks or buffered visible centerlines; not_visible is a reviewed negative",
-            "orientation": "three-way trick_orientation including not_applicable",
+            "orientation": "three-way trick_orientation including not_applicable; uncertain yoyo is excluded",
         },
         "task_input_dependencies": {
-            "detection": ["image", "yoyo_bbox_pixel"],
+            "detection": ["image", "visibility", "yoyo_not_visible_reason", "yoyo_bbox_pixel"],
             "string_segmentation": ["image", "string_mask_or_polyline"],
-            "orientation": ["image", "yoyo_bbox_pixel_or_fixed_negative_crop", "trick_orientation"],
+            "orientation": ["image", "visibility", "yoyo_bbox_pixel_or_fixed_negative_crop", "trick_orientation"],
         },
     }
     output_dir.mkdir(parents=True, exist_ok=True)

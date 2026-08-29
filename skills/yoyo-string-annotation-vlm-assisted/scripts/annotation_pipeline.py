@@ -23,7 +23,8 @@ SCHEMA_VERSION = "agent_yoyo_string_annotation_v5"
 SAMPLING_SCHEMA_VERSION = "agent_video_sampling_v1"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 STRING_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
-YOYO_VISIBILITY = {"visible", "partially_visible", "occluded", "out_of_frame", "absent", "uncertain"}
+YOYO_VISIBILITY = {"visible", "partial", "not_visible", "uncertain"}
+YOYO_NOT_VISIBLE_REASONS = {"occluded", "out_of_frame", "absent"}
 YOYO_DIVISIONS = {"1A", "2A", "3A", "4A", "5A"}
 SCENE_LABELS = {"trick", "transition", "non_trick", "unknown"}
 TRICK_ORIENTATIONS = {"normal", "horizontal", "unknown", "not_applicable"}
@@ -50,7 +51,7 @@ ALLOWED_LABEL_FIELDS = {
     "source_video", "source_video_sha256", "source_group", "video_id",
     "frame_index", "timestamp_s", "sequence_id", "sampling_role",
     "anchor_frame_index", "sampling_manifest_sha256", "visibility",
-    "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "string_visibility",
+    "yoyo_bbox_pixel", "yoyo_bbox_2d", "bbox", "yoyo_not_visible_reason", "string_visibility",
     "string_polylines_pixel", "string_polylines_2d", "string_polyline_pixel",
     "string_polyline_2d", "string_mask_polygons_pixel", "yoyo_division",
     "scene_label", "trick_orientation", "string_path", "bad_case", "notes",
@@ -63,6 +64,7 @@ CORE_FIELDS = (
     "image_size",
     "source_group",
     "visibility",
+    "yoyo_not_visible_reason",
     "yoyo_bbox_pixel",
     "string_visibility",
     "string_polylines_pixel",
@@ -464,6 +466,8 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     result["string_visibility"] = string_visibility if string_visibility in STRING_VISIBILITY else "uncertain"
     yoyo_visibility = str(candidate.get("visibility", result.get("visibility", "uncertain"))).lower()
     result["visibility"] = yoyo_visibility if yoyo_visibility in YOYO_VISIBILITY else "uncertain"
+    reason = str(candidate.get("yoyo_not_visible_reason", result.get("yoyo_not_visible_reason") or "")).lower()
+    result["yoyo_not_visible_reason"] = reason if result["visibility"] == "not_visible" and reason in YOYO_NOT_VISIBLE_REASONS else None
 
     strokes = normalize_polylines(candidate, width, height)
     result["string_polylines_pixel"] = strokes or None
@@ -481,14 +485,17 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
             right_bottom = normalized_to_pixel(normalized_bbox[2:], width, height)
             raw_bbox = left_top + right_bottom
     result["yoyo_bbox_pixel"] = [round(item, 3) for item in raw_bbox] if raw_bbox else None
+    if result["visibility"] == "not_visible":
+        result["yoyo_bbox_pixel"] = None
     result["yoyo_bbox_2d"] = (
-        pixel_to_normalized(raw_bbox[:2], width, height) + pixel_to_normalized(raw_bbox[2:], width, height)
-        if raw_bbox
+        pixel_to_normalized(result["yoyo_bbox_pixel"][:2], width, height)
+        + pixel_to_normalized(result["yoyo_bbox_pixel"][2:], width, height)
+        if result["yoyo_bbox_pixel"]
         else None
     )
     result["bbox"] = (
         [{"label": "yoyo", "sub_label": "visible yoyo body", "bbox_pixel": result["yoyo_bbox_pixel"], "bbox_2d": result["yoyo_bbox_2d"]}]
-        if raw_bbox
+        if result["yoyo_bbox_pixel"]
         else []
     )
 
@@ -559,6 +566,7 @@ def initial_label(
         "anchor_frame_index": int(provenance["anchor_frame_index"]),
         "sampling_manifest_sha256": sampling_manifest_sha256,
         "visibility": "uncertain",
+        "yoyo_not_visible_reason": None,
         "yoyo_bbox_pixel": None,
         "yoyo_bbox_2d": None,
         "bbox": [],
@@ -1155,8 +1163,19 @@ def validate_label(
     visibility = str(label.get("string_visibility", "uncertain"))
     if visibility not in STRING_VISIBILITY:
         errors.append(f"unsupported string_visibility={visibility}")
-    if str(label.get("visibility", "uncertain")) not in YOYO_VISIBILITY:
+    yoyo_visibility = str(label.get("visibility", "uncertain"))
+    if yoyo_visibility not in YOYO_VISIBILITY:
         errors.append("unsupported yoyo visibility")
+    yoyo_reason = str(label.get("yoyo_not_visible_reason") or "")
+    if yoyo_visibility == "not_visible" and yoyo_reason not in YOYO_NOT_VISIBLE_REASONS:
+        errors.append("not_visible yoyo requires yoyo_not_visible_reason")
+    elif yoyo_visibility != "not_visible" and yoyo_reason:
+        errors.append("yoyo_not_visible_reason requires not_visible yoyo visibility")
+    yoyo_bbox = bbox(label.get("yoyo_bbox_pixel"))
+    if yoyo_visibility in {"visible", "partial"} and yoyo_bbox is None:
+        errors.append(f"yoyo visibility={yoyo_visibility} requires a bounding box")
+    if yoyo_visibility == "not_visible" and yoyo_bbox is not None:
+        errors.append("not_visible yoyo must not retain a bounding box")
     if str(label.get("scene_label", "unknown")) not in SCENE_LABELS:
         errors.append("unsupported scene_label")
     if str(label.get("trick_orientation", "unknown")) not in TRICK_ORIENTATIONS:

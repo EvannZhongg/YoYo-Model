@@ -78,7 +78,7 @@ def keys(dataset: Path) -> set[tuple[str, int]]:
 def assert_initial_defaults(dataset: Path) -> None:
     for path in (dataset / "canonical" / "labels").rglob("*.json"):
         label = json.loads(path.read_text(encoding="utf-8"))
-        assert label["visibility"] == "visible"
+        assert label["visibility"] == "uncertain"
         assert label["trick_orientation"] == "normal"
         assert label["string_visibility"] == "partial"
         assert label["yoyo_bbox_pixel"] is None
@@ -145,7 +145,8 @@ def run() -> None:
         opened = workbench_annotation.open_annotation_dataset(str(first))
         protected_key = opened["samples"][0]["key"]
         workbench_annotation.save_annotation_sample(str(first), protected_key, {
-            "yoyo_visibility": "uncertain",
+            "yoyo_visibility": "not_visible",
+            "yoyo_not_visible_reason": "absent",
             "trick_orientation": "normal",
             "yoyo_bbox_pixel": None,
             "string_visibility": "not_visible",

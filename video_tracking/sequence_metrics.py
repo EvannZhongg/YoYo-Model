@@ -464,10 +464,18 @@ def _load_snapshot_frames(snapshot_path: Path, group_id: str | None) -> list[dic
 
 def _known_targets(annotation: dict[str, Any]) -> tuple[bool, list[float] | None, bool, list[list[list[float]]]]:
     visibility = str(annotation.get("visibility") or "")
+    not_visible_reason = str(annotation.get("yoyo_not_visible_reason") or "")
     bbox = _valid_bbox(annotation.get("yoyo_bbox_pixel"))
     bbox_state = str(annotation.get("bbox_review_status") or annotation.get("review_status") or "")
-    yoyo_known = bbox is not None or bbox_state in KNOWN_REVIEW_STATES
-    if bbox is None and visibility not in {"not_visible", "absent", "visible"}:
+    if visibility in {"visible", "partial"}:
+        yoyo_known = bbox is not None and bbox_state in KNOWN_REVIEW_STATES
+    elif visibility == "not_visible":
+        yoyo_known = (
+            bbox is None
+            and bbox_state in KNOWN_REVIEW_STATES
+            and not_visible_reason in {"occluded", "out_of_frame", "absent"}
+        )
+    else:
         yoyo_known = False
     lines = _annotation_polylines(annotation)
     string_visibility = str(annotation.get("string_visibility") or "")

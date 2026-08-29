@@ -238,6 +238,42 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "outside the image"):
                     save_annotation_sample(str(dataset), key, edit)
 
+    def test_not_visible_yoyo_requires_reason_and_clears_bbox(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = make_annotation_dataset(root)
+            edit = {
+                "yoyo_visibility": "not_visible",
+                "yoyo_not_visible_reason": "occluded",
+                "trick_orientation": "normal",
+                "yoyo_bbox_pixel": [100, 50, 140, 90],
+                "string_visibility": "not_visible",
+                "string_polylines_pixel": [],
+                "string_review_status": "reviewed",
+            }
+            with patch("workbench.dataset_annotation.DATASETS_DIR", root):
+                result = save_annotation_sample(str(dataset), key, edit)
+            self.assertEqual(result["annotation"]["visibility"], "not_visible")
+            self.assertEqual(result["annotation"]["yoyo_not_visible_reason"], "occluded")
+            self.assertIsNone(result["annotation"]["yoyo_bbox_pixel"])
+
+    def test_uncertain_yoyo_cannot_be_verified(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, key = make_annotation_dataset(root)
+            label = dataset / "canonical" / "labels" / key
+            document = json.loads(label.read_text(encoding="utf-8"))
+            document["visibility"] = "uncertain"
+            document["yoyo_not_visible_reason"] = None
+            document["bbox_review_status"] = "needs_review"
+            label.write_text(json.dumps(document), encoding="utf-8")
+            with (
+                patch("workbench.dataset_annotation.DATASETS_DIR", root),
+                patch("workbench.dataset_annotation.REVIEW_MAP_PATH", root / REVIEW_MAP_FILENAME),
+            ):
+                with self.assertRaisesRegex(ValueError, "must be resolved"):
+                    set_annotation_sample_reviewed(str(dataset), key, "reviewer")
+
 
 if __name__ == "__main__":
     unittest.main()

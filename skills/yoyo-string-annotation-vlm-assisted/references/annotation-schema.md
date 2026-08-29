@@ -35,6 +35,7 @@ Every full apply supplies the complete visible state:
 {
   "coordinate_frame": "original_pixel",
   "visibility": "visible",
+  "yoyo_not_visible_reason": null,
   "yoyo_bbox_pixel": [742, 430, 790, 480],
   "string_visibility": "partial",
   "string_polylines_pixel": [
@@ -118,6 +119,18 @@ bounded, including a localized motion-blurred disc. Leave it null only when the
 yoyo is outside frame, fully hidden, or too blurred/ambiguous to bound. A
 `string_path` endpoint with `start_anchor` or `end_anchor` equal to `yoyo`
 requires a bbox and must land close to it; otherwise use `unknown`.
+
+Yoyo visibility combines an observability state with an optional reason:
+
+- `visible`: complete body is visible and bounded.
+- `partial`: part of the body is visible and bounded, including edge clipping.
+- `not_visible`: no defensible body pixels; `yoyo_not_visible_reason` must be
+  `occluded`, `out_of_frame`, or `absent`.
+- `uncertain`: neither a positive bbox nor a reviewed negative is defensible.
+
+`uncertain` records are draft-only and must not be manually verified or used as
+detection/orientation supervision. `out_of_frame` means known outside the image;
+`occluded` means in-frame but fully hidden; `absent` means no yoyo is present.
 
 ## Evidence And Orientation
 

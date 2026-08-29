@@ -125,6 +125,27 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                 self.assertEqual(class_dirs, ["horizontal", "normal", "not_applicable"])
                 self.assertTrue(all(not any(path.is_dir() for path in (output / "orientation" / split / name).iterdir()) for name in class_dirs))
 
+    def test_uncertain_yoyo_is_excluded_from_detection_and_orientation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "annotations" / "source"
+            self._write_source(source, ["a", "b", "c"])
+            label = source / "labels" / "a" / "sample_0.json"
+            annotation = json.loads(label.read_text(encoding="utf-8"))
+            annotation["visibility"] = "uncertain"
+            annotation["yoyo_bbox_pixel"] = None
+            annotation["bbox_review_status"] = "needs_review"
+            label.write_text(json.dumps(annotation), encoding="utf-8")
+
+            manifest = build_training_dataset([source], base / "output", seed=7)
+            record = next(item for item in manifest["records"] if item["source_group"] == "a" and item["trick_orientation"] == "normal")
+            self.assertTrue(record["yoyo_ignored"])
+            self.assertEqual(sum(split["yoyo_ignored"] for split in manifest["counts"].values()), 1)
+            relative = Path(record["canonical_label"]).relative_to(base / "output" / "canonical" / "labels")
+            split = record["split"]
+            self.assertFalse((base / "output" / "detection" / "labels" / split / relative.with_suffix(".txt")).exists())
+            self.assertFalse(any((base / "output" / "orientation" / split / "normal").glob("a__sample_0*")))
+
     def test_canonical_rebuild_keeps_image_hash_suffix_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
