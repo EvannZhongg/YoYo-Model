@@ -35,7 +35,7 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/experiments/det_soup_new116_a0p75/weights/best.pt"
+  weights_path: "runs/experiments/det_replay_soup_a25/weights/best.pt"
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7

@@ -4,7 +4,7 @@
 
 | 模块 | 当前模型与权重 | 默认输入/参数 |
 | --- | --- | --- |
-| 悠悠球检测 | YOLO11s，约 9.4M 参数；`runs/experiments/det_soup_new116_a0p75/weights/best.pt` | `imgsz=1024`，置信度 `0.15`，IoU `0.7` |
+| 悠悠球检测 | YOLO11s，约 9.4M 参数；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，置信度 `0.15`，IoU `0.7` |
 | 绳线分割 | MobileNetV3-FPN，约 3.0M 参数；`runs/experiments/semantic_cldice_w010_r1/weights/best.pt` | `960x544`，配置阈值 `0.40` |
 | 绳线追踪 | 单语义模型 + 颜色/亮脊候选 + 按需光流 | 每帧语义推理，最多传播 12 帧 |
 | 方向识别 | 悠悠球 ROI 三分类模型；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 5 FPS 稳态、25 FPS 突发，EMA 与滞回 |
@@ -17,26 +17,40 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 ## 悠悠球检测模型
 
 当前权重 SHA-256：
-`13b66a5c6eda03deb7f5bc4b1efc60a273df5aae8d314424a79bf2fb5b7029b8`。
+`2d5a0e45b9da1aa88609c79015ce7b651e86fb8206d9ae6463f0fa72cf4a0e00`。
 
-在 722 张统一数据集的新 test split 上，当前模型相对上一生产模型的结果为：
+候选在生产 YOLO11s 权重上以训练集 48 张 Telea 去除悠悠球的合成负样本 replay 两轮，
+`epochs=4`、`imgsz=1024`、AdamW `lr0=1e-6` 微调，再与基线按 `alpha=0.25` 做
+参数 soup；数据 manifest SHA-256 为
+`ab2af76133f7791c91613008f6ea997e29d6d26ef3233462fbee8699e5aef80e`。
+
+在统一数据集的独立 test split（108 张记录、103 个检测样本）上，replay-soup
+模型相对上一生产模型的结果为：
 
 | 指标 | 上一模型 | 当前模型 |
 | --- | ---: | ---: |
-| Precision | 0.987401 | 0.976794 |
-| Recall | 0.898990 | 0.898990 |
-| mAP50 | 0.959212 | 0.968342 |
-| mAP50-95 | 0.574515 | 0.589861 |
+| Precision | 0.976794 | 0.957737 |
+| Recall | 0.898990 | 0.924984 |
+| mAP50 | 0.968342 | 0.981065 |
+| mAP50-95 | 0.589861 | 0.606387 |
 
-在未参与微调的 `1Ayoyo_consecutive` 856 帧上，Presence F1 为 `0.976280`，Mean IoU
-为 `0.792355`，中心误差为 `20.7396 px`；上一生产模型分别为 `0.958678`、
-`0.771622` 和 `33.0983 px`。1024 输入单帧 GPU 推理约 `7.5 ms`。
+连续帧数据集 `1Ayoyo_consecutive` 的 856 帧直接 A/B（固定 reviewed yoyo 框、
+`conf=0.15`、`IoU=0.7`）显示 pooled Presence F1 为 `0.977387`，Mean IoU
+为 `0.800496`，中心误差为 `17.2435 px`；上一生产模型分别为 `0.978056`、
+`0.799332` 和 `16.2794 px`。误检由 `10` 降至 `9`，Precision 由 `0.987342`
+升至 `0.988564`。最弱的邬聪聪来源组 F1 由 `0.933333` 升至 `0.944444`，
+误检由 `10` 降至 `9`，TP/FN 由 `84/2` 变为 `85/1`；2023 华南和 namdongxun
+两组召回各有小幅下降（F1 分别 `0.956044 -> 0.944444`、`0.928571 -> 0.923077`）。
+
+在同一环境的邬聪聪 99 帧完整 pipeline 复核中，检测器吞吐为 `7.335 -> 7.179 FPS`，
+完整 pipeline 为 `9.292 -> 8.652 FPS`，约下降 `6.9%`；模型结构和参数量不变。
 
 权重 lineage、test 指标和连续集复核分别保留在：
 
-- `runs/experiments/det_soup_new116_a0p75/run_manifest.json`
-- `runs/experiments/det_soup_new116_a0p75/test_metrics.json`
-- `tmp/det_soup_a75_consecutive`
+- `runs/experiments/yoyo_detection_replay_20260830_detection_best_replay48x2/run_manifest.json`
+- `runs/experiments/det_replay_soup_a25/test_metrics.json`
+- `tmp/detection_replay_soup_consecutive_20260830.json`
+- `datasets/experiments/detection_replay_20260830_r2/manifest.json`
 
 ## 绳线分割模型
 

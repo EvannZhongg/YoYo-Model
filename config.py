@@ -102,7 +102,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_WEIGHTS_PATH",
             "tracking.weights_path",
-            "runs/experiments/det_soup_new116_a0p75/weights/best.pt",
+            "runs/experiments/det_replay_soup_a25/weights/best.pt",
         )
     )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
