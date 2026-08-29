@@ -18,6 +18,15 @@ from common.files import sha256_file
 from config import BASE_DIR
 
 
+PRESENTATION_ORIENTATIONS = ("frontal", "edge_horizontal", "edge_vertical", "unknown")
+PRESENTATION_TO_TRICK = {
+    "frontal": "normal",
+    "edge_vertical": "normal",
+    "edge_horizontal": "horizontal",
+    "unknown": "not_applicable",
+}
+
+
 def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] | None:
     bbox = annotation.get("yoyo_bbox_pixel")
     if isinstance(bbox, list) and len(bbox) == 4:
@@ -70,7 +79,14 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         annotation = json.loads(Path(record["canonical_label"]).read_text(encoding="utf-8"))
         source = Path(record["canonical_image"])
         split = str(record["split"])
-        orientation = str(record["trick_orientation"])
+        annotation_presentation = str(annotation.get("presentation_orientation") or "").strip()
+        orientation = annotation_presentation or {
+            "normal": "frontal",
+            "horizontal": "edge_horizontal",
+            "not_applicable": "unknown",
+        }.get(str(record.get("trick_orientation") or ""), "unknown")
+        if orientation not in PRESENTATION_ORIENTATIONS:
+            raise ValueError(f"invalid presentation orientation: {orientation}")
         yoyo_visibility_counts[str(annotation.get("visibility") or "uncertain")] += 1
         name = f"{record['source_group']}__{source.stem}.jpg"
         target = output / split / orientation / name
@@ -87,11 +103,8 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
             {
                 "source_group": record["source_group"],
                 "split": split,
-                "trick_orientation": orientation,
-                "presentation_orientation": str(
-                    annotation.get("presentation_orientation")
-                    or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(orientation, "unknown")
-                ),
+                "trick_orientation": str(record.get("trick_orientation") or ""),
+                "presentation_orientation": orientation,
                 "source_image_sha256": record["image_sha256"],
                 "crop_box_pixel": list(crop_box),
                 "image": str(target),
@@ -125,7 +138,9 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "source_policy": parent["source_policy"],
         "source_groups": parent["split_policy"]["source_groups"],
         "counts": {split: dict(values) for split, values in counts.items()},
-        "classes": ["horizontal", "normal", "not_applicable"],
+        "classes": list(PRESENTATION_ORIENTATIONS),
+        "label_field": "presentation_orientation",
+        "coarse_mapping": dict(PRESENTATION_TO_TRICK),
         "crop_policy": identity["crop_policy"],
         "input_dependencies": {
             "yoyo_bbox_pixel": True,

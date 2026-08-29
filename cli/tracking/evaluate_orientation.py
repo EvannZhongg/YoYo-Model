@@ -17,6 +17,9 @@ from common.files import sha256_file
 from config import BASE_DIR, TRACKING_CONFIG
 from video_tracking.orientation import (
     ORIENTATION_CLASS_ORDER,
+    PRESENTATION_ORIENTATION_CLASS_ORDER,
+    PRESENTATION_ORIENTATION_CLASSES,
+    PRESENTATION_TO_TRICK,
     OrientationTemporalFilter,
     orientation_observation_is_unstable,
     orientation_crop_box,
@@ -60,12 +63,15 @@ def _predict_dataset(
             yoyo = {"bbox": [float(value) for value in bbox]} if isinstance(bbox, list) and len(bbox) == 4 else None
             left, top, right, bottom = orientation_crop_box(width, height, yoyo)
             crops.append(image[top:bottom, left:right])
+            presentation_target = str(annotation.get("presentation_orientation") or "")
+            trick_target = str(annotation.get("trick_orientation") or PRESENTATION_TO_TRICK.get(presentation_target, "unknown"))
             records.append({
                 "group_id": str(group["group_id"]),
                 "source_group": str(group.get("source_group") or group["group_id"]),
                 "frame_index": int(item["frame_index"]),
                 "timestamp_s": float(item["timestamp_s"]),
-                "target": annotation.get("trick_orientation"),
+                "target": trick_target,
+                "target_presentation": presentation_target,
                 "crop_box_pixel": [left, top, right, bottom],
                 "image": str(Path(item["image"])),
             })
@@ -82,13 +88,25 @@ def _predict_dataset(
         verbose=False,
     )
     names = {int(key): str(value) for key, value in dict(model.names).items()}
-    if set(names.values()) != set(ORIENTATION_CLASS_ORDER):
+    model_classes = set(names.values())
+    if model_classes not in (set(ORIENTATION_CLASS_ORDER), PRESENTATION_ORIENTATION_CLASSES):
         raise ValueError(f"Incompatible orientation classes: {names}")
     for record, result in zip(records, results):
         values = [float(value) for value in result.probs.data.detach().cpu().tolist()]
-        record["probabilities"] = {names[index]: values[index] for index in range(len(values))}
-        record["predicted"] = names[int(result.probs.top1)]
-        record["confidence"] = float(result.probs.top1conf.detach().cpu().item())
+        raw_probabilities = {names[index]: values[index] for index in range(len(values))}
+        if model_classes == PRESENTATION_ORIENTATION_CLASSES:
+            coarse_probabilities = {name: 0.0 for name in ORIENTATION_CLASS_ORDER}
+            for presentation, value in raw_probabilities.items():
+                coarse_probabilities[PRESENTATION_TO_TRICK[presentation]] += value
+            record["presentation_probabilities"] = raw_probabilities
+            record["presentation_predicted"] = names[int(result.probs.top1)]
+        else:
+            coarse_probabilities = raw_probabilities
+            record["presentation_probabilities"] = None
+            record["presentation_predicted"] = None
+        record["probabilities"] = coarse_probabilities
+        record["predicted"] = max(coarse_probabilities, key=coarse_probabilities.get)
+        record["confidence"] = float(max(coarse_probabilities.values()))
     return {
         "schema_version": "yoyo_orientation_sequence_raw_predictions_v1",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -219,6 +237,28 @@ def _metrics(records: list[dict[str, Any]], predictions: dict[str, str]) -> dict
     }
 
 
+def _presentation_metrics(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    usable = [item for item in records if item.get("target_presentation") and item.get("presentation_predicted")]
+    if not usable:
+        return None
+    targets = Counter(str(item["target_presentation"]) for item in usable)
+    correct = Counter()
+    for item in usable:
+        expected = str(item["target_presentation"])
+        correct[expected] += int(expected == str(item["presentation_predicted"]))
+    recalls = {
+        name: round(correct[name] / targets[name], 6) if targets[name] else None
+        for name in PRESENTATION_ORIENTATION_CLASS_ORDER
+    }
+    valid = [value for value in recalls.values() if value is not None]
+    return {
+        "frame_count": len(usable),
+        "accuracy": round(sum(correct.values()) / len(usable), 6),
+        "macro_recall": round(float(np.mean(valid)), 6),
+        "per_class_recall": recalls,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate temporal orientation stability on consecutive labels.")
     parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_consecutive"))
@@ -260,6 +300,7 @@ def main() -> int:
     candidate_replay = _replay(records, args.baseline_fps, filter_kwargs, adaptive_kwargs)
     baseline = _metrics(records, baseline_replay["predictions"])
     candidate = _metrics(records, candidate_replay["predictions"])
+    presentation = _presentation_metrics(records)
     every_group_non_decreasing = all(
         candidate["groups"][group_id]["accuracy"] >= values["accuracy"]
         for group_id, values in baseline["groups"].items()
@@ -292,6 +333,7 @@ def main() -> int:
             "burst_inference_count": candidate_replay["burst_inference_count"],
             "metrics": candidate,
         },
+        "presentation_metrics": presentation,
         "promotion_gate": {
             "passed": promotion_passed,
             "pooled_accuracy_non_decreasing": candidate["accuracy"] >= baseline["accuracy"],

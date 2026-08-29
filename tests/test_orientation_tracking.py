@@ -134,6 +134,26 @@ class OrientationTrackingTests(unittest.TestCase):
         self.assertEqual(carried["age_frames"], 2)
         self.assertEqual(prediction["inference_status"], "ran")
 
+    def test_four_way_presentation_prediction_maps_to_coarse_label(self):
+        class Probs:
+            data = _Vector([0.1, 0.2, 0.6, 0.1])
+            top1 = 2
+            top1conf = _Scalar(0.6)
+
+        class Result:
+            probs = Probs()
+
+        class Model:
+            names = {0: "frontal", 1: "edge_horizontal", 2: "edge_vertical", 3: "unknown"}
+
+            def predict(self, **kwargs):
+                return [Result()]
+
+        prediction = predict_orientation(Model(), np.zeros((360, 640, 3), dtype=np.uint8), None, 320, "cpu")
+        self.assertEqual(prediction["presentation_label"], "edge_vertical")
+        self.assertEqual(prediction["label"], "normal")
+        self.assertAlmostEqual(prediction["probabilities"]["normal"], 0.7)
+
     def test_temporal_filter_rejects_an_isolated_flip(self):
         temporal_filter = OrientationTemporalFilter()
         first = temporal_filter.update(self._prediction(0.05, 0.9, 0.05))

@@ -91,7 +91,21 @@ Lucas-Kanade 前后向光流，传播上限为 12 帧，前后向误差上限为
 
 ## 方向识别模型
 
-模型只读取悠悠球 ROI，类别为 `horizontal`、`normal`、`not_applicable`，不训练具名招式。
+模型只读取悠悠球 ROI。训练标签改为画面朝向四分类
+`frontal`、`edge_horizontal`、`edge_vertical`、`unknown`，推理时聚合为原有三分类：
+`frontal/edge_vertical -> normal`、`edge_horizontal -> horizontal`、`unknown -> not_applicable`。
+四分类 ROI 视图 manifest 为
+`datasets/1Ayoyo_dataset/orientation_roi/manifest.json`，当前训练集计数为
+`frontal=422`、`edge_horizontal=50`、`edge_vertical=2`、`unknown=17`（验证/测试不重采样）。
+
+新结构基线权重为
+`runs/experiments/yoyo_unified_57935af9dc69_orientation_roi_405cce7c77e0_yolo11n-cls_presentation4_baseline/weights/best.pt`，
+SHA-256：`db2b517aca834996fb2982fc6925168451a08c5da8437dfa012773fb7ab4ef8`。
+独立 test（103 张）四分类 Top-1 为 `0.902913`，连续集 856 帧四分类 Accuracy 为
+`0.912383`；映射后三分类在 5 FPS + 自适应突发 + EMA/滞回协议下 Accuracy 为
+`0.942757`、Macro Recall 为 `0.826033`。
+
+当前默认部署权重仍为下列已验证的三分类模型，直到新结构在所有弱来源组上完成对比：
 权重 SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
 
 在 65 张独立 test 上，Top-1 为 `0.9231`，Macro Recall 为 `0.8732`；三类 recall

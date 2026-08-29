@@ -12,6 +12,14 @@ import numpy as np
 
 ORIENTATION_CLASSES = {"horizontal", "normal", "not_applicable"}
 ORIENTATION_CLASS_ORDER = ("horizontal", "normal", "not_applicable")
+PRESENTATION_ORIENTATION_CLASSES = {"frontal", "edge_horizontal", "edge_vertical", "unknown"}
+PRESENTATION_ORIENTATION_CLASS_ORDER = ("frontal", "edge_horizontal", "edge_vertical", "unknown")
+PRESENTATION_TO_TRICK = {
+    "frontal": "normal",
+    "edge_vertical": "normal",
+    "edge_horizontal": "horizontal",
+    "unknown": "not_applicable",
+}
 
 
 @dataclass
@@ -180,7 +188,7 @@ def load_orientation_model(
 
         model = YOLO(str(path))
         names = {int(key): str(value) for key, value in dict(getattr(model, "names", {}) or {}).items()}
-        if set(names.values()) != ORIENTATION_CLASSES:
+        if set(names.values()) not in (ORIENTATION_CLASSES, PRESENTATION_ORIENTATION_CLASSES):
             return None, f"incompatible_classes: {names}"
         return model, str(path)
     except Exception as exc:
@@ -245,10 +253,30 @@ def predict_orientation(
         values = [float(value) for value in probs.data.detach().cpu().tolist()]
         top1 = int(probs.top1)
         top1_confidence = float(probs.top1conf.detach().cpu().item())
+    raw_probabilities = {names[index]: float(value) for index, value in enumerate(values)}
+    if set(raw_probabilities) == PRESENTATION_ORIENTATION_CLASSES:
+        coarse_probabilities = {name: 0.0 for name in ORIENTATION_CLASS_ORDER}
+        for presentation, value in raw_probabilities.items():
+            coarse_probabilities[PRESENTATION_TO_TRICK[presentation]] += value
+        presentation_label = names[top1]
+        label = PRESENTATION_TO_TRICK[presentation_label]
+    elif set(raw_probabilities) == ORIENTATION_CLASSES:
+        coarse_probabilities = raw_probabilities
+        presentation_label = None
+        label = names[top1]
+    else:
+        raise ValueError(f"orientation model has incompatible classes: {names}")
+    confidence = coarse_probabilities[label]
     return {
-        "label": names[top1],
-        "confidence": round(top1_confidence, 6),
-        "probabilities": {names[index]: round(value, 6) for index, value in enumerate(values)},
+        "label": label,
+        "confidence": round(confidence, 6),
+        "probabilities": {name: round(coarse_probabilities[name], 6) for name in ORIENTATION_CLASS_ORDER},
+        "presentation_label": presentation_label,
+        "presentation_confidence": round(top1_confidence, 6),
+        "presentation_probabilities": (
+            {name: round(raw_probabilities[name], 6) for name in PRESENTATION_ORIENTATION_CLASS_ORDER}
+            if set(raw_probabilities) == PRESENTATION_ORIENTATION_CLASSES else None
+        ),
         "crop_box_pixel": [left, top, right, bottom],
         "crop_policy": "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
         "inference_status": "ran",
