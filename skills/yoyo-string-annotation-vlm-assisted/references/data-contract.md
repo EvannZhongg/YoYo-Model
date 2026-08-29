@@ -24,7 +24,7 @@ Required top-level fields:
 | `anchor_frame_index` | Anchor frame for this sampling sequence |
 | `sampling_manifest_sha256` | Identity of the manifest that supplied provenance |
 | `trick_orientation` | `normal`, `horizontal`, `unknown`, or `not_applicable` |
-| `presentation_orientation` | `frontal`, `edge_horizontal`, `edge_vertical`, or `unknown` |
+| `presentation_orientation` | `normal` -> `frontal` (default) or `edge_vertical`; `horizontal` -> `edge_horizontal`; `not_applicable` -> `unknown` |
 | `visibility` | `visible`, `partial`, `not_visible`, or `uncertain` |
 | `yoyo_not_visible_reason` | `occluded`, `out_of_frame`, or `absent` only when `visibility=not_visible` |
 | `string_visibility` | `visible`, `partial`, `not_visible`, or `uncertain` |

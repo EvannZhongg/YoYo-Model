@@ -522,7 +522,17 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
             or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(result["trick_orientation"], "unknown"),
         )
     ).lower()
-    result["presentation_orientation"] = presentation if presentation in {"frontal", "edge_horizontal", "edge_vertical", "unknown"} else "unknown"
+    allowed_presentation = {
+        "normal": {"frontal", "edge_vertical"},
+        "horizontal": {"edge_horizontal"},
+        "not_applicable": {"unknown"},
+    }.get(result["trick_orientation"], {"unknown"})
+    default_presentation = {
+        "normal": "frontal",
+        "horizontal": "edge_horizontal",
+        "not_applicable": "unknown",
+    }.get(result["trick_orientation"], "unknown")
+    result["presentation_orientation"] = presentation if presentation in allowed_presentation else default_presentation
     bad_case = candidate.get("bad_case", result.get("bad_case", []))
     result["bad_case"] = sorted({str(item).strip() for item in (bad_case or []) if str(item).strip()})
     result["notes"] = str(candidate.get("notes", result.get("notes", "")))[:2000]
@@ -1190,8 +1200,20 @@ def validate_label(
         errors.append("unsupported scene_label")
     if str(label.get("trick_orientation", "unknown")) not in TRICK_ORIENTATIONS:
         errors.append("unsupported trick_orientation")
-    if str(label.get("presentation_orientation", "unknown")) not in {"frontal", "edge_horizontal", "edge_vertical", "unknown"}:
+    trick_orientation = str(label.get("trick_orientation", "unknown"))
+    presentation_orientation = str(
+        label.get("presentation_orientation")
+        or {"normal": "frontal", "horizontal": "edge_horizontal"}.get(trick_orientation, "unknown")
+    )
+    if presentation_orientation not in {"frontal", "edge_horizontal", "edge_vertical", "unknown"}:
         errors.append("unsupported presentation_orientation")
+    allowed_presentation = {
+        "normal": {"frontal", "edge_vertical"},
+        "horizontal": {"edge_horizontal"},
+        "not_applicable": {"unknown"},
+    }.get(trick_orientation, {"unknown"})
+    if presentation_orientation not in allowed_presentation:
+        errors.append("presentation_orientation does not match trick_orientation")
     strokes = label.get("string_polylines_pixel") or []
     valid_strokes = []
     if not isinstance(strokes, list):
@@ -1964,7 +1986,7 @@ def command_export(args: argparse.Namespace) -> int:
             "string_mask_polygons_pixel": "optional reviewed visible-area polygons",
             "string_path": "ordered reconstruction with per-edge evidence; temporal/inferred edges are not segmentation truth",
             "trick_orientation": "normal or horizontal throw plane for trick frames; not_applicable for non-trick frames",
-            "presentation_orientation": "frontal, edge_horizontal, edge_vertical, or unknown; independent of trick_orientation",
+            "presentation_orientation": "normal -> frontal (default) or edge_vertical; horizontal -> edge_horizontal; not_applicable -> unknown",
             "not_visible": "reviewed negative with no visible geometry",
             "uncertain": "excluded",
             "visualization": "terminal reviewed geometry overlaid on the exported source frame; full source resolution by default",

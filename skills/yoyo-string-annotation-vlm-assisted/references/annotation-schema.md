@@ -147,10 +147,16 @@ Use `trick_orientation` from nearby launch motion:
 - `unknown`: draft or unresolved trick; cannot be approved.
 - `not_applicable`: required for `scene_label=non_trick`.
 
-Use `presentation_orientation` independently for the visible yoyo presentation:
+Use `presentation_orientation` for the visible yoyo presentation, with the
+following constrained combinations:
+
+- `trick_orientation=normal`: `frontal` (default) or `edge_vertical`.
+- `trick_orientation=horizontal`: `edge_horizontal` only.
+- `trick_orientation=not_applicable`: `unknown` only.
+
 `frontal` is face-on and circular, `edge_horizontal` is side-on with a
 horizontal profile, and `edge_vertical` is side-on with a vertical profile.
-Vertical presentation does not change a normal trick into a horizontal trick.
+The vertical presentation remains `normal` for trick semantics.
 
 Use `bad_case` for factual issues such as `motion_blur`, `partial_occlusion`,
 `low_contrast`, `edge_clipped`, `ambiguous_string`, or `string_not_visible`.
