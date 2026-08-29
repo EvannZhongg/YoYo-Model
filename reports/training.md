@@ -137,4 +137,4 @@ Macro Recall 为 `0.864272`。
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-最近一次完整验证为 `153 passed`；`compileall` 和 `git diff --check` 均通过。
+最近一次完整验证为 `162 passed`；`compileall` 和 `git diff --check` 均通过。
