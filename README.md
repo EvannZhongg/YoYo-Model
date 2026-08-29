@@ -1,6 +1,6 @@
 # YoYo Model
 
-悠悠球检测、绳线分割、三分类方向识别和完整视频追踪项目。训练数据统一由一个 canonical 数据集管理，不再按来源版本拆分训练流程。
+悠悠球检测、绳线分割、三分类方向识别和完整视频追踪项目。训练数据统一由一个 canonical 数据集管理。
 
 ## 命令行入口
 
@@ -44,8 +44,6 @@ datasets/1Ayoyo_dataset/
 - 人工审核状态和来源信息
 
 RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放在项目内的 `models/rtmpose/`，不会写入 C 盘用户缓存。方向模型只读取悠悠球 ROI。
-
-不包含具名招式类别。项目不再训练或推理具体招式名称，也不生成招式时间段或候选短视频。
 
 ## 主训练流程
 
@@ -117,11 +115,10 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 - 完整追踪视频
 - 逐帧 JSONL
-- 固定宽度逐帧特征
 - 视觉审核图和审核索引
-- 输入路径、权重路径和参数的 `run.json`（追踪默认不再读取整段视频或权重来计算 SHA-256）
+- 输入路径、权重路径和参数的 `run.json`
 
-逐帧结果保留球体、绳线、姿态、bad case 和 `trick_orientation`。追踪器不会基于运动阈值生成时间窗口，不会导出 segment 或候选 clip。
+逐帧结果保留球体、绳线、姿态、bad case 和 `trick_orientation`。
 
 追踪审核和模型索引只保留运行所需的路径及参数元数据；训练/评估阶段用于数据集隔离的
 manifest 校验仍然启用。需要生成发布归档哈希时，可运行模型索引的
@@ -144,9 +141,7 @@ manifest 校验仍然启用。需要生成发布归档哈希时，可运行模�
 数据集人工确认状态独立保存在 `workbench_state/dataset_review_status.json`。
 人工确认只表示核验者看过并认可当前标注；`uncertain` 也可以核验完成，但仍不进入
 悠悠球检测和方向训练监督。
-当前 `yoyo_dataset_review_v3` 使用标签文件大小和纳秒修改时间使编辑后的确认失效，
-不再保存标签 SHA-256。该映射不属于 `agent_yoyo_string_annotation_v5`
-标签 schema，因此无需升级或重建已有训练标签。
+当前 `yoyo_dataset_review_v3` 使用标签文件大小和纳秒修改时间使编辑后的确认失效。
 
 计分标注每次修订都会原子写入 `annotations/score_annotations/`。每个 JSON 的 `video.source_path` 指向 `videos/` 下对应的受控源视频；`Score Annotation` 页签中的会话管理抽屉可直接加载视频并继续标注，也可修改组别/裁判、导出或删除会话。该目录属于独立的计分模型 pipeline，目前仅用于数据标注，不接入当前训练。
 

@@ -1,10 +1,8 @@
 # Training v3
 
-Training v3 keeps the detector and string label contracts. Current task
-builders read only the fields required by detection, string segmentation, and
-orientation; other annotation fields remain available in canonical labels and
-are not consumed by these tasks. Orientation is trained from yoyo pixels
-without string crop geometry. RTMPose-m WholeBody is runtime-only.
+Training v3 builds detection, string segmentation, and orientation views from
+the canonical labels. Orientation is trained from yoyo pixels. RTMPose-m
+WholeBody is used at runtime.
 
 Run every command through the project virtual environment:
 

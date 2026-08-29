@@ -1,4 +1,4 @@
-"""Write the compatibility manifest for binary semantic string training."""
+"""Write the manifest for the binary semantic string training view."""
 
 from __future__ import annotations
 

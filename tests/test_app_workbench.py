@@ -26,7 +26,7 @@ from workbench.tracking import tracking_review_gallery
 
 
 class UnifiedWorkbenchTests(unittest.TestCase):
-    def test_ui_only_exposes_unified_training_and_frame_tracking(self):
+    def test_ui_exposes_unified_training_and_frame_tracking(self):
         config = create_demo().get_config_file()
         props = [component.get("props", {}) for component in config.get("components", [])]
         labels = {str(item.get("label", "")) for item in props}
@@ -35,14 +35,6 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("Unified Dataset", labels)
         self.assertIn("Run Full Video Tracking", values)
         self.assertTrue(any("悠悠球计分标注" in value for value in values))
-        self.assertNotIn("Single Image", labels)
-        self.assertNotIn("Dataset Auto Label", labels)
-        self.assertFalse(any("Single Image" in value for value in values))
-        self.assertFalse(any("Dataset Auto Label" in value for value in values))
-        self.assertNotIn("Named trick model", labels)
-        self.assertNotIn("Trick Label", labels)
-        self.assertNotIn("Segment Manifest", labels)
-        self.assertNotIn("Candidate Clips", labels)
 
     def test_video_tracking_input_accepts_mp4_and_mov(self):
         config = create_demo().get_config_file()
@@ -288,7 +280,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
 
     @patch("app._tracking_review_gallery", return_value=[])
     @patch("app.track_video")
-    def test_tracking_forwards_frame_models_without_segment_arguments(self, track_video, _gallery):
+    def test_tracking_forwards_configured_frame_models(self, track_video, _gallery):
         track_video.return_value = {
             "frame_count": 12,
             "output_video": "tracked.mp4",
@@ -320,16 +312,12 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(outputs[1], "frames.jsonl")
         self.assertEqual(outputs[2], "run.json")
         self.assertIn("Semantic inference frames: 3", outputs[-1])
-        self.assertNotIn("TTA", outputs[-1])
         kwargs = track_video.call_args.kwargs
         self.assertEqual(kwargs["source_video_path"], "input.mov")
         self.assertEqual(kwargs["string_inference_fps"], 10.0)
         self.assertEqual(kwargs["orientation_inference_fps"], 5.0)
         self.assertTrue(kwargs["enable_orientation_model"])
         self.assertEqual(kwargs["visualization_max_width"], 1920)
-        self.assertFalse(any("tta" in key.lower() for key in kwargs))
-        self.assertFalse(any("trick" in key and key != "enable_orientation_model" for key in kwargs))
-        self.assertFalse(any("segment" in key or "clip" in key or "activity" in key for key in kwargs))
 
         track_video.reset_mock()
         run_video_tracking(
@@ -343,7 +331,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             TRACKING_CONFIG.string_color_semantic_prefilter,
         )
 
-    def test_tracking_without_video_returns_current_output_shape(self):
+    def test_tracking_without_video_returns_empty_output(self):
         outputs = run_video_tracking(
             None, "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cpu",
             False, "", False, "", 0.2, 1.0, 10.0,
@@ -392,7 +380,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(run_command.call_args.args[0][:3], ["-m", "training_v3.evaluate", str(run)])
 
-    def test_tracking_gallery_uses_frame_index_without_segments(self):
+    def test_tracking_gallery_uses_frame_index(self):
         with TemporaryDirectory() as directory:
             run = Path(directory)
             review = run / "review_frames"

@@ -120,13 +120,6 @@ class _AsyncVideoWriter:
         self._raise_if_failed()
 
 
-def _safe_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _load_rtmpose_model(
     weights_path: str | Path | None,
     device: str = "",
@@ -207,7 +200,6 @@ def _should_reacquire_string(
     scheduled_inference: bool,
     model_loaded: bool,
     yoyo: dict[str, Any] | None,
-    previous_string: dict[str, Any] | None,
     current_string: dict[str, Any] | None,
 ) -> bool:
     """Re-run the model when an anchored track cannot cross a cadence gap."""
@@ -1214,7 +1206,6 @@ def track_video(
             run_scheduled_string_inference,
             string_model is not None,
             yoyo,
-            previous_string,
             string,
         )
         if reacquired_string:

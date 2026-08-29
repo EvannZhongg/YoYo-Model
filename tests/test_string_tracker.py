@@ -731,13 +731,11 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
     def test_failed_cadence_propagation_requests_model_reacquisition(self):
         yoyo = {"center": [120.0, 90.0]}
-        previous = {"points": [[20.0, 20.0], [120.0, 90.0]]}
 
-        self.assertTrue(_should_reacquire_string(False, True, yoyo, previous, None))
-        self.assertFalse(_should_reacquire_string(True, True, yoyo, previous, None))
-        self.assertFalse(_should_reacquire_string(False, True, None, previous, None))
-        self.assertTrue(_should_reacquire_string(False, True, yoyo, None, None))
-        self.assertFalse(_should_reacquire_string(False, True, yoyo, previous, {"points": []}))
+        self.assertTrue(_should_reacquire_string(False, True, yoyo, None))
+        self.assertFalse(_should_reacquire_string(True, True, yoyo, None))
+        self.assertFalse(_should_reacquire_string(False, True, None, None))
+        self.assertFalse(_should_reacquire_string(False, True, yoyo, {"points": []}))
 
     def _shifted_frames(self):
         height, width = 180, 240
