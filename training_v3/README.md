@@ -18,4 +18,6 @@ Run every command through the project virtual environment:
 
 The model downloader writes only to `models/rtmpose`. No RTMLib user-cache
 path is used. The v3 orientation view records `string_geometry: false` in its
-manifest so its input dependencies are mechanically auditable.
+manifest so its input dependencies are mechanically auditable. Orientation
+training uses the four `presentation_orientation` classes and records the
+explicit mapping to the coarse three-way output consumed by tracking.
