@@ -149,20 +149,13 @@ def run_video_tracking(
     gr.set_static_paths(paths=[result["run_dir"]])
     review_gallery = _tracking_review_gallery(result.get("run_dir"))
     status = (
-        f"Done. Frames: {result['frame_count']}\n"
-        f"Output: {result['output_video']}\n"
+        f"Completed | {result['frame_count']} frames | {result.get('tracking_loop_fps', 0):.2f} FPS\n"
         f"Bad cases: {result['bad_case_counts']}\n"
-        f"String geometry: {result.get('string_geometry_counts', {})}\n"
-        f"String model: {result.get('string_model', 'disabled')}\n"
+        f"String model: {result.get('string_model', 'disabled')} | "
         f"Semantic inference frames: {result.get('string_inference_frame_count', 0)}\n"
-        f"Orientation model: {result.get('orientation_model', 'disabled')}\n"
-        f"Orientation inference frames: {result.get('orientation_inference_frame_count', 0)}\n"
-        f"Orientation summary: {result.get('orientation_summary', {})}\n"
-        f"Tracking rate: {result.get('tracking_loop_fps', 0):.2f} frames/s\n"
-        f"Preview resolution: {result.get('output_width', 0)}x{result.get('output_height', 0)}\n"
-        f"Review images: {len(review_gallery)}\n"
-        f"Run manifest: {result['run_manifest']}\n"
-        f"Weights: {result['weights']}"
+        f"Orientation model: {result.get('orientation_model', 'disabled')} | "
+        f"Inference frames: {result.get('orientation_inference_frame_count', 0)}\n"
+        f"Orientation summary: {result.get('orientation_summary', {})}"
     )
     return (
         result["output_video"],
@@ -227,87 +220,90 @@ def create_demo():
                             file_count="single",
                             height=280,
                         )
-                        tracking_weights = gr.Textbox(label="Yoyo Detection Weights", value=str(TRACKING_CONFIG.weights_path))
-                        tracking_output_dir = gr.Textbox(label="Output Directory", value=str(TRACKING_CONFIG.output_dir))
-                        tracking_preview_width = gr.Number(
-                            label="Tracked Preview Maximum Width (0 = source)",
-                            value=TRACKING_CONFIG.visualization_max_width,
-                            minimum=0,
-                            precision=0,
-                        )
-                        with gr.Row():
-                            tracking_conf = gr.Slider(label="Confidence", minimum=0.01, maximum=0.99, value=TRACKING_CONFIG.confidence, step=0.01)
-                            tracking_iou = gr.Slider(label="IoU", minimum=0.1, maximum=0.95, value=TRACKING_CONFIG.iou, step=0.01)
-                            tracking_imgsz = gr.Number(label="Image Size", value=TRACKING_CONFIG.imgsz, precision=0)
-                            tracking_device = gr.Textbox(label="Device", value=TRACKING_CONFIG.device)
-                        tracking_pose = gr.Checkbox(label="RTMPose body / hand landmarks", value=TRACKING_CONFIG.enable_pose)
-                        tracking_pose_weights = gr.Textbox(label="RTMPose Weights", value=str(TRACKING_CONFIG.pose_weights_path))
-                        tracking_string_model = gr.Checkbox(label="String segmentation model", value=TRACKING_CONFIG.enable_string_model)
-                        tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(TRACKING_CONFIG.string_weights_path))
-                        with gr.Row():
-                            tracking_string_conf = gr.Slider(
-                                label="String Confidence", minimum=0.01, maximum=0.95,
-                                value=TRACKING_CONFIG.string_confidence, step=0.01,
+                        with gr.Accordion("Advanced settings", open=False):
+                            tracking_weights = gr.Textbox(label="Yoyo Detection Weights", value=str(TRACKING_CONFIG.weights_path))
+                            tracking_output_dir = gr.Textbox(label="Output Directory", value=str(TRACKING_CONFIG.output_dir))
+                            tracking_preview_width = gr.Number(
+                                label="Tracked Preview Maximum Width (0 = source)",
+                                value=TRACKING_CONFIG.visualization_max_width,
+                                minimum=0,
+                                precision=0,
                             )
-                            tracking_string_scale = gr.Slider(
-                                label="Semantic Inference Scale", minimum=0.5, maximum=2.0,
-                                value=TRACKING_CONFIG.string_inference_scale, step=0.25,
+                            with gr.Row():
+                                tracking_conf = gr.Slider(label="Confidence", minimum=0.01, maximum=0.99, value=TRACKING_CONFIG.confidence, step=0.01)
+                                tracking_iou = gr.Slider(label="IoU", minimum=0.1, maximum=0.95, value=TRACKING_CONFIG.iou, step=0.01)
+                                tracking_imgsz = gr.Number(label="Image Size", value=TRACKING_CONFIG.imgsz, precision=0)
+                                tracking_device = gr.Textbox(label="Device", value=TRACKING_CONFIG.device)
+                            tracking_pose = gr.Checkbox(label="RTMPose body / hand landmarks", value=TRACKING_CONFIG.enable_pose)
+                            tracking_pose_weights = gr.Textbox(label="RTMPose Weights", value=str(TRACKING_CONFIG.pose_weights_path))
+                            tracking_string_model = gr.Checkbox(label="String segmentation model", value=TRACKING_CONFIG.enable_string_model)
+                            tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(TRACKING_CONFIG.string_weights_path))
+                            with gr.Row():
+                                tracking_string_conf = gr.Slider(
+                                    label="String Confidence", minimum=0.01, maximum=0.95,
+                                    value=TRACKING_CONFIG.string_confidence, step=0.01,
+                                )
+                                tracking_string_scale = gr.Slider(
+                                    label="Semantic Inference Scale", minimum=0.5, maximum=2.0,
+                                    value=TRACKING_CONFIG.string_inference_scale, step=0.25,
+                                )
+                                tracking_string_fps = gr.Number(
+                                    label="Semantic Model FPS (0 = every frame)",
+                                    value=TRACKING_CONFIG.string_inference_fps,
+                                    minimum=0,
+                                    precision=1,
+                                )
+                            tracking_yoyo_division = gr.Dropdown(
+                                label="YoYo Division",
+                                choices=["1A", "2A", "3A", "4A", "5A"],
+                                value=TRACKING_CONFIG.yoyo_division,
                             )
-                            tracking_string_fps = gr.Number(
-                                label="Semantic Model FPS (0 = every frame)",
-                                value=TRACKING_CONFIG.string_inference_fps,
+                            tracking_orientation_model = gr.Checkbox(
+                                label="Coarse trick orientation model",
+                                value=TRACKING_CONFIG.enable_orientation_model,
+                            )
+                            tracking_orientation_weights = gr.Textbox(
+                                label="Orientation Weights",
+                                value=str(TRACKING_CONFIG.orientation_weights_path),
+                            )
+                            tracking_orientation_fps = gr.Number(
+                                label="Orientation Model FPS (0 = every frame)",
+                                value=TRACKING_CONFIG.orientation_inference_fps,
                                 minimum=0,
                                 precision=1,
                             )
-                        tracking_yoyo_division = gr.Dropdown(
-                            label="YoYo Division",
-                            choices=["1A", "2A", "3A", "4A", "5A"],
-                            value=TRACKING_CONFIG.yoyo_division,
-                        )
-                        tracking_orientation_model = gr.Checkbox(
-                            label="Coarse trick orientation model",
-                            value=TRACKING_CONFIG.enable_orientation_model,
-                        )
-                        tracking_orientation_weights = gr.Textbox(
-                            label="Orientation Weights",
-                            value=str(TRACKING_CONFIG.orientation_weights_path),
-                        )
-                        tracking_orientation_fps = gr.Number(
-                            label="Orientation Model FPS (0 = every frame)",
-                            value=TRACKING_CONFIG.orientation_inference_fps,
-                            minimum=0,
-                            precision=1,
-                        )
                         track_btn = gr.Button("Run Full Video Tracking", variant="primary")
 
                     with gr.Column(scale=1):
                         tracking_metadata_source = gr.State(value=None)
                         tracking_output_video = gr.Video(label="Tracked Video")
-                        tracking_metadata = gr.File(label="Frame Metadata JSONL")
-                        tracking_run_manifest = gr.File(label="Run Manifest")
-                        tracking_review_sheet = gr.Image(label="Tracking Visual Review", type="filepath")
-                        tracking_review_gallery = gr.Gallery(
-                            label="Tracking Review Frames (Raw / Overlay)",
-                            columns=2,
-                            height=560,
-                            allow_preview=True,
-                            object_fit="contain",
-                            type="filepath",
-                            buttons=["fullscreen", "download"],
-                        )
-                        tracking_selected_frame = gr.JSON(label="Selected Tracking Frame JSON")
-                        tracking_review_binding = gr.JSON(label="Digest-bound Review Identity")
-                        with gr.Row():
-                            tracking_review_decision = gr.Radio(
-                                choices=["correct", "incorrect", "unresolved"],
-                                value="unresolved",
-                                label="Frame Decision",
+                        tracking_status = gr.Textbox(label="Run Summary", lines=5, interactive=False, buttons=["copy"])
+                        with gr.Accordion("Files & frame review", open=False):
+                            with gr.Row():
+                                tracking_metadata = gr.File(label="Frame Metadata JSONL")
+                                tracking_run_manifest = gr.File(label="Run Manifest")
+                            tracking_review_sheet = gr.Image(label="Tracking Visual Review", type="filepath")
+                            tracking_review_gallery = gr.Gallery(
+                                label="Tracking Review Frames (Raw / Overlay)",
+                                columns=2,
+                                height=560,
+                                allow_preview=True,
+                                object_fit="contain",
+                                type="filepath",
+                                buttons=["fullscreen", "download"],
                             )
-                            tracking_review_reviewer = gr.Textbox(label="Reviewer", value="workbench-reviewer")
-                        tracking_review_save = gr.Button("Save Frame Review", variant="primary")
-                        tracking_review_log = gr.File(label="Tracking Frame Review Log")
-                        tracking_review_status = gr.Textbox(label="Frame Review Status", interactive=False)
-                        tracking_status = gr.Textbox(label="Tracking Status", lines=10, interactive=False, buttons=["copy"])
+                            tracking_selected_frame = gr.JSON(label="Selected Tracking Frame JSON")
+                            tracking_review_binding = gr.JSON(label="Digest-bound Review Identity")
+                            with gr.Row():
+                                tracking_review_decision = gr.Radio(
+                                    choices=["correct", "incorrect", "unresolved"],
+                                    value="unresolved",
+                                    label="Frame Decision",
+                                )
+                                tracking_review_reviewer = gr.Textbox(label="Reviewer", value="workbench-reviewer")
+                            tracking_review_save = gr.Button("Save Frame Review", variant="primary")
+                            tracking_review_log = gr.File(label="Tracking Frame Review Log")
+                            tracking_review_status = gr.Textbox(label="Frame Review Status", interactive=False)
 
                 track_btn.click(
                     run_video_tracking,
