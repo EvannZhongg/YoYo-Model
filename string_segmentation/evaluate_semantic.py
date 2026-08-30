@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -68,13 +69,24 @@ def _write_image(path: Path, image: np.ndarray) -> None:
     encoded.tofile(str(path))
 
 
+def _read_image(path: str | Path) -> np.ndarray | None:
+    """Read image bytes through NumPy so Unicode Windows paths work reliably."""
+    try:
+        encoded = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    if encoded.size == 0:
+        return None
+    return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+
 def _prediction_sheet(samples: list[dict[str, Any]], threshold: float, output: Path) -> Path:
     cell_width, image_height, text_height = 480, 272, 58
     columns = 2
     rows = max(1, (len(samples) + columns - 1) // columns)
     canvas = np.full((rows * (image_height + text_height), columns * cell_width, 3), 255, dtype=np.uint8)
     for index, sample in enumerate(samples):
-        image = cv2.imread(sample["image_path"], cv2.IMREAD_COLOR)
+        image = _read_image(sample["image_path"])
         if image is None:
             continue
         target_height, target_width = sample["target"].shape
@@ -259,7 +271,9 @@ def main() -> int:
         args.ensemble_candidate_threshold,
         args.output_dir or None,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    document = json.dumps(result, ensure_ascii=False, indent=2)
+    encoding = sys.stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 

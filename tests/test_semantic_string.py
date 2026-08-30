@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import torch
 
-from string_segmentation.evaluate_semantic import _artifact_suffix, _check_dataset_manifest
+from string_segmentation.evaluate_semantic import _artifact_suffix, _check_dataset_manifest, _read_image
 from string_segmentation.evaluate_consecutive import _group_artifact_stem
 from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
@@ -38,6 +38,16 @@ from string_segmentation.train_semantic import _initialization_lineage, _reviewe
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_evaluation_image_reader_supports_unicode_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "悠悠球-绳线.jpg"
+            image = np.full((8, 9, 3), 127, dtype=np.uint8)
+            encoded = cv2.imencode(".jpg", image)[1]
+            encoded.tofile(str(path))
+            loaded = _read_image(path)
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.shape[:2], (8, 9))
+
     def test_soft_cldice_loss_handles_empty_batch_and_backpropagates(self):
         empty_probability = torch.full((2, 1, 16, 16), 0.5, requires_grad=True)
         empty_target = torch.zeros_like(empty_probability)
