@@ -653,6 +653,7 @@ DATASET_ANNOTATION_HTML = r"""
       <label>数据集<select id="yda-dataset-select"><option value="">扫描中...</option></select></label>
       <label>本地路径<input id="yda-dataset-path" type="text" spellcheck="false"></label>
       <button class="yda__button yda__button--primary" id="yda-open" type="button">打开</button>
+      <button class="yda__button" id="yda-preannotate" type="button">模型预标注</button>
     </div>
   </header>
   <main class="yda__workspace">
@@ -698,7 +699,7 @@ DATASET_ANNOTATION_HTML = r"""
     <aside class="yda__editor">
       <fieldset id="yda-fields" disabled>
         <div class="yda__editor-scroll">
-          <legend>悠悠球识别</legend>
+          <div class="yda__section-heading"><span class="yda__section-title">悠悠球识别</span><button type="button" id="yda-promote-yoyo" hidden>设为正在使用的球</button></div>
           <div class="yda__yoyo-selector"><button type="button" id="yda-prev-yoyo" title="上一只悠悠球">上一只</button><output id="yda-yoyo-selection">正在使用的球</output><button type="button" id="yda-next-yoyo" title="下一只悠悠球">下一只</button></div>
           <label>可见状态<select id="yda-yoyo-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
           <label id="yda-yoyo-not-visible-reason-field" hidden>不可见原因<select id="yda-yoyo-not-visible-reason"><option value="">请选择</option><option value="occluded">被遮挡</option><option value="out_of_frame">画面外</option><option value="absent">不存在</option></select></label>
@@ -740,7 +741,7 @@ DATASET_ANNOTATION_CSS = r"""
 .yda h3 { font-size:14px; overflow-wrap:anywhere; }
 .yda__header { align-items:end; border-bottom:1px solid var(--line); display:flex; gap:24px; justify-content:space-between; padding:16px 4px; }
 .yda__header p { color:var(--muted); font-size:12px; margin-top:4px; }
-.yda__dataset-picker { align-items:end; display:grid; gap:8px; grid-template-columns:minmax(150px,220px) minmax(260px,420px) auto; width:min(760px,70%); }
+.yda__dataset-picker { align-items:end; display:grid; gap:8px; grid-template-columns:minmax(130px,190px) minmax(180px,280px) auto auto; width:min(760px,78%); }
 .yda label { color:#505750; display:grid; font-size:11px; font-weight:650; gap:5px; }
 .yda input,.yda select,.yda textarea { background:#fff; border:1px solid #c9d0c9; border-radius:5px; color:var(--ink); min-width:0; padding:7px 9px; width:100%; }
 .yda input,.yda select { height:36px; }
@@ -790,13 +791,16 @@ DATASET_ANNOTATION_CSS = r"""
 .yda fieldset label { margin-top:7px; }
 .yda__editor-scroll { min-height:0; overflow:auto; padding-right:5px; scrollbar-gutter:stable; }
 .yda__editor-scroll > legend:first-child { border-top:0; margin-top:0; }
+.yda__section-heading { align-items:center; border-top:0; display:flex; justify-content:space-between; margin-top:0; min-height:34px; padding:0; }
+.yda__section-title { font-size:12px; font-weight:750; }
+.yda__section-heading button { min-height:30px; padding:5px 8px; }
 .yda__record { background:var(--surface); border-top:1px solid var(--line); padding-top:9px; position:relative; }
 .yda__record legend { border-top:0; margin-top:0; padding-top:0; }
 .yda__record textarea { min-height:48px; resize:none; }
 .yda__record-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
 .yda__review.is-reviewed { background:#dceee7; border-color:#84b9a7; color:#0c5a44; }
 .yda__coords { display:grid; gap:6px; grid-template-columns:1fr 1fr; margin:9px 0; }
-.yda__yoyo-selector { align-items:center; display:grid; gap:6px; grid-template-columns:auto minmax(0,1fr) auto; margin:8px 0; }
+.yda__yoyo-selector { align-items:center; display:grid; gap:6px; grid-template-columns:auto minmax(0,1fr) auto auto; margin:8px 0; }
 .yda__yoyo-selector output { color:var(--muted); font-size:11px; overflow:hidden; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
 .yda__line-list { display:grid; gap:5px; margin:9px 0; }
 .yda__line-actions { display:grid; gap:6px; grid-template-columns:1fr 1fr; }
@@ -832,7 +836,7 @@ const editorSnapshot = () => ({...cloneGeometry(),yoyoVisibility:$("#yda-yoyo-vi
 function pushHistory(){ state.history.push(cloneGeometry()); if(state.history.length>60)state.history.shift(); }
 function syncReviewButton(){ const button=$("#yda-review"),reviewed=Boolean(state.sample?.reviewed);button.disabled=!state.sample||state.dirty;button.classList.toggle("is-reviewed",reviewed);button.textContent=reviewed?"取消核验":"核验完成"; }
 function syncYoyoFields(){const selected=selectedYoyo(),visibility=$("#yda-yoyo-visibility").value,notVisible=visibility==="not_visible",isBackup=state.selectedBackup>=0;$("#yda-yoyo-not-visible-reason-field").hidden=!notVisible;$("#yda-yoyo-not-visible-reason").disabled=!notVisible;["x1","y1","x2","y2"].forEach(name=>$("#yda-"+name).disabled=notVisible);$("#yda-clear-box").disabled=notVisible;$("#yda-delete-backup").hidden=!isBackup;$("#yda-delete-backup").disabled=!isBackup;$("#yda-yoyo-selection").textContent=isBackup?`备用球 ${state.selectedBackup+1} / ${state.backups.length}`:"正在使用的球";const boxTool=element.querySelector('#yda-tools button[data-tool="box"]');boxTool.disabled=notVisible;if(notVisible&&state.tool==="box")setTool("select");$("#yda-prev-yoyo").disabled=state.selectedBackup<0;$("#yda-next-yoyo").disabled=state.backups.length===0;}
-function syncPresentationOrientation(){const trick=$("#yda-trick-orientation").value,presentation=$("#yda-presentation-orientation"),allowed={normal:["frontal","edge_vertical"],horizontal:["edge_horizontal"],not_applicable:["unknown"]}[trick]||["unknown"],labels={frontal:"正面（frontal）",edge_horizontal:"侧面横向（edge_horizontal）",edge_vertical:"侧面纵向（edge_vertical）",unknown:"未知（unknown）"},current=presentation.value,next=allowed.includes(current)?current:allowed[0];presentation.replaceChildren(...allowed.map(value=>new Option(labels[value],value)));presentation.value=next;}
+function syncPresentationOrientation(){const trick=$("#yda-trick-orientation").value,presentation=$("#yda-presentation-orientation"),allowed={normal:["frontal","edge_vertical"],horizontal:["edge_horizontal"],not_applicable:["unknown"]}[trick]||["unknown"],labels={frontal:"正面（frontal）",edge_horizontal:"侧面横向（edge_horizontal）",edge_vertical:"侧面纵向（edge_vertical）",unknown:"未知（unknown）"},current=presentation.value,next=allowed.includes(current)?current:allowed[0];presentation.replaceChildren(...allowed.map(value=>new Option(labels[value],value)));presentation.value=next;$("#yda-promote-yoyo").hidden=state.selectedBackup<0;}
 function syncSelectedYoyo(){const selected=selectedYoyo()||{visibility:"uncertain",not_visible_reason:"",trick_orientation:state.selectedBackup>=0?"horizontal":"normal",presentation_orientation:state.selectedBackup>=0?"edge_horizontal":"frontal",bbox_pixel:null};$("#yda-yoyo-visibility").value=selected.visibility||"uncertain";$("#yda-yoyo-not-visible-reason").value=selected.not_visible_reason||"";$("#yda-trick-orientation").value=selected.trick_orientation|| (state.selectedBackup>=0?"horizontal":"normal");$("#yda-presentation-orientation").value=selected.presentation_orientation||"unknown";syncPresentationOrientation();if(selectedYoyo())selectedYoyo().presentation_orientation=$("#yda-presentation-orientation").value;syncYoyoFields();syncCoordinateInputs();renderCanvas();}
 function selectYoyo(index){if(index<-1||index>=state.backups.length)return;state.selectedBackup=index;syncSelectedYoyo();canvas.focus({preventScroll:true});}
 function syncResetButton(){ $("#yda-reset").disabled=!state.sample||!state.dirty; }
@@ -878,6 +882,7 @@ $("#yda-toggle-annotations").onclick=toggleAnnotations;
 $("#yda-clear-box").onclick=()=>{const selected=selectedYoyo();if(!selected)return;pushHistory();selected.bbox_pixel=null;selected.visibility="uncertain";selected.not_visible_reason=null;syncSelectedYoyo();markDirty();};
 function deleteSelectedBackup(){if(state.selectedBackup<0||state.selectedBackup>=state.backups.length)return false;pushHistory();state.backups.splice(state.selectedBackup,1);state.selectedBackup=Math.min(state.selectedBackup,state.backups.length-1);syncSelectedYoyo();markDirty();toast("已删除当前备用球");return true;}
 $("#yda-delete-backup").onclick=deleteSelectedBackup;
+$("#yda-promote-yoyo").onclick=()=>{if(state.selectedBackup<0||state.selectedBackup>=state.backups.length)return;pushHistory();const index=state.selectedBackup;const previous=state.activeYoyo;state.activeYoyo=state.backups[index];state.backups[index]=previous;state.selectedBackup=-1;syncSelectedYoyo();markDirty();toast("已将备用球设为正在使用的球");};
 $("#yda-prev-yoyo").onclick=()=>{if(state.selectedBackup===0)selectYoyo(-1);else if(state.selectedBackup>0)selectYoyo(state.selectedBackup-1);};
 $("#yda-next-yoyo").onclick=()=>{if(state.backups.length)selectYoyo(state.selectedBackup<0?0:Math.min(state.backups.length-1,state.selectedBackup+1));};
 $("#yda-add-line").onclick=()=>startNewLine();
@@ -890,6 +895,7 @@ $("#yda-save").onclick=async()=>{if(!state.sample)return;if(state.activeLine!==n
 $("#yda-review").onclick=async()=>{if(!state.sample||state.dirty)return;const confirmed=!state.sample.reviewed;$("#yda-review").disabled=true;try{const result=await server.ui_set_annotation_sample_reviewed({dataset_path:state.dataset.dataset_path,sample_key:state.sample.key,reviewer:$("#yda-reviewer").value,confirmed});state.sample={...state.sample,...result};const index=state.samples.findIndex(item=>item.key===state.sample.key);state.samples[index]={...state.samples[index],...result};$("#yda-dirty").textContent=result.reviewed?"已核验":"已取消核验";renderSamples();syncReviewButton();toast(result.reviewed?"已记录为核验完成":"已取消核验");if(result.reviewed&&index<state.samples.length-1)await selectSample(state.samples[index+1].key);}catch(error){toast(`核验状态保存失败：${error?.message||error}`);syncReviewButton();}};
 $("#yda-prev").onclick=()=>{if(state.current>0)selectSample(state.samples[state.current-1].key);}; $("#yda-next").onclick=()=>{if(state.current<state.samples.length-1)selectSample(state.samples[state.current+1].key);};
 $("#yda-search").addEventListener("input",renderSamples);$("#yda-filter").addEventListener("change",renderSamples);$("#yda-open").onclick=openDataset;
+$("#yda-preannotate").onclick=async()=>{const path=$("#yda-dataset-path").value.trim();if(!path)return toast("请先打开数据集");if(state.dirty&&!window.confirm("当前修改尚未保存，确定先运行模型预标注吗？"))return;if(!window.confirm("模型预标注会先备份整个数据集，再覆盖当前标签并全部标记为待审核，确定继续吗？"))return;const button=$("#yda-preannotate");button.disabled=true;$("#yda-status").textContent="正在备份并运行模型预标注...";try{const result=await server.ui_preannotate_dataset({dataset_path:path});const refreshed=await server.ui_open_annotation_dataset({dataset_path:path});state.dataset=refreshed;state.samples=refreshed.samples;state.sample=null;state.dirty=false;renderSamples();$("#yda-status").textContent=`预标注${result.status==="completed"?"完成":"部分完成"}：${result.processed_count}/${result.label_count}，备份 ${result.backup_path}`;await selectSample(refreshed.samples[0].key);toast(result.failure_count?`完成，${result.failure_count} 条失败`:`已完成 ${result.processed_count} 条预标注`);}catch(error){$("#yda-status").textContent="模型预标注失败";toast(error?.message||String(error));}finally{button.disabled=false;}};
 $("#yda-dataset-select").addEventListener("change",event=>{$("#yda-dataset-path").value=event.target.value;});
 ["pointerenter","focus","pointerdown"].forEach(name=>$("#yda-dataset-select").addEventListener(name,()=>refreshDatasetOptions($("#yda-dataset-select").value).catch(error=>toast(`刷新数据集失败：${error?.message||error}`))));
 viewport.addEventListener("pointermove",event=>{zoomAnchor={x:event.clientX,y:event.clientY};});
@@ -903,6 +909,8 @@ element.addEventListener("keydown",event=>{if(event.target.matches("input,select
 
 
 def dataset_annotation_component_kwargs() -> dict[str, Any]:
+    from workbench.preannotation import ui_preannotate_dataset
+
     return {
         "value": DATASET_ANNOTATION_HTML,
         "css_template": DATASET_ANNOTATION_CSS,
@@ -916,5 +924,6 @@ def dataset_annotation_component_kwargs() -> dict[str, Any]:
             ui_load_annotation_sample,
             ui_save_annotation_sample,
             ui_set_annotation_sample_reviewed,
+            ui_preannotate_dataset,
         ],
     }

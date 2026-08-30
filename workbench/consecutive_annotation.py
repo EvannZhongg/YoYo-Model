@@ -346,6 +346,8 @@ $("#yca-confirm-range").onclick=async()=>{if(!state.dataset||!state.currentGroup
 
 
 def consecutive_annotation_component_kwargs() -> dict[str, Any]:
+    from workbench.preannotation import ui_preannotate_dataset
+
     return {
         "value": _component_html(),
         "css_template": _component_css(),
@@ -360,5 +362,6 @@ def consecutive_annotation_component_kwargs() -> dict[str, Any]:
             ui_save_consecutive_annotation_sample,
             ui_set_consecutive_annotation_sample_reviewed,
             ui_select_consecutive_group_range,
+            ui_preannotate_dataset,
         ],
     }
