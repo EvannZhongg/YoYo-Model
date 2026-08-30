@@ -149,6 +149,24 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["yoyo"]["presence"]["known_frames"], 3)
         self.assertEqual(result["yoyo"]["presence"]["fp"], 1)
 
+    def test_nested_active_yoyo_review_status_is_counted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset, predictions = self._dataset(Path(directory))
+            label = dataset / "canonical" / "labels" / "video-a" / "frame-000.json"
+            data = json.loads(label.read_text(encoding="utf-8"))
+            data["active_yoyo"] = {
+                "visibility": "visible",
+                "bbox_pixel": [10, 10, 20, 20],
+                "bbox_review_status": "reviewed",
+            }
+            data.pop("visibility")
+            data.pop("bbox_review_status")
+            data.pop("yoyo_bbox_pixel")
+            label.write_text(json.dumps(data), encoding="utf-8")
+            result = evaluate_sequence(dataset, predictions)
+        self.assertEqual(result["yoyo"]["presence"]["known_frames"], 4)
+        self.assertEqual(result["yoyo"]["localization"]["matched_frames"], 4)
+
     def test_frame_range_can_hold_out_a_contiguous_subsequence(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset, predictions = self._dataset(Path(directory))

@@ -472,7 +472,12 @@ def _known_targets(annotation: dict[str, Any]) -> tuple[bool, list[float] | None
     visibility = str(active_yoyo.get("visibility") or "")
     not_visible_reason = str(active_yoyo.get("not_visible_reason") or "")
     bbox = _valid_bbox(active_yoyo.get("bbox_pixel"))
-    bbox_state = str(annotation.get("bbox_review_status") or annotation.get("review_status") or "")
+    bbox_state = str(
+        active_yoyo.get("bbox_review_status")
+        or annotation.get("bbox_review_status")
+        or annotation.get("review_status")
+        or ""
+    )
     if visibility in {"visible", "partial"}:
         yoyo_known = bbox is not None and bbox_state in KNOWN_REVIEW_STATES
     elif visibility == "not_visible":
