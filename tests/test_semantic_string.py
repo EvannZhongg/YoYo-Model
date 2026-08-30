@@ -440,6 +440,20 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["points"]), 2)
         self.assertGreaterEqual(len(result["polygon"]), 3)
 
+    def test_semantic_mask_polyline_point_limit_is_configurable(self):
+        probability = np.zeros((64, 256), dtype=np.float32)
+        probability[30:33, 8:248] = 0.9
+        meta = LetterboxMeta(256, 64, 256, 64, 256, 64, 0, 0, 1.0)
+        result = semantic_mask_observation(
+            probability,
+            meta,
+            threshold=0.8,
+            min_component_pixels=1,
+            max_polyline_points=8,
+        )
+        self.assertIsNotNone(result)
+        self.assertLessEqual(len(result["points"]), 8)
+
     def test_division_does_not_reject_component_inside_yoyo_body(self):
         probability = np.zeros((64, 96), dtype=np.float32)
         probability[43:53, 72:84] = 0.95

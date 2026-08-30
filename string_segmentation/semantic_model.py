@@ -881,6 +881,7 @@ def semantic_mask_observation(
     yoyo_division: str = "1A",
     min_component_pixels: int = 12,
     max_components: int = 8,
+    max_polyline_points: int = 64,
     hand_points: list[list[float]] | None = None,
 ) -> dict[str, Any] | None:
     """Turn a low-resolution semantic mask into review-only string geometry."""
@@ -947,7 +948,10 @@ def semantic_mask_observation(
         if len(polygon) < 3:
             continue
         skeleton = _skeletonize(padded)
-        points = _longest_skeleton_path(skeleton)
+        points = _longest_skeleton_path(
+            skeleton,
+            max_points=max(2, int(max_polyline_points)),
+        )
         if len(points):
             points += offset
         if len(points) < 2:
