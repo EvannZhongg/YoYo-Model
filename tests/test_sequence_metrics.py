@@ -25,6 +25,9 @@ class SequenceMetricsTests(unittest.TestCase):
 
         self.assertEqual(metrics["target_samples"], 22)
         self.assertEqual(metrics["prediction_samples"], 11)
+        self.assertEqual(metrics["target_component_count"], 2)
+        self.assertEqual(metrics["prediction_component_count"], 1)
+        self.assertAlmostEqual(metrics["length_ratio"], 0.5, places=4)
         self.assertEqual(metrics["tolerances"]["2"]["precision"], 1.0)
         self.assertEqual(metrics["tolerances"]["2"]["recall"], 0.5)
         self.assertEqual(metrics["tolerances"]["2"]["f1"], 0.666667)
@@ -94,6 +97,8 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["yoyo"]["localization"]["mean_iou"], 1.0)
         self.assertEqual(result["string"]["centerline"]["tolerances"]["2"]["f1"], 1.0)
         self.assertEqual(result["string"]["centerline"]["chamfer_mean_px"], 0.0)
+        self.assertEqual(result["string"]["centerline"]["mean_length_ratio"], 1.0)
+        self.assertEqual(result["string"]["centerline"]["mean_prediction_component_count"], 1.0)
         self.assertEqual(result["string"]["propagated_frames"], 1)
         self.assertEqual(result["yoyo"]["temporal"]["matched_motion_pairs"], 3)
         self.assertEqual(result["yoyo"]["temporal"]["track_id_switch_count"], 0)

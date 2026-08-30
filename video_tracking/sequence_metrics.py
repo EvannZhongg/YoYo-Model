@@ -143,15 +143,24 @@ def centerline_pair_metrics(
     spacing_px: float = 2.0,
 ) -> dict[str, Any]:
     """Return symmetric centerline distances and tolerance coverage."""
+    target_lines = [list(line) for line in target_lines]
+    prediction_lines = [list(line) for line in prediction_lines]
     target = sample_polylines(target_lines, spacing_px)
     prediction = sample_polylines(prediction_lines, spacing_px)
     target_to_prediction = _nearest_distances(target, prediction)
     prediction_to_target = _nearest_distances(prediction, target)
     distances = np.concatenate((target_to_prediction, prediction_to_target))
     finite = distances[np.isfinite(distances)]
+    target_length = _polyline_length(target_lines)
+    prediction_length = _polyline_length(prediction_lines)
     result: dict[str, Any] = {
         "target_samples": int(len(target)),
         "prediction_samples": int(len(prediction)),
+        "target_component_count": int(len(target_lines)),
+        "prediction_component_count": int(len(prediction_lines)),
+        "target_length_px": round(float(target_length), 4),
+        "prediction_length_px": round(float(prediction_length), 4),
+        "length_ratio": round(float(prediction_length / target_length), 4) if target_length > 1e-6 else None,
         "target_to_prediction_mean_px": None if not len(target_to_prediction) else round(float(np.mean(target_to_prediction)), 4),
         "prediction_to_target_mean_px": None if not len(prediction_to_target) else round(float(np.mean(prediction_to_target)), 4),
         "chamfer_mean_px": None if not len(distances) or not len(finite) else round(float(np.mean(distances)), 4),
@@ -661,6 +670,11 @@ def evaluate_sequence(
         "positive_target_frames": sum(bool(row.get("string_present_target")) for row in string_rows),
         "positive_prediction_frames": sum(bool(row.get("string_present_prediction")) for row in string_rows),
         "pair_frames": len(string_pairs),
+        "mean_target_length_px": round(float(np.mean([item["target_length_px"] for item in string_pairs])), 4) if string_pairs else None,
+        "mean_prediction_length_px": round(float(np.mean([item["prediction_length_px"] for item in string_pairs])), 4) if string_pairs else None,
+        "mean_length_ratio": round(float(np.mean([item["length_ratio"] for item in string_pairs if item["length_ratio"] is not None])), 4) if any(item["length_ratio"] is not None for item in string_pairs) else None,
+        "mean_target_component_count": round(float(np.mean([item["target_component_count"] for item in string_pairs])), 4) if string_pairs else None,
+        "mean_prediction_component_count": round(float(np.mean([item["prediction_component_count"] for item in string_pairs])), 4) if string_pairs else None,
         "chamfer_mean_px": round(float(np.mean([item["chamfer_mean_px"] for item in string_pairs if item["chamfer_mean_px"] is not None])), 4) if any(item["chamfer_mean_px"] is not None for item in string_pairs) else None,
         "hd95_mean_px": round(float(np.mean([item["hd95_px"] for item in string_pairs if item["hd95_px"] is not None])), 4) if any(item["hd95_px"] is not None for item in string_pairs) else None,
         "tolerances": {},
