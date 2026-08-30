@@ -19,6 +19,7 @@ from config import BASE_DIR
 
 
 PRESENTATION_ORIENTATIONS = ("frontal", "edge_horizontal", "edge_vertical", "unknown")
+COARSE_ORIENTATIONS = ("horizontal", "normal", "not_applicable")
 PRESENTATION_TO_TRICK = {
     "frontal": "normal",
     "edge_vertical": "normal",
@@ -37,8 +38,13 @@ def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] 
     return None
 
 
-def _crop_box(annotation: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int]:
-    bbox = _yoyo_bbox(annotation)
+def _crop_box(
+    annotation: dict[str, Any],
+    width: int,
+    height: int,
+    bbox_override: tuple[float, float, float, float] | None = None,
+) -> tuple[int, int, int, int]:
+    bbox = bbox_override or _yoyo_bbox(annotation)
     if bbox is None:
         # Reviewed not-applicable frames may not contain a visible yoyo.
         side = float(min(width, height)) * 0.28
@@ -60,11 +66,23 @@ def _link(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, Any]:
+def _training_class(presentation_orientation: str, coarse_classes: bool) -> str:
+    if not coarse_classes:
+        return presentation_orientation
+    return PRESENTATION_TO_TRICK[presentation_orientation]
+
+
+def build_orientation_view(
+    dataset_dir: Path,
+    clear: bool = False,
+    include_backup_yoyos_train: bool = False,
+    output_name: str = "orientation_roi",
+    coarse_classes: bool = False,
+) -> dict[str, Any]:
     dataset_dir = dataset_dir.resolve()
     parent_path = dataset_dir / "manifest.json"
     parent = json.loads(parent_path.read_text(encoding="utf-8"))
-    output = dataset_dir / "orientation_roi"
+    output = dataset_dir / output_name
     if output.exists():
         if not clear:
             raise FileExistsError(f"Orientation ROI view already exists: {output}")
@@ -95,21 +113,24 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
             raise ValueError(f"invalid presentation orientation: {orientation}")
         yoyo_visibility_counts[str(active_yoyo.get("visibility") or "uncertain")] += 1
         name = f"{record['source_group']}__{source.stem}.jpg"
-        target = output / split / orientation / name
+        training_class = _training_class(orientation, coarse_classes)
+        target = output / split / training_class / name
         target.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(source) as image:
             image = image.convert("RGB")
             crop_box = _crop_box(annotation, image.width, image.height)
             image.crop(crop_box).save(target, format="JPEG", quality=94, optimize=True)
-        counts[split][orientation] += 1
+        counts[split][training_class] += 1
         counts[split]["total"] += 1
         if split == "train":
-            train_paths[orientation].append(target)
+            train_paths[training_class].append(target)
         records.append(
             {
                 "source_group": record["source_group"],
                 "split": split,
-            "trick_orientation": str(active_yoyo.get("trick_orientation") or ""),
+                "yoyo_role": "active",
+                "training_class": training_class,
+                "trick_orientation": str(active_yoyo.get("trick_orientation") or ""),
                 "presentation_orientation": orientation,
                 "source_image_sha256": record["image_sha256"],
                 "crop_box_pixel": list(crop_box),
@@ -117,6 +138,54 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
                 "image_sha256": sha256_file(target),
             }
         )
+        if include_backup_yoyos_train and split == "train":
+            for backup_index, backup in enumerate(annotation.get("backup_yoyos") or []):
+                if str(backup.get("visibility") or "") not in {"visible", "partial"}:
+                    continue
+                backup_box = backup.get("bbox_pixel")
+                if not isinstance(backup_box, list) or len(backup_box) != 4:
+                    continue
+                try:
+                    backup_bbox = tuple(float(value) for value in backup_box)
+                except (TypeError, ValueError):
+                    continue
+                if not (backup_bbox[2] > backup_bbox[0] and backup_bbox[3] > backup_bbox[1]):
+                    continue
+                backup_orientation = str(backup.get("presentation_orientation") or "").strip()
+                if not backup_orientation:
+                    backup_orientation = {
+                        "normal": "frontal",
+                        "horizontal": "edge_horizontal",
+                        "not_applicable": "unknown",
+                    }.get(str(backup.get("trick_orientation") or ""), "unknown")
+                if backup_orientation not in PRESENTATION_ORIENTATIONS:
+                    raise ValueError(f"invalid backup presentation orientation: {backup_orientation}")
+                backup_name = f"{record['source_group']}__{source.stem}__backup_{backup_index + 1:02d}.jpg"
+                backup_class = _training_class(backup_orientation, coarse_classes)
+                backup_target = output / split / backup_class / backup_name
+                backup_target.parent.mkdir(parents=True, exist_ok=True)
+                with Image.open(source) as image:
+                    image = image.convert("RGB")
+                    backup_crop_box = _crop_box(annotation, image.width, image.height, backup_bbox)
+                    image.crop(backup_crop_box).save(backup_target, format="JPEG", quality=94, optimize=True)
+                counts[split][backup_class] += 1
+                counts[split]["total"] += 1
+                train_paths[backup_class].append(backup_target)
+                records.append(
+                    {
+                        "source_group": record["source_group"],
+                        "split": split,
+                        "yoyo_role": "backup",
+                        "backup_index": backup_index,
+                        "training_class": backup_class,
+                        "trick_orientation": str(backup.get("trick_orientation") or ""),
+                        "presentation_orientation": backup_orientation,
+                        "source_image_sha256": record["image_sha256"],
+                        "crop_box_pixel": list(backup_crop_box),
+                        "image": str(backup_target),
+                        "image_sha256": sha256_file(backup_target),
+                    }
+                )
     target_per_class = max(len(paths) for paths in train_paths.values())
     repeated = 0
     for orientation, paths in sorted(train_paths.items()):
@@ -130,6 +199,8 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "parent_dataset_id": parent["dataset_id"],
         "parent_manifest_sha256": sha256_file(parent_path),
         "crop_policy": "yoyo_bbox_square_3p0_min_12pct; no_yoyo_center_square_28pct",
+        "include_backup_yoyos_train": bool(include_backup_yoyos_train),
+        "coarse_classes": bool(coarse_classes),
     }
     view_id = f"orientation_roi_{hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:12]}"
     manifest = {
@@ -144,10 +215,12 @@ def build_orientation_view(dataset_dir: Path, clear: bool = False) -> dict[str, 
         "source_policy": parent["source_policy"],
         "source_groups": parent["split_policy"]["source_groups"],
         "counts": {split: dict(values) for split, values in counts.items()},
-        "classes": list(PRESENTATION_ORIENTATIONS),
+        "classes": list(COARSE_ORIENTATIONS if coarse_classes else PRESENTATION_ORIENTATIONS),
         "label_field": "active_yoyo.presentation_orientation",
         "coarse_mapping": dict(PRESENTATION_TO_TRICK),
         "crop_policy": identity["crop_policy"],
+        "include_backup_yoyos_train": bool(include_backup_yoyos_train),
+        "coarse_classes": bool(coarse_classes),
         "input_dependencies": {
             "active_yoyo_bbox_pixel": True,
             "string_geometry": False,
@@ -170,8 +243,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build the trick-region orientation classification view.")
     parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     parser.add_argument("--clear", action="store_true")
+    parser.add_argument("--include-backup-yoyos-train", action="store_true")
+    parser.add_argument("--output-name", default="orientation_roi")
+    parser.add_argument("--coarse-classes", action="store_true")
     args = parser.parse_args()
-    manifest = build_orientation_view(Path(args.dataset_dir), args.clear)
+    manifest = build_orientation_view(
+        Path(args.dataset_dir),
+        args.clear,
+        args.include_backup_yoyos_train,
+        args.output_name,
+        args.coarse_classes,
+    )
     print(json.dumps({"view_id": manifest["view_id"], "counts": manifest["counts"], "train_balance": manifest["train_balance"], "data": manifest["data"]}, ensure_ascii=False, indent=2))
     return 0
 

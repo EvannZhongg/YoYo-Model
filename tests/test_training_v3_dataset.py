@@ -125,6 +125,39 @@ class FreshTrainingDatasetTests(unittest.TestCase):
                 self.assertEqual(class_dirs, ["horizontal", "normal", "not_applicable"])
                 self.assertTrue(all(not any(path.is_dir() for path in (output / "orientation" / split / name).iterdir()) for name in class_dirs))
 
+    def test_orientation_view_can_add_backup_yoyos_to_train_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            source = base / "annotations" / "source"
+            self._write_source(source, ["a", "b", "c", "d", "e", "f"])
+            manifest = build_training_dataset([source], base / "output", seed=7)
+            output = Path(manifest["output_dir"])
+            train_record = next(record for record in manifest["records"] if record["split"] == "train")
+            label_path = Path(train_record["canonical_label"])
+            annotation = json.loads(label_path.read_text(encoding="utf-8"))
+            annotation["backup_yoyos"] = [{
+                "visibility": "visible",
+                "bbox_pixel": [4, 4, 16, 16],
+                "presentation_orientation": "edge_horizontal",
+                "trick_orientation": "horizontal",
+                "bbox_review_status": "reviewed",
+            }]
+            label_path.write_text(json.dumps(annotation), encoding="utf-8")
+            roi = build_orientation_view(
+                output,
+                clear=False,
+                include_backup_yoyos_train=True,
+                output_name="orientation_roi_backup",
+            )
+            self.assertTrue(roi["include_backup_yoyos_train"])
+            self.assertEqual(roi["counts"]["val"]["total"], manifest["counts"]["val"]["samples"])
+            self.assertEqual(roi["counts"]["test"]["total"], manifest["counts"]["test"]["samples"])
+            backup_records = [record for record in roi["records"] if record["yoyo_role"] == "backup"]
+            self.assertEqual(len(backup_records), 1)
+            self.assertEqual(backup_records[0]["split"], "train")
+            self.assertEqual(backup_records[0]["presentation_orientation"], "edge_horizontal")
+            self.assertTrue(Path(backup_records[0]["image"]).is_file())
+
     def test_uncertain_yoyo_is_excluded_from_detection_and_orientation(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
