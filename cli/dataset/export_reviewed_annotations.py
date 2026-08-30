@@ -62,7 +62,10 @@ def approved_annotation(
 
     value["updated_at_utc"] = confirmed_at
     value["review_status"] = "reviewed"
-    value["bbox_review_status"] = "reviewed"
+    active_yoyo = value.get("active_yoyo")
+    if isinstance(active_yoyo, dict):
+        active_yoyo["bbox_review_status"] = "reviewed"
+    value.pop("bbox_review_status", None)
     if original_string_status.lower() not in {"approved", "reviewed"}:
         value["string_review_status"] = "reviewed"
 

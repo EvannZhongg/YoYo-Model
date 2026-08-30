@@ -41,13 +41,15 @@ class SequenceMetricsTests(unittest.TestCase):
                 "source_group": "video-a",
                 "frame_index": index,
                 "timestamp_s": index / 30.0,
-                "visibility": "visible",
-                "bbox_review_status": "reviewed",
-                "yoyo_bbox_pixel": [10 + index, 10, 20 + index, 20],
+                "active_yoyo": {
+                    "visibility": "visible",
+                    "bbox_review_status": "reviewed",
+                    "bbox_pixel": [10 + index, 10, 20 + index, 20],
+                    "trick_orientation": "normal" if index < 2 else "horizontal",
+                },
                 "string_visibility": "partial",
                 "string_review_status": "reviewed",
                 "string_polylines_pixel": [[[5 + index, 30], [25 + index, 30]]],
-                "trick_orientation": "normal" if index < 2 else "horizontal",
             }
             (label_root / f"frame-{index:03d}.json").write_text(json.dumps(label), encoding="utf-8")
             frames.append({
@@ -134,15 +136,15 @@ class SequenceMetricsTests(unittest.TestCase):
             dataset, predictions = self._dataset(Path(directory))
             uncertain_path = dataset / "canonical" / "labels" / "video-a" / "frame-002.json"
             uncertain = json.loads(uncertain_path.read_text(encoding="utf-8"))
-            uncertain["visibility"] = "uncertain"
-            uncertain["yoyo_bbox_pixel"] = None
-            uncertain["bbox_review_status"] = "needs_review"
+            uncertain["active_yoyo"]["visibility"] = "uncertain"
+            uncertain["active_yoyo"]["bbox_pixel"] = None
+            uncertain["active_yoyo"]["bbox_review_status"] = "needs_review"
             uncertain_path.write_text(json.dumps(uncertain), encoding="utf-8")
             absent_path = dataset / "canonical" / "labels" / "video-a" / "frame-003.json"
             absent = json.loads(absent_path.read_text(encoding="utf-8"))
-            absent["visibility"] = "not_visible"
-            absent["yoyo_not_visible_reason"] = "absent"
-            absent["yoyo_bbox_pixel"] = None
+            absent["active_yoyo"]["visibility"] = "not_visible"
+            absent["active_yoyo"]["not_visible_reason"] = "absent"
+            absent["active_yoyo"]["bbox_pixel"] = None
             absent_path.write_text(json.dumps(absent), encoding="utf-8")
             result = evaluate_sequence(dataset, predictions)
         self.assertEqual(result["excluded_unknown"]["yoyo"], 1)
@@ -159,9 +161,6 @@ class SequenceMetricsTests(unittest.TestCase):
                 "bbox_pixel": [10, 10, 20, 20],
                 "bbox_review_status": "reviewed",
             }
-            data.pop("visibility")
-            data.pop("bbox_review_status")
-            data.pop("yoyo_bbox_pixel")
             label.write_text(json.dumps(data), encoding="utf-8")
             result = evaluate_sequence(dataset, predictions)
         self.assertEqual(result["yoyo"]["presence"]["known_frames"], 4)

@@ -463,21 +463,11 @@ def _load_snapshot_frames(snapshot_path: Path, group_id: str | None) -> list[dic
 
 
 def _known_targets(annotation: dict[str, Any]) -> tuple[bool, list[float] | None, bool, list[list[list[float]]]]:
-    active_yoyo = annotation.get("active_yoyo") or {
-        "visibility": annotation.get("visibility"),
-        "not_visible_reason": annotation.get("yoyo_not_visible_reason"),
-        "bbox_pixel": annotation.get("yoyo_bbox_pixel"),
-        "trick_orientation": annotation.get("trick_orientation"),
-    }
+    active_yoyo = annotation.get("active_yoyo") or {}
     visibility = str(active_yoyo.get("visibility") or "")
     not_visible_reason = str(active_yoyo.get("not_visible_reason") or "")
     bbox = _valid_bbox(active_yoyo.get("bbox_pixel"))
-    bbox_state = str(
-        active_yoyo.get("bbox_review_status")
-        or annotation.get("bbox_review_status")
-        or annotation.get("review_status")
-        or ""
-    )
+    bbox_state = str(active_yoyo.get("bbox_review_status") or "")
     if visibility in {"visible", "partial"}:
         yoyo_known = bbox is not None and bbox_state in KNOWN_REVIEW_STATES
     elif visibility == "not_visible":

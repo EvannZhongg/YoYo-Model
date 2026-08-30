@@ -509,7 +509,6 @@ def save_annotation_sample(
             "trick_orientation": edit.get("trick_orientation"),
             "presentation_orientation": edit.get("presentation_orientation"),
             "bbox_pixel": edit.get("yoyo_bbox_pixel"),
-            "bbox_review_status": edit.get("bbox_review_status"),
         }
     backup_edit = edit.get("backup_yoyos") or []
     if not isinstance(backup_edit, list):
@@ -540,6 +539,7 @@ def save_annotation_sample(
     polylines_2d = [_to_2d(line, width, height) for line in polylines]
     document["active_yoyo"] = active_yoyo
     document["backup_yoyos"] = backup_yoyos
+    document.pop("bbox_review_status", None)
     document["string_visibility"] = string_visibility
     document["string_polylines_pixel"] = polylines
     document["string_polylines_2d"] = polylines_2d

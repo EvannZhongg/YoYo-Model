@@ -512,6 +512,7 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
     width, height = [int(item) for item in base["image_size"]]
     candidate = transform_candidate_coordinates(candidate, width, height)
     result = copy.deepcopy(base)
+    result.pop("bbox_review_status", None)
     for removed_field in REMOVED_FIELDS:
         result.pop(removed_field, None)
     for field in LEGACY_NON_TASK_FIELDS:
@@ -528,7 +529,6 @@ def normalize_candidate(base: dict[str, Any], candidate: dict[str, Any]) -> dict
         "visibility": "visibility", "yoyo_not_visible_reason": "not_visible_reason",
         "yoyo_bbox_pixel": "bbox_pixel", "yoyo_bbox_2d": "bbox_2d",
         "trick_orientation": "trick_orientation", "presentation_orientation": "presentation_orientation",
-        "bbox_review_status": "bbox_review_status",
     }
     active_source = copy.deepcopy(active_source)
     for old_key, new_key in legacy_map.items():
