@@ -130,6 +130,7 @@ def evaluate(
     ensemble_alpha: float = 0.0,
     ensemble_candidate_threshold: float = 0.5,
     output_dir: str | Path | None = None,
+    min_component_pixels: int = 8,
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
@@ -185,7 +186,12 @@ def evaluate(
     else:
         samples = collect_probabilities(model, loader, device)
         threshold = primary_threshold
-    metrics = metrics_at_threshold(samples, threshold, tolerance_px=3, min_component_pixels=8)
+    metrics = metrics_at_threshold(
+        samples,
+        threshold,
+        tolerance_px=3,
+        min_component_pixels=max(1, int(min_component_pixels)),
+    )
     manifest_path = dataset_dir / "manifest.json"
     current_manifest_hash = sha256_file(manifest_path)
     checkpoint_manifest_hash = str(checkpoint.get("dataset_manifest_sha256", ""))
@@ -214,6 +220,7 @@ def evaluate(
         ),
         "ensemble_alpha": float(ensemble_alpha),
         "ensemble_candidate_threshold": float(ensemble_candidate_threshold),
+        "min_component_pixels": int(min_component_pixels),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
         "dataset_manifest_sha256": current_manifest_hash,
@@ -254,6 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ensemble-alpha", type=float, default=0.0)
     parser.add_argument("--ensemble-candidate-threshold", type=float, default=0.5)
     parser.add_argument("--output-dir", default="")
+    parser.add_argument("--min-component-pixels", type=int, default=8)
     return parser.parse_args()
 
 
@@ -270,6 +278,7 @@ def main() -> int:
         args.ensemble_alpha,
         args.ensemble_candidate_threshold,
         args.output_dir or None,
+        args.min_component_pixels,
     )
     document = json.dumps(result, ensure_ascii=False, indent=2)
     encoding = sys.stdout.encoding or "utf-8"
