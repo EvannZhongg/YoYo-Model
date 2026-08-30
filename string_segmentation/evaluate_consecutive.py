@@ -77,6 +77,7 @@ def evaluate_consecutive_checkpoint(
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     unanchored_semantic_grace_frames: int = 12,
     max_polyline_points: int = 64,
+    max_components: int = 8,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -129,7 +130,7 @@ def evaluate_consecutive_checkpoint(
                 yoyo=yoyo,
                 yoyo_division=str(annotation.get("yoyo_division") or "1A"),
                 min_component_pixels=8,
-                max_components=8,
+                max_components=max(1, int(max_components)),
                 max_polyline_points=max_polyline_points,
             )
             final_string = observation
@@ -296,6 +297,7 @@ def evaluate_consecutive_checkpoint(
         "max_forward_backward_error": float(max_forward_backward_error),
         "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
         "max_polyline_points": int(max_polyline_points),
+        "max_components": int(max_components),
         "groups": results,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -341,6 +343,7 @@ def main() -> int:
     )
     parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
     parser.add_argument("--max-polyline-points", type=int, default=64)
+    parser.add_argument("--max-components", type=int, default=8)
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(
         weights=Path(args.weights),
@@ -360,6 +363,7 @@ def main() -> int:
         max_forward_backward_error=args.max_forward_backward_error,
         unanchored_semantic_grace_frames=args.unanchored_semantic_grace_frames,
         max_polyline_points=args.max_polyline_points,
+        max_components=args.max_components,
     )
     compact = [{
         "source_group": item["source_group"],
