@@ -61,31 +61,42 @@ MobileNetV3-Large 编码器和轻量 FPN 不变。centerline 模型训练期使�
 当前权重 SHA-256：
 `e0328d24303dc76dd86772aae39f95bf0104026792319827ccc81eb72d325c8f`。
 
-在固定阈值 `0.40` 的独立 test（128 张）上，相对生产绳线模型：
+当前权重在最新统一语义数据（当前 manifest SHA-256
+`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`）上按固定阈值
+`0.40` 重跑；该 manifest 与 checkpoint 训练血缘
+`f2c1d0269f6c3cb8ce5177b5a269d374179ab72e42baf39f88c591cec5439195` 不同，结果是明确
+记录 mismatch 后的跨 manifest 基线，不替代 checkpoint 原生 test 结果。
 
-| 指标 | 生产模型 | 晋升模型 |
-| --- | ---: | ---: |
-| Pixel Dice | 0.731826 | 0.731940 |
-| Tolerant F1@3 | 0.938868 | 0.938851 |
-| Presence F1 | 0.983333 | 0.983333 |
-| 负图平均误检像素 | 37.000 | 37.444 |
+| split | 样本数 | Pixel Dice | Tolerant F1@3 | Presence F1 | 负图平均误检像素 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| val | 136 | 0.687078 | 0.898304 | 0.991935 | 0.000 |
+| test | 136 | 0.730841 | 0.936916 | 0.984252 | 33.700 |
 
-在 `1Ayoyo_consecutive` 的 856 帧、相同颜色/亮脊/时序协议和阈值 `0.40` 下，pooled
-F1@8 从 `0.624796` 提升至 `0.630483`，加权 Chamfer 从 `28.4521` 降至
-`27.9382 px`；9 个来源组 F1 均提升。邬聪聪组 F1@8 从 `0.799919` 提升至
-`0.816028`，Chamfer 从 `15.4579` 降至 `15.3484 px`。
+在最新 `1Ayoyo_consecutive`（manifest SHA-256
+`2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
+`0.40`、颜色/亮脊增强、语义预筛和时序协议）上，pooled centerline F1@8 为
+`0.619236`（precision `0.779341`、recall `0.513702`），按 pair frame 加权的
+Chamfer 为 `29.6636 px`。Presence F1 按来源组帧数加权为 `0.988253`，零预测帧为
+`23`；最弱 group 为 Jakub（F1@8 `0.409559`，Chamfer `48.6620 px`），邬聪聪组为
+`0.816028`（Chamfer `15.3484 px`）。
 
-当前检测器下邬聪聪 99 帧真实 pipeline 的同阈值复核：绳线 F1@8 `0.809101 -> 0.810528`，
-Presence F1 和悠悠球 Presence F1 保持不变。三次测速均值为 `7.8445 -> 7.7843 FPS`
-（约下降 `0.8%`），模型结构和参数量不变。
+晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏；
+Presence F1、最长缺失段/恢复延迟和 FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
+Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；单一阈值必须先在 val 校准后
+冻结，不能用 test 重新选阈值。负图平均误检像素、平均组件数、长度比仅作诊断，不能单独
+决定晋升。`max_components=8`、`min_component_pixels=8`、`max_polyline_points=64`、
+传播上限 `12` 和前后向误差 `4.0 px` 是固定运行参数，候选比较时保持不变。
+此前将中心线采样上限从 64 提高到 256 的复核只带来约 `0.06%` 的 F1 变化，当前上限
+不是主要误差来源。标注中的 `string_visibility` 不进入语义模型训练或推理，仅用于连续帧
+评估时区分有绳、无绳和未知帧；应保留它以避免把无绳负样本混入几何指标，但不把该字段
+本身作为模型质量或晋升排名指标。
 
 复现证据：
 
 - `runs/experiments/semantic_soup_centerline_w005_a050/run_manifest.json`
-- `runs/experiments/semantic_soup_centerline_w005_a050/test_semantic_metrics_threshold_0p4.json`
-- `runs/experiments/semantic_soup_centerline_w005_a050/promotion_comparison.json`
-- `tmp/semantic_soup_centerline_w005_a050_consecutive/summary.json`
-- `tmp/semantic_soup_centerline_w005_a050_pipeline_wu99/metrics.json`
+- `tmp/semantic_production_latest/val_semantic_metrics_external_f79c9805dae3_threshold_0p4.json`
+- `tmp/semantic_production_latest/test_semantic_metrics_external_f79c9805dae3_threshold_0p4.json`
+- `tmp/semantic_production_latest_consecutive/summary.json`
 
 ## 绳线追踪流程
 
@@ -137,17 +148,20 @@ Macro Recall 为 `0.864272`。
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.evaluate_semantic `
-  --weights runs\experiments\semantic_cldice_w010_r1\weights\best.pt `
+  --weights runs\experiments\semantic_soup_centerline_w005_a050\weights\best.pt `
   --dataset-dir datasets\1Ayoyo_dataset\string_segmentation `
-  --split test --threshold 0.40 --device cuda
+  --split test --threshold 0.40 --allow-dataset-mismatch `
+  --min-component-pixels 8 --device cuda `
+  --output-dir tmp\semantic_production_latest
 
 .\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive `
-  --weights runs\experiments\semantic_cldice_w010_r1\weights\best.pt `
+  --weights runs\experiments\semantic_soup_centerline_w005_a050\weights\best.pt `
   --dataset-dir datasets\1Ayoyo_consecutive `
-  --output-dir tmp/semantic_cldice_consecutive `
+  --output-dir tmp\semantic_production_latest_consecutive `
   --threshold 0.40 --color-augment --color-semantic-prefilter `
   --bright-line-augment --bright-line-min-mean 0.70 `
-  --temporal --max-propagation-frames 12 --max-forward-backward-error 4.0
+  --temporal --max-propagation-frames 12 --max-forward-backward-error 4.0 `
+  --max-polyline-points 64 --max-components 8 --min-component-pixels 8 --device cuda
 
 .\.venv\Scripts\python.exe -m pytest -q
 ```
