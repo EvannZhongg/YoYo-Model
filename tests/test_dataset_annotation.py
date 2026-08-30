@@ -42,6 +42,7 @@ class DatasetAnnotationWorkbenchTests(unittest.TestCase):
             root = Path(directory)
             first, _ = make_annotation_dataset(root, "alpha")
             second, _ = make_annotation_dataset(root, "second")
+            make_annotation_dataset(root / "experiments", "nested")
             with patch("workbench.dataset_annotation.DATASETS_DIR", root):
                 self.assertEqual(
                     list_annotation_datasets(),

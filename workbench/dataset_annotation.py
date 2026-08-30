@@ -199,12 +199,22 @@ def list_annotation_datasets(*, include_consecutive: bool = False) -> list[dict[
         return []
     results: list[dict[str, str]] = []
     seen: set[Path] = set()
-    for labels in sorted(DATASETS_DIR.rglob("labels")):
+    # Dataset roots are the direct children of DATASETS_DIR.  Keep the label
+    # scan recursive within each root, but do not discover arbitrary nested
+    # paths such as datasets/experiments/<run> as separate datasets.
+    for candidate in sorted(DATASETS_DIR.iterdir()):
+        if not candidate.is_dir():
+            continue
+        canonical = candidate / "canonical"
+        has_canonical_layout = (
+            (canonical / "labels").is_dir() and (canonical / "images").is_dir()
+        )
+        labels = canonical / "labels" if has_canonical_layout else candidate / "labels"
         if not labels.is_dir() or not (labels.parent / "images").is_dir():
             continue
         # Consecutive-frame datasets are owned by the consecutive annotation
         # page, which validates and consumes their explicit group mapping.
-        dataset_root = labels.parent.parent if labels.parent.name == "canonical" else labels.parent
+        dataset_root = candidate
         if not include_consecutive and (dataset_root / "consecutive_groups.json").is_file():
             continue
         first_label = next(labels.rglob("*.json"), None)

@@ -33,6 +33,7 @@ class ConsecutiveAnnotationWorkbenchTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             dataset, _ = make_consecutive_dataset(root)
+            make_consecutive_dataset(root / "experiments")
             ordinary = root / "ordinary"
             (ordinary / "canonical" / "images").mkdir(parents=True)
             (ordinary / "canonical" / "labels").mkdir(parents=True)
