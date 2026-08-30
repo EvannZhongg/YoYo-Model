@@ -5,14 +5,14 @@
 | 模块 | 当前模型与权重 | 默认输入/参数 |
 | --- | --- | --- |
 | 悠悠球检测 | YOLO11s，约 9.4M 参数；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，置信度 `0.15`，IoU `0.7` |
-| 绳线分割 | MobileNetV3-FPN，约 3.0M 参数；`runs/experiments/semantic_cldice_w010_r1/weights/best.pt` | `960x544`，配置阈值 `0.40` |
+| 绳线分割 | MobileNetV3-FPN，约 3.0M 参数；`runs/experiments/semantic_soup_centerline_w005_a050/weights/best.pt` | `960x544`，配置阈值 `0.40` |
 | 绳线追踪 | 单语义模型 + 颜色/亮脊候选 + 按需光流 | 每帧语义推理，最多传播 12 帧 |
 | 方向识别 | 悠悠球 ROI 三分类模型；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 5 FPS 稳态、25 FPS 突发，EMA 与滞回 |
 | 姿态审核 | RTMPose-m WholeBody（可选） | 默认关闭，不参与主输出 |
 
 Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训练数据身份由
 `datasets/1Ayoyo_dataset/string_segmentation/manifest.json` 固定，SHA-256 为
-`7f661d3a5cfd3a3f8ae1cf2576192097c0a44643d75493cd3847b1397d3a5a7c`。
+`f2c1d0269f6c3cb8ce5177b5a269d374179ab72e42baf39f88c591cec5439195`。
 
 ## 悠悠球检测模型
 
@@ -54,37 +54,38 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 
 ## 绳线分割模型
 
-当前模型使用 MobileNetV3-Large 编码器和轻量 FPN，训练期加入正样本 soft-clDice
-拓扑损失（权重 `0.10`、迭代 `5`），同时使用 hard-negative loss 权重 `0.20`、
-`lr=5e-6`，训练 3 epoch。clDice 只参与训练，不增加推理参数或前向次数。
+当前模型是生产 clDice 模型与 current-manifest centerline 模型的参数 soup，保持
+MobileNetV3-Large 编码器和轻量 FPN 不变。centerline 模型训练期使用正样本拓扑损失
+权重 `0.05`，soup 以 `alpha=0.50` 插值；推理仍只有一次语义前向，不增加推理头。
 
 当前权重 SHA-256：
-`8ab93a877b15ece5f5e4ebdd9cfed5ef405f56004d0fae9c77d4e6b6d22614e1`。
+`e0328d24303dc76dd86772aae39f95bf0104026792319827ccc81eb72d325c8f`。
 
-在固定阈值 `0.40` 的独立 test（108 张）上，相对上一生产绳线模型：
+在固定阈值 `0.40` 的独立 test（128 张）上，相对生产绳线模型：
 
-| 指标 | 上一模型 | 当前模型 |
+| 指标 | 生产模型 | 晋升模型 |
 | --- | ---: | ---: |
-| Pixel Dice | 0.739187 | 0.741140 |
-| Tolerant F1@3 | 0.945287 | 0.947523 |
-| Presence F1 | 0.980198 | 0.985075 |
-| 负图平均误检像素 | 40.111 | 37.000 |
+| Pixel Dice | 0.731826 | 0.731940 |
+| Tolerant F1@3 | 0.938868 | 0.938851 |
+| Presence F1 | 0.983333 | 0.983333 |
+| 负图平均误检像素 | 37.000 | 37.444 |
 
-在 `1Ayoyo_consecutive` 的 856 帧、相同颜色/亮脊/时序协议和阈值 `0.40` 下，帧加权
-F1@8 从 `0.654365` 提升至 `0.660675`，Chamfer 从 `34.7267` 降至 `28.4521 px`。
-9 个来源组中 6 组 F1 提升；邬聪聪组 Chamfer 从 `62.0578` 降至 `15.4579 px`。
-局部 F1 最大回退为 `0.0151`，其余关键弱组保持或提升。
+在 `1Ayoyo_consecutive` 的 856 帧、相同颜色/亮脊/时序协议和阈值 `0.40` 下，pooled
+F1@8 从 `0.624796` 提升至 `0.630483`，加权 Chamfer 从 `28.4521` 降至
+`27.9382 px`；9 个来源组 F1 均提升。邬聪聪组 F1@8 从 `0.799919` 提升至
+`0.816028`，Chamfer 从 `15.4579` 降至 `15.3484 px`。
 
-邬聪聪 99 帧真实 pipeline 的同阈值复核：绳线 Presence F1 `0.940541 -> 0.944444`，
-F1@8 `0.824923 -> 0.823792`，Chamfer `100.0474 -> 60.3611 px`；悠悠球和方向结果
-逐帧一致。完整 pipeline loop 为 `7.7217 -> 8.4066 FPS`，模型结构和推理头不变。
+当前检测器下邬聪聪 99 帧真实 pipeline 的同阈值复核：绳线 F1@8 `0.809101 -> 0.810528`，
+Presence F1 和悠悠球 Presence F1 保持不变。三次测速均值为 `7.8445 -> 7.7843 FPS`
+（约下降 `0.8%`），模型结构和参数量不变。
 
 复现证据：
 
-- `runs/experiments/semantic_cldice_w010_r1/run_manifest.json`
-- `runs/experiments/semantic_cldice_w010_r1_test_t0p40/test_semantic_metrics_threshold_0p4.json`
-- `runs/experiments/semantic_cldice_w010_r1/consecutive856_t0p40/summary.json`
-- `runs/experiments/semantic_cldice_w010_r1_pipeline_wu99_t0p40/metrics.json`
+- `runs/experiments/semantic_soup_centerline_w005_a050/run_manifest.json`
+- `runs/experiments/semantic_soup_centerline_w005_a050/test_semantic_metrics_threshold_0p4.json`
+- `runs/experiments/semantic_soup_centerline_w005_a050/promotion_comparison.json`
+- `tmp/semantic_soup_centerline_w005_a050_consecutive/summary.json`
+- `tmp/semantic_soup_centerline_w005_a050_pipeline_wu99/metrics.json`
 
 ## 绳线追踪流程
 
