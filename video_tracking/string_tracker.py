@@ -365,7 +365,11 @@ def propagate_optical_flow(
         mean_fb_error = float(np.mean(fb_error[backward_valid]))
         if not np.isfinite(mean_fb_error) or mean_fb_error > max(0.5, float(max_forward_backward_error)):
             return None
-        points = local_points + offset
+        # Keep only points that survived both directions.  The validity gate
+        # intentionally permits a small number of lost samples, but carrying
+        # their arbitrary coordinates into the returned polyline can create
+        # large geometry jumps (for example, a clipped point at a frame edge).
+        points = local_points[backward_valid] + offset
         clipped = _clip_points(points.tolist(), width, height)
         if len(clipped) < 2:
             return None

@@ -784,6 +784,32 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(result["flow_region"], "roi")
         self.assertLess(result["flow_region_fraction"], 0.5)
 
+    def test_optical_flow_drops_samples_with_invalid_status(self):
+        previous = np.zeros((120, 160), dtype=np.uint8)
+        current = np.zeros_like(previous)
+        track = _resample_polyline([[20.0, 60.0], [80.0, 60.0]], 8)
+        forward_points = track.reshape(-1, 1, 2).copy()
+        forward_points[-1, 0] = [999.0, 999.0]
+        reverse_points = forward_points.copy()
+        with patch(
+            "video_tracking.string_tracker.cv2.calcOpticalFlowPyrLK",
+            side_effect=[
+                (forward_points, np.asarray([[1], [1], [1], [1], [1], [1], [1], [0]], dtype=np.uint8), np.zeros((8, 1), dtype=np.float32)),
+                (reverse_points, np.ones((8, 1), dtype=np.uint8), None),
+            ],
+        ):
+            result = propagate_optical_flow(
+                previous,
+                current,
+                [[20.0, 60.0], [80.0, 60.0]],
+                current.shape[1],
+                current.shape[0],
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["points"]), 7)
+        self.assertNotIn([159.0, 119.0], result["points"])
+
     def test_fresh_observation_keeps_geometry_when_flow_agrees(self):
         previous, current = self._shifted_frames()
         previous_string = {
