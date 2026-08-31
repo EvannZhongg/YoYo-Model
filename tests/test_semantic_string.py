@@ -20,6 +20,7 @@ from string_segmentation.semantic_model import (
     build_string_model,
     focal_dice_loss,
     soft_cldice_loss,
+    soft_skeleton_recall_loss,
     fuse_calibrated_probabilities,
     letterbox,
     load_checkpoint,
@@ -61,6 +62,31 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreater(float(loss.detach()), 0.0)
         loss.backward()
         self.assertIsNotNone(probability.grad)
+
+    def test_soft_skeleton_recall_loss_handles_empty_batch_and_backpropagates(self):
+        empty_probability = torch.full((2, 1, 16, 16), 0.5, requires_grad=True)
+        empty_target = torch.zeros_like(empty_probability)
+        empty_loss = soft_skeleton_recall_loss(empty_probability, empty_target)
+        self.assertEqual(float(empty_loss), 0.0)
+
+        probability = torch.full((1, 1, 16, 16), 0.5, requires_grad=True)
+        target = torch.zeros_like(probability)
+        target[:, :, 7:9, 2:14] = 1.0
+        loss = soft_skeleton_recall_loss(probability, target, iterations=3)
+        self.assertGreater(float(loss.detach()), 0.0)
+        loss.backward()
+        self.assertIsNotNone(probability.grad)
+
+    def test_skeleton_recall_rewards_target_centerline_coverage(self):
+        target = torch.zeros((1, 1, 16, 16))
+        target[:, :, 7:9, 2:14] = 1.0
+        covered = torch.zeros_like(target)
+        covered[:, :, 7:9, :] = 1.0
+        missing = torch.zeros_like(target)
+        missing[:, :, 7:9, :6] = 1.0
+        covered_loss = soft_skeleton_recall_loss(covered, target, iterations=3)
+        missing_loss = soft_skeleton_recall_loss(missing, target, iterations=3)
+        self.assertLess(float(covered_loss), float(missing_loss))
 
     def test_video_degradation_augmentation_preserves_tensor_contract(self):
         image = np.tile(np.arange(96, dtype=np.uint8), (64, 1))

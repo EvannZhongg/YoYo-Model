@@ -319,6 +319,7 @@ class ReviewedStringDataset(Dataset):
         augment: bool = False,
         degradation_augment: bool = False,
         return_centerline: bool = False,
+        return_topology_target: bool = False,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
@@ -328,6 +329,7 @@ class ReviewedStringDataset(Dataset):
         self.augment = bool(augment)
         self.degradation_augment = bool(degradation_augment)
         self.return_centerline = bool(return_centerline)
+        self.return_topology_target = bool(return_topology_target)
         self.pairs = image_label_pairs(self.dataset_dir, split)
         if not self.pairs:
             raise RuntimeError(f"No reviewed semantic samples found for split={split}: {self.dataset_dir}")
@@ -344,12 +346,14 @@ class ReviewedStringDataset(Dataset):
         mask = render_yolo_segmentation(label_path, image.shape[1], image.shape[0])
         image, mask, _ = letterbox(image, self.input_width, self.input_height, mask)
         assert mask is not None
+        topology_target = mask.copy()
         if self.min_mask_width_px > 1 and np.any(mask):
             kernel = np.ones((self.min_mask_width_px, self.min_mask_width_px), dtype=np.uint8)
             mask = cv2.dilate(mask, kernel, iterations=1)
         if self.augment and random.random() < 0.5:
             image = np.ascontiguousarray(image[:, ::-1])
             mask = np.ascontiguousarray(mask[:, ::-1])
+            topology_target = np.ascontiguousarray(topology_target[:, ::-1])
         if self.augment:
             gain = random.uniform(0.88, 1.12)
             bias = random.uniform(-10.0, 10.0)
@@ -364,7 +368,9 @@ class ReviewedStringDataset(Dataset):
             "positive": bool(np.any(mask)),
         }
         if self.return_centerline:
-            result["centerline"] = torch.from_numpy(centerline_heatmap_target(mask)[None, ...])
+            result["centerline"] = torch.from_numpy(centerline_heatmap_target(topology_target)[None, ...])
+        if self.return_topology_target:
+            result["topology_target"] = torch.from_numpy(topology_target.astype(np.float32)[None, ...])
         return result
 
 
@@ -491,6 +497,29 @@ def soft_cldice_loss(
         topology_precision + topology_recall + epsilon
     )
     return (1.0 - score).mean()
+
+
+def soft_skeleton_recall_loss(
+    probability: torch.Tensor,
+    target: torch.Tensor,
+    iterations: int = 5,
+) -> torch.Tensor:
+    """Recall-only topology loss against the target skeleton.
+
+    The target is treated as the geometric reference; unlike clDice this does
+    not reward prediction skeleton pixels outside the target mask.
+    """
+    positive = target.sum(dim=(1, 2, 3)) > 0.0
+    if not torch.any(positive):
+        return probability.new_zeros(())
+    prediction = probability[positive].clamp(0.0, 1.0)
+    expected = target[positive].clamp(0.0, 1.0)
+    target_skeleton = _soft_skeletonize(expected, iterations).detach()
+    epsilon = prediction.new_tensor(1e-6)
+    recall = (target_skeleton * prediction).sum(dim=(1, 2, 3)) / (
+        target_skeleton.sum(dim=(1, 2, 3)) + epsilon
+    )
+    return (1.0 - recall).mean()
 
 
 def save_checkpoint(
