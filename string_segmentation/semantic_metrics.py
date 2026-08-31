@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Iterable
 
 import cv2
 import numpy as np
 import torch
+
+from string_segmentation.semantic_model import letterbox, semantic_mask_observation
+from video_tracking.sequence_metrics import centerline_pair_metrics
 
 
 def remove_small_components(mask: np.ndarray, min_pixels: int) -> np.ndarray:
@@ -31,14 +35,48 @@ def collect_probabilities(model, loader, device: str | torch.device) -> list[dic
         targets = batch["mask"].numpy()[:, 0]
         paths = list(batch["image_path"])
         for probability, target, path in zip(probabilities, targets, paths):
+            image_path = Path(str(path))
+            encoded = np.fromfile(image_path, dtype=np.uint8)
+            image = cv2.imdecode(encoded, cv2.IMREAD_COLOR) if encoded.size else None
+            if image is None:
+                raise RuntimeError(f"Could not read semantic validation image: {image_path}")
             samples.append(
                 {
                     "probability": probability.astype(np.float32),
                     "target": (target > 0.5).astype(np.uint8),
                     "image_path": str(path),
+                    "source_shape": (int(image.shape[0]), int(image.shape[1])),
                 }
             )
     return samples
+
+
+def _centerline_pair_from_masks(
+    target: np.ndarray,
+    probability: np.ndarray,
+    threshold: float,
+    source_shape: tuple[int, int],
+    min_component_pixels: int,
+) -> dict[str, Any]:
+    source_height, source_width = source_shape
+    _, _, meta = letterbox(
+        np.zeros((int(source_height), int(source_width), 3), dtype=np.uint8),
+        probability.shape[1],
+        probability.shape[0],
+    )
+    common_kwargs = {
+        "min_component_pixels": max(1, int(min_component_pixels)),
+        "max_components": 8,
+        "max_polyline_points": 64,
+    }
+    target_geometry = semantic_mask_observation(target.astype(np.float32), meta, 0.5, **common_kwargs)
+    prediction_geometry = semantic_mask_observation(probability, meta, threshold, **common_kwargs)
+    return centerline_pair_metrics(
+        (target_geometry or {}).get("polylines") or [],
+        (prediction_geometry or {}).get("polylines") or [],
+        tolerance_px=(8.0,),
+        spacing_px=2.0,
+    )
 
 
 def metrics_at_threshold(
@@ -52,6 +90,8 @@ def metrics_at_threshold(
     prediction_pixels = target_pixels = 0
     image_tp = image_fp = image_fn = image_tn = 0
     negative_false_positive_pixels: list[int] = []
+    centerline_target_samples = centerline_prediction_samples = 0
+    centerline_target_hits = centerline_prediction_hits = 0
     kernel_size = max(1, tolerance_px * 2 + 1)
     kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
     image_rows = []
@@ -85,6 +125,18 @@ def metrics_at_threshold(
             image_tn += 1
         if not target_present:
             negative_false_positive_pixels.append(pred_count)
+        centerline = _centerline_pair_from_masks(
+            target,
+            sample["probability"],
+            threshold,
+            tuple(sample.get("source_shape", prediction.shape)),
+            min_component_pixels,
+        )
+        centerline_tolerance = centerline["tolerances"]["8"]
+        centerline_target_samples += int(centerline["target_samples"])
+        centerline_prediction_samples += int(centerline["prediction_samples"])
+        centerline_target_hits += int(centerline_tolerance["target_hits"])
+        centerline_prediction_hits += int(centerline_tolerance["prediction_hits"])
         image_rows.append(
             {
                 "image_path": sample["image_path"],
@@ -111,6 +163,12 @@ def metrics_at_threshold(
     image_precision = ratio(image_tp, image_tp + image_fp)
     image_recall = ratio(image_tp, image_tp + image_fn)
     image_f1 = ratio(2 * image_precision * image_recall, image_precision + image_recall)
+    centerline_precision = ratio(centerline_prediction_hits, centerline_prediction_samples)
+    centerline_recall = ratio(centerline_target_hits, centerline_target_samples)
+    centerline_f1 = ratio(
+        2 * centerline_precision * centerline_recall,
+        centerline_precision + centerline_recall,
+    )
     return {
         "threshold": round(float(threshold), 4),
         "pixel": {
@@ -137,6 +195,15 @@ def metrics_at_threshold(
             "fn": image_fn,
             "tn": image_tn,
         },
+        "centerline": {
+            "metric": "pooled_centerline_f1_at_8_source_px",
+            "tolerance_px": 8,
+            "precision": round(centerline_precision, 6),
+            "recall": round(centerline_recall, 6),
+            "f1": round(centerline_f1, 6),
+            "target_samples": centerline_target_samples,
+            "prediction_samples": centerline_prediction_samples,
+        },
         "negative_mean_false_positive_pixels": round(
             float(np.mean(negative_false_positive_pixels)) if negative_false_positive_pixels else 0.0,
             3,
@@ -150,15 +217,16 @@ def metrics_at_threshold(
 
 def balanced_validation_key(metrics: dict[str, Any]) -> tuple[float, float, float, float, float]:
     tolerant_f1 = float(metrics["tolerant"]["f1"])
+    primary_f1 = float(metrics.get("centerline", {}).get("f1", tolerant_f1))
     presence_f1 = float(metrics["image_presence"]["f1"])
     balanced_f1 = (
-        2.0 * tolerant_f1 * presence_f1 / (tolerant_f1 + presence_f1)
-        if tolerant_f1 + presence_f1 > 0.0
+        2.0 * primary_f1 * presence_f1 / (primary_f1 + presence_f1)
+        if primary_f1 + presence_f1 > 0.0
         else 0.0
     )
     negative_false_positives = float(metrics["negative_mean_false_positive_pixels"])
     pixel_dice = float(metrics["pixel"]["dice"])
-    return balanced_f1, presence_f1, -negative_false_positives, tolerant_f1, pixel_dice
+    return balanced_f1, presence_f1, -negative_false_positives, primary_f1, pixel_dice
 
 
 def select_threshold(

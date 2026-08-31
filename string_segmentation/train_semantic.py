@@ -389,7 +389,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         print(
             f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} "
             f"threshold={threshold:.2f} val_balanced_f1={key[0]:.4f} "
-            f"val_tol_f1={validation_metrics['tolerant']['f1']:.4f} "
+            f"val_centerline_f1_at_8={validation_metrics['centerline']['f1']:.4f} "
+            f"val_tol_f1_at_3={validation_metrics['tolerant']['f1']:.4f} "
             f"val_presence_f1={validation_metrics['image_presence']['f1']:.4f} "
             f"val_dice={validation_metrics['pixel']['dice']:.4f}",
             flush=True,
@@ -470,7 +471,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         },
         "selection": {
             "split": "val",
-            "metric": "harmonic_tolerant_presence_then_presence_then_negative_fp_then_tolerant_then_pixel_dice",
+            "metric": "harmonic_centerline_f1_at_8_source_px_presence_then_presence_then_negative_fp_then_centerline_then_pixel_dice",
             "best_epoch": best_epoch,
             "threshold": best_threshold,
             "metrics": best_metrics,

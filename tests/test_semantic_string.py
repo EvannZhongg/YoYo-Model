@@ -322,6 +322,40 @@ class SemanticStringTests(unittest.TestCase):
             balanced_validation_key(false_positive_prone),
         )
 
+    def test_centerline_f1_at_8_is_canonical_validation_metric(self):
+        target = np.zeros((32, 48), dtype=np.uint8)
+        cv2.line(target, (4, 8), (42, 24), 1, 3)
+        metrics = metrics_at_threshold(
+            [{
+                "probability": target.astype(np.float32),
+                "target": target,
+                "image_path": "synthetic.jpg",
+                "source_shape": (32, 48),
+            }],
+            threshold=0.5,
+            tolerance_px=3,
+            min_component_pixels=1,
+        )
+        self.assertEqual(metrics["centerline"]["metric"], "pooled_centerline_f1_at_8_source_px")
+        self.assertEqual(metrics["centerline"]["f1"], 1.0)
+
+    def test_validation_selection_prefers_centerline_over_mask_f1(self):
+        lower_mask_f1 = {
+            "tolerant": {"f1": 0.99},
+            "centerline": {"f1": 0.50},
+            "image_presence": {"f1": 1.0},
+            "negative_mean_false_positive_pixels": 0.0,
+            "pixel": {"dice": 0.9},
+        }
+        higher_centerline_f1 = {
+            "tolerant": {"f1": 0.80},
+            "centerline": {"f1": 0.70},
+            "image_presence": {"f1": 1.0},
+            "negative_mean_false_positive_pixels": 0.0,
+            "pixel": {"dice": 0.7},
+        }
+        self.assertGreater(balanced_validation_key(higher_centerline_f1), balanced_validation_key(lower_mask_f1))
+
     def test_validation_selection_breaks_balanced_ties_with_negative_pixels(self):
         clean = {
             "tolerant": {"f1": 0.60},

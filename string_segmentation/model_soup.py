@@ -146,7 +146,7 @@ def build_model_soup(
         },
         "selection": {
             "split": "val",
-            "metric": "harmonic_tolerant_presence_then_presence_then_negative_fp_then_tolerant_then_pixel_dice",
+            "metric": "harmonic_centerline_f1_at_8_source_px_presence_then_presence_then_negative_fp_then_centerline_then_pixel_dice",
             "threshold": threshold,
             "metrics": metrics,
         },

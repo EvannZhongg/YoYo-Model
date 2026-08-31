@@ -171,6 +171,11 @@ def evaluate(
                     targets,
                     batch["image_path"],
                 ):
+                    image_path = Path(str(path))
+                    encoded = np.fromfile(image_path, dtype=np.uint8)
+                    image = cv2.imdecode(encoded, cv2.IMREAD_COLOR) if encoded.size else None
+                    if image is None:
+                        raise RuntimeError(f"Could not read semantic validation image: {image_path}")
                     samples.append({
                         "probability": fuse_calibrated_probabilities(
                             primary,
@@ -181,6 +186,7 @@ def evaluate(
                         ),
                         "target": (target > 0.5).astype(np.uint8),
                         "image_path": str(path),
+                        "source_shape": (int(image.shape[0]), int(image.shape[1])),
                     })
         threshold = 0.5
     else:
@@ -237,6 +243,7 @@ def evaluate(
         "limitations": [
             "The independent split is very small and does not establish production reliability.",
             "Exact pixel metrics are strict for thin strings; tolerant metrics use a 3-pixel radius and are reported separately.",
+            "Canonical validation ranking uses pooled centerline F1 at an 8 source-pixel tolerance after mask skeletonization; consecutive evaluation additionally includes final tracking post-processing.",
         ],
     }
     output = run_dir / f"{split}_semantic_metrics{suffix}.json"

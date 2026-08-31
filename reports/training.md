@@ -72,6 +72,10 @@ MobileNetV3-Large 编码器和轻量 FPN 不变。centerline 模型训练期使�
 | val | 136 | 0.687078 | 0.898304 | 0.991935 | 0.000 |
 | test | 136 | 0.730841 | 0.936916 | 0.984252 | 33.700 |
 
+训练阶段的 checkpoint 与阈值选择统一使用
+`pooled_centerline_f1_at_8_source_px`：由 mask 骨架化后映射到源图像坐标，采用与连续集相同的
+中心线采样和最近距离计算。上表的 Pixel Dice 与 Tolerant F1@3 继续作为静态语义诊断指标。
+
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
 `0.40`、颜色/亮脊增强、语义预筛和时序协议）上，pooled centerline F1@8 为
