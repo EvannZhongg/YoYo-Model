@@ -5,7 +5,7 @@
 | 模块 | 当前模型与权重 | 默认输入/参数 |
 | --- | --- | --- |
 | 悠悠球检测 | YOLO11s，约 9.4M 参数；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，置信度 `0.15`，IoU `0.7` |
-| 绳线分割 | MobileNetV3-FPN，约 3.0M 参数；`runs/experiments/semantic_soup_centerline_w005_a050/weights/best.pt` | `960x544`，配置阈值 `0.40` |
+| 绳线分割 | MobileNetV3-FPN，约 3.0M 参数；`runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt` | `960x544`，验证阈值 `0.9204` |
 | 绳线追踪 | 单语义模型 + 颜色/亮脊候选 + 按需光流 | 每帧语义推理，最多传播 12 帧 |
 | 方向识别 | 悠悠球 ROI 三分类模型；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 5 FPS 稳态、25 FPS 突发，EMA 与滞回 |
 | 姿态审核 | RTMPose-m WholeBody（可选） | 默认关闭，不参与主输出 |
@@ -54,23 +54,18 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 
 ## 绳线分割模型
 
-当前模型是生产 clDice 模型与 current-manifest centerline 模型的参数 soup，保持
-MobileNetV3-Large 编码器和轻量 FPN 不变。centerline 模型训练期使用正样本拓扑损失
-权重 `0.05`，soup 以 `alpha=0.50` 插值；推理仍只有一次语义前向，不增加推理头。
+当前模型使用 MobileNetV3-Large 编码器和轻量 FPN，训练目标为 Focal + Dice，
+不对标注 mask 做膨胀；推理仍只有一次语义前向，不增加推理头。
 
 当前权重 SHA-256：
-`e0328d24303dc76dd86772aae39f95bf0104026792319827ccc81eb72d325c8f`。
-
-当前权重在最新统一语义数据（当前 manifest SHA-256
-`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`）上按固定阈值
-`0.40` 重跑；该 manifest 与 checkpoint 训练血缘
-`f2c1d0269f6c3cb8ce5177b5a269d374179ab72e42baf39f88c591cec5439195` 不同，结果是明确
-记录 mismatch 后的跨 manifest 基线，不替代 checkpoint 原生 test 结果。
+`5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`。
+训练 manifest SHA-256 为
+`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`，验证选择的
+冻结阈值为 `0.9204`。
 
 | split | 样本数 | Pixel Dice | Tolerant F1@3 | Presence F1 | 负图平均误检像素 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| val | 136 | 0.687078 | 0.898304 | 0.991935 | 0.000 |
-| test | 136 | 0.730841 | 0.936916 | 0.984252 | 33.700 |
+| test | 136 | 0.694979 | 0.927502 | 0.976562 | 33.500 |
 
 训练阶段的 checkpoint 与阈值选择统一使用
 `pooled_centerline_f1_at_8_source_px`：由 mask 骨架化后映射到源图像坐标，采用与连续集相同的
@@ -78,11 +73,12 @@ MobileNetV3-Large 编码器和轻量 FPN 不变。centerline 模型训练期使�
 
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
-`0.40`、颜色/亮脊增强、语义预筛和时序协议）上，pooled centerline F1@8 为
-`0.619236`（precision `0.779341`、recall `0.513702`），按 pair frame 加权的
-Chamfer 为 `29.6636 px`。Presence F1 按来源组帧数加权为 `0.988253`，零预测帧为
-`23`；最弱 group 为 Jakub（F1@8 `0.409559`，Chamfer `48.6620 px`），邬聪聪组为
-`0.816028`（Chamfer `15.3484 px`）。
+`0.9204`、颜色/亮脊增强、语义预筛和时序协议）上，pooled centerline F1@8 为
+`0.643795`（precision `0.826753`、recall `0.527140`），按 pair frame 加权的
+Chamfer 为 `31.3871 px`，HD95 为 `109.7446 px`。Presence F1 按来源组帧数加权为
+`0.991772`，零预测帧为 `19`；最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group
+为 Jakub（F1@8 `0.433516`，Chamfer `40.6104 px`），较原默认主指标提升
+`0.024559`。
 
 晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏；
 Presence F1、最长缺失段/恢复延迟和 FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
@@ -95,12 +91,16 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 评估时区分有绳、无绳和未知帧；应保留它以避免把无绳负样本混入几何指标，但不把该字段
 本身作为模型质量或晋升排名指标。
 
+同机邬聪聪视频 300 帧端到端复核（检测、语义、方向和异步写盘配置一致）吞吐为
+`15.7206 -> 17.4938 FPS`，无额外推理组件。
+
 复现证据：
 
-- `runs/experiments/semantic_soup_centerline_w005_a050/run_manifest.json`
-- `tmp/semantic_production_latest/val_semantic_metrics_external_f79c9805dae3_threshold_0p4.json`
-- `tmp/semantic_production_latest/test_semantic_metrics_external_f79c9805dae3_threshold_0p4.json`
-- `tmp/semantic_production_latest_consecutive/summary.json`
+- `runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
+- `tmp/semantic_ablation_nomorph_foundation_r1_test/test_semantic_metrics_threshold_0p9204.json`
+- `tmp/semantic_ablation_nomorph_foundation_r1_consecutive/summary.json`
+- `tmp/fps_nomorph_json/邬聪聪_20260831T131740Z_8148524c/run.json`
+- `tmp/fps_production_json/邬聪聪_20260831T131820Z_a48ab48e/run.json`
 
 ## 绳线追踪流程
 
@@ -152,17 +152,17 @@ Macro Recall 为 `0.864272`。
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.evaluate_semantic `
-  --weights runs\experiments\semantic_soup_centerline_w005_a050\weights\best.pt `
+  --weights runs\experiments\semantic_ablation_nomorph_foundation_r1\weights\best.pt `
   --dataset-dir datasets\1Ayoyo_dataset\string_segmentation `
-  --split test --threshold 0.40 --allow-dataset-mismatch `
+  --split test --threshold 0.9204 `
   --min-component-pixels 8 --device cuda `
   --output-dir tmp\semantic_production_latest
 
 .\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive `
-  --weights runs\experiments\semantic_soup_centerline_w005_a050\weights\best.pt `
+  --weights runs\experiments\semantic_ablation_nomorph_foundation_r1\weights\best.pt `
   --dataset-dir datasets\1Ayoyo_consecutive `
   --output-dir tmp\semantic_production_latest_consecutive `
-  --threshold 0.40 --color-augment --color-semantic-prefilter `
+  --threshold 0.9204 --color-augment --color-semantic-prefilter `
   --bright-line-augment --bright-line-min-mean 0.70 `
   --temporal --max-propagation-frames 12 --max-forward-backward-error 4.0 `
   --max-polyline-points 64 --max-components 8 --min-component-pixels 8 --device cuda
