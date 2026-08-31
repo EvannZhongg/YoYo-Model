@@ -30,7 +30,7 @@ semantic_string:
   workers: 0
   learning_rate: 0.001
   base_channels: 16
-  min_mask_width_px: 2
+  min_mask_width_px: 1
   seed: 42
   device: "cuda"
 

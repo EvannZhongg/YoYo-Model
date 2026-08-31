@@ -142,7 +142,7 @@ def evaluate(
         split,
         int(config["input_width"]),
         int(config["input_height"]),
-        int(config.get("min_mask_width_px", 2)),
+        int(config.get("min_mask_width_px", 1)),
         augment=False,
     )
     loader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=0, pin_memory=device.type == "cuda")

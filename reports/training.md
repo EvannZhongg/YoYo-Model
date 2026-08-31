@@ -12,7 +12,7 @@
 
 Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训练数据身份由
 `datasets/1Ayoyo_dataset/string_segmentation/manifest.json` 固定，SHA-256 为
-`f2c1d0269f6c3cb8ce5177b5a269d374179ab72e42baf39f88c591cec5439195`。
+`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`。
 
 ## 悠悠球检测模型
 

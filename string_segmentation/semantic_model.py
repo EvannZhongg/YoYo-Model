@@ -315,7 +315,7 @@ class ReviewedStringDataset(Dataset):
         split: str,
         input_width: int,
         input_height: int,
-        min_mask_width_px: int = 2,
+        min_mask_width_px: int = 1,
         augment: bool = False,
         degradation_augment: bool = False,
         return_centerline: bool = False,

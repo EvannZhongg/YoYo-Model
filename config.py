@@ -269,7 +269,7 @@ class SemanticStringConfig:
         _env_or_config("SEMANTIC_STRING_BASE_CHANNELS", "semantic_string.base_channels", 16)
     )
     min_mask_width_px: int = int(
-        _env_or_config("SEMANTIC_STRING_MIN_MASK_WIDTH_PX", "semantic_string.min_mask_width_px", 2)
+        _env_or_config("SEMANTIC_STRING_MIN_MASK_WIDTH_PX", "semantic_string.min_mask_width_px", 1)
     )
     seed: int = int(_env_or_config("SEMANTIC_STRING_SEED", "semantic_string.seed", 42))
     device: str = str(_env_or_config("SEMANTIC_STRING_DEVICE", "semantic_string.device", "cuda"))
