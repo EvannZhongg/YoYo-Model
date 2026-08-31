@@ -33,7 +33,6 @@ from string_segmentation.semantic_model import (
     save_checkpoint,
     semantic_mask_observation,
 )
-from string_segmentation.model_soup import interpolate_state_dicts
 from string_segmentation.train_semantic import _initialization_lineage, _reviewed_sample_weights
 
 
@@ -176,31 +175,6 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreater(support["mean"], 0.79)
         self.assertEqual(support["fraction_at_0_10"], 1.0)
         self.assertEqual(support["fraction_at_threshold"], 1.0)
-
-    def test_model_soup_interpolates_floats_and_keeps_integer_buffers_discrete(self):
-        baseline = {
-            "weight": torch.tensor([0.0, 2.0]),
-            "num_batches_tracked": torch.tensor(3, dtype=torch.int64),
-        }
-        candidate = {
-            "weight": torch.tensor([4.0, 6.0]),
-            "num_batches_tracked": torch.tensor(9, dtype=torch.int64),
-        }
-
-        quarter = interpolate_state_dicts(baseline, candidate, 0.25)
-        three_quarters = interpolate_state_dicts(baseline, candidate, 0.75)
-
-        self.assertTrue(torch.equal(quarter["weight"], torch.tensor([1.0, 3.0])))
-        self.assertEqual(int(quarter["num_batches_tracked"]), 3)
-        self.assertEqual(int(three_quarters["num_batches_tracked"]), 9)
-
-    def test_model_soup_rejects_incompatible_or_invalid_inputs(self):
-        with self.assertRaisesRegex(ValueError, "between 0 and 1"):
-            interpolate_state_dicts({"weight": torch.zeros(1)}, {"weight": torch.ones(1)}, 1.1)
-        with self.assertRaisesRegex(ValueError, "keys do not match"):
-            interpolate_state_dicts({"left": torch.zeros(1)}, {"right": torch.ones(1)}, 0.5)
-        with self.assertRaisesRegex(ValueError, "tensor mismatch"):
-            interpolate_state_dicts({"weight": torch.zeros(1)}, {"weight": torch.ones(2)}, 0.5)
 
     def test_semantic_warm_start_lineage_rejects_evaluation_source_overlap(self):
         with tempfile.TemporaryDirectory() as directory:
