@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -184,7 +185,9 @@ def main() -> int:
         args.alpha,
         args.device,
     )
-    print(json.dumps({"run_dir": result["run_dir"], "selection": result["selection"]}, ensure_ascii=False, indent=2))
+    document = json.dumps({"run_dir": result["run_dir"], "selection": result["selection"]}, ensure_ascii=False, indent=2)
+    encoding = sys.stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 
