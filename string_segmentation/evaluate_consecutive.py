@@ -68,7 +68,7 @@ def evaluate_consecutive_checkpoint(
     threshold: float | None = None,
     groups: list[str] | None = None,
     color_augment: bool = False,
-    color_probability_min_mean: float | None = None,
+    color_probability_min_mean: float | None = TRACKING_CONFIG.string_color_probability_min_mean,
     color_probability_min_fraction: float = 0.5,
     color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     bright_line_augment: bool = TRACKING_CONFIG.string_bright_line_augment,
@@ -316,7 +316,11 @@ def main() -> int:
     parser.add_argument("--threshold", type=float, default=None)
     parser.add_argument("--group", action="append", default=[])
     parser.add_argument("--color-augment", action="store_true")
-    parser.add_argument("--color-probability-min-mean", type=float, default=None)
+    parser.add_argument(
+        "--color-probability-min-mean",
+        type=float,
+        default=TRACKING_CONFIG.string_color_probability_min_mean,
+    )
     parser.add_argument("--color-probability-min-fraction", type=float, default=0.5)
     parser.add_argument(
         "--color-semantic-prefilter",

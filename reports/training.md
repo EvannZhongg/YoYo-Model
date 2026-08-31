@@ -73,12 +73,11 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
-`0.9204`、颜色/亮脊增强、语义预筛和时序协议）上，pooled centerline F1@8 为
-`0.643795`（precision `0.826753`、recall `0.527140`），按 pair frame 加权的
-Chamfer 为 `31.3871 px`，HD95 为 `109.7446 px`。Presence F1 按来源组帧数加权为
-`0.991772`，零预测帧为 `19`；最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group
-为 Jakub（F1@8 `0.433516`，Chamfer `40.6104 px`），较原默认主指标提升
-`0.024559`。
+`0.9204`、颜色/亮脊增强、语义预筛、颜色候选概率均值门槛 `0.70` 和时序协议）上，pooled centerline F1@8 为
+`0.564291`（precision `0.883849`、recall `0.414447`），按 pair frame 加权的
+Chamfer 为 `48.8419 px`，HD95 为 `148.7856 px`。Presence F1 按来源组帧数加权为
+`0.991218`，零预测帧为 `19`；最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group
+为 `DSCF7145-e237bbfb5d`（F1@8 `0.362731`）。评估器默认门槛现已与追踪器配置统一，避免无门槛颜色候选造成协议漂移。
 
 晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏；
 Presence F1、最长缺失段/恢复延迟和 FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
@@ -97,7 +96,7 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 
 - `runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
 - `tmp/semantic_ablation_nomorph_foundation_r1_test/test_semantic_metrics_threshold_0p9204.json`
-- `tmp/semantic_ablation_nomorph_foundation_r1_consecutive/summary.json`
+- `tmp/diag_unified_all_color070/summary.json`
 - `tmp/fps_nomorph_json/邬聪聪_20260831T131740Z_8148524c/run.json`
 - `tmp/fps_production_json/邬聪聪_20260831T131820Z_a48ab48e/run.json`
 
@@ -149,6 +148,7 @@ Macro Recall 为 `0.864272`。
   --dataset-dir datasets\1Ayoyo_consecutive `
   --output-dir tmp\semantic_production_latest_consecutive `
   --threshold 0.9204 --color-augment --color-semantic-prefilter `
+  --color-probability-min-mean 0.70 `
   --bright-line-augment --bright-line-min-mean 0.70 `
   --temporal --max-propagation-frames 12 --max-forward-backward-error 4.0 `
   --max-polyline-points 64 --max-components 8 --min-component-pixels 8 --device cuda
