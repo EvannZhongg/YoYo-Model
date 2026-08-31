@@ -86,8 +86,7 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 冻结，不能用 test 重新选阈值。负图平均误检像素、平均组件数、长度比仅作诊断，不能单独
 决定晋升。`max_components=8`、`min_component_pixels=8`、`max_polyline_points=64`、
 传播上限 `12` 和前后向误差 `4.0 px` 是固定运行参数，候选比较时保持不变。
-此前将中心线采样上限从 64 提高到 256 的复核只带来约 `0.06%` 的 F1 变化，当前上限
-不是主要误差来源。标注中的 `string_visibility` 不进入语义模型训练或推理，仅用于连续帧
+标注中的 `string_visibility` 仅用于连续帧
 评估时区分有绳、无绳和未知帧；应保留它以避免把无绳负样本混入几何指标，但不把该字段
 本身作为模型质量或晋升排名指标。
 
@@ -121,21 +120,8 @@ Lucas-Kanade 前后向光流，传播上限为 12 帧，前后向误差上限为
 
 ## 方向识别模型
 
-模型只读取悠悠球 ROI。训练标签改为画面朝向四分类
-`frontal`、`edge_horizontal`、`edge_vertical`、`unknown`，推理时聚合为原有三分类：
-`frontal/edge_vertical -> normal`、`edge_horizontal -> horizontal`、`unknown -> not_applicable`。
-四分类 ROI 视图 manifest 为
-`datasets/1Ayoyo_dataset/orientation_roi/manifest.json`，当前训练集计数为
-`frontal=422`、`edge_horizontal=50`、`edge_vertical=2`、`unknown=17`（验证/测试不重采样）。
-
-新结构基线权重为
-`runs/experiments/yoyo_unified_57935af9dc69_orientation_roi_405cce7c77e0_yolo11n-cls_presentation4_baseline/weights/best.pt`，
-SHA-256：`db2b517aca834996fb2982fc6925168451a08c5da8437dfa012773fb7ab4ef8`。
-独立 test（103 张）四分类 Top-1 为 `0.902913`，连续集 856 帧四分类 Accuracy 为
-`0.912383`；映射后三分类在 5 FPS + 自适应突发 + EMA/滞回协议下 Accuracy 为
-`0.942757`、Macro Recall 为 `0.826033`。
-
-当前默认部署权重仍为下列已验证的三分类模型，直到新结构在所有弱来源组上完成对比：
+模型只读取悠悠球 ROI，输出 `horizontal`、`normal`、`not_applicable` 三类。
+当前默认权重为：
 权重 SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
 
 在 65 张独立 test 上，Top-1 为 `0.9231`，Macro Recall 为 `0.8732`；三类 recall
@@ -145,7 +131,7 @@ Macro Recall 为 `0.864272`。
 
 ## 推理性能与验证
 
-当前语义模型与上一 FPN 模型结构、参数量和推理流程相同；clDice 不增加推理开销。
+当前语义模型使用单次 MobileNetV3-FPN 前向。
 关闭可选 RTMPose 后，主追踪输出不变，审核 pipeline 速度更高。
 
 统一验证命令：
@@ -170,4 +156,4 @@ Macro Recall 为 `0.864272`。
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-最近一次完整验证为 `162 passed`；`compileall` 和 `git diff --check` 均通过。
+最近一次完整验证为 `163 passed`；`compileall` 和 `git diff --check` 均通过。

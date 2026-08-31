@@ -1,6 +1,5 @@
 dataset:
   image_input_dir: "dataset/Positive_Sample/1A"
-  current_action_group: "1A"
   annotation_output_dir: "annotations"
   recursive: true
   keep_source_images: true
@@ -39,8 +38,6 @@ tracking:
   output_dir: "tracked_videos"
   confidence: 0.15
   iou: 0.7
-  # Incremental fine-tuning on the 2026-08-26 manifest followed by validation
-  # weight soup improved the frozen test and 856-frame consecutive set.
   imgsz: 1024
   device: ""
   trace_length: 30
@@ -51,8 +48,7 @@ tracking:
   visualization_max_width: 1920
   pose_weights_path: "models/rtmpose/rtmpose-m-wholebody-256x192.onnx"
   pose_detector_path: "models/rtmpose/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx"
-  # WholeBody pose is optional review metadata. The current yoyo, string, and
-  # orientation paths do not consume it, so keep it off unless explicitly needed.
+  # WholeBody pose is optional review metadata.
   enable_pose: false
   # High-resolution MobileNetV3-FPN semantic string model.
   string_weights_path: "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"
@@ -60,9 +56,7 @@ tracking:
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.40
   string_inference_scale: 1.0
-  # Reacquire the multi-segment centerline on every frame. This is slower than
-  # optical-flow propagation alone, but the reviewed sequence showed a large
-  # geometry-recall gain with no material yoyo localization change.
+  # Reacquire the multi-segment centerline on every frame.
   string_inference_fps: 0.0
   # Add a color/Hough centerline only when the semantic probability map also
   # supports it. This recovers weak, fragmented string pixels without allowing
@@ -81,13 +75,9 @@ tracking:
   # gap and reject optical-flow drift with forward/backward consistency.
   string_max_propagation_frames: 12
   string_flow_fb_max_error: 4.0
-  # Competition division metadata; it does not force a hand/yoyo connection.
-  # Consecutive annotations contain multiple visible centerline components and
-  # do not assert that every component touches the yoyo or a visible wrist.
-  # Keep component selection open; division is metadata, not a hard
-  # geometry gate.
+  # Competition division metadata used for hand-anchor annotation.
   yoyo_division: "1A"
-  # Coarse three-way orientation classifier. This is not a named-trick model.
+  # Coarse three-way orientation classifier.
   orientation_weights_path: "runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt"
   enable_orientation_model: true
   orientation_imgsz: 320
@@ -104,4 +94,3 @@ tracking:
   orientation_switch_confirmations: 4
   orientation_strong_switch_confidence: 0.9
   orientation_strong_switch_margin: 0.1
-  export_json: true

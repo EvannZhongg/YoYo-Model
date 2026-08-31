@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -283,17 +282,6 @@ def render_yolo_segmentation(label_path: Path, width: int, height: int) -> np.nd
     return mask
 
 
-def centerline_heatmap_target(mask: np.ndarray, blur_sigma: float = 1.2) -> np.ndarray:
-    skeleton = _skeletonize(mask)
-    if not np.any(skeleton):
-        return skeleton.astype(np.float32)
-    heatmap = cv2.GaussianBlur(
-        skeleton.astype(np.float32), (0, 0), float(max(0.1, blur_sigma)),
-    )
-    peak = float(heatmap.max())
-    return heatmap / peak if peak > 1e-6 else heatmap
-
-
 def image_label_pairs(dataset_dir: Path, split: str) -> list[tuple[Path, Path]]:
     image_root = dataset_dir / "images" / split
     label_root = dataset_dir / "labels" / split
@@ -317,8 +305,6 @@ class ReviewedStringDataset(Dataset):
         input_height: int,
         min_mask_width_px: int = 1,
         augment: bool = False,
-        degradation_augment: bool = False,
-        return_centerline: bool = False,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
@@ -326,8 +312,6 @@ class ReviewedStringDataset(Dataset):
         self.input_height = int(input_height)
         self.min_mask_width_px = max(1, int(min_mask_width_px))
         self.augment = bool(augment)
-        self.degradation_augment = bool(degradation_augment)
-        self.return_centerline = bool(return_centerline)
         self.pairs = image_label_pairs(self.dataset_dir, split)
         if not self.pairs:
             raise RuntimeError(f"No reviewed semantic samples found for split={split}: {self.dataset_dir}")
@@ -354,60 +338,13 @@ class ReviewedStringDataset(Dataset):
             gain = random.uniform(0.88, 1.12)
             bias = random.uniform(-10.0, 10.0)
             image = np.clip(image.astype(np.float32) * gain + bias, 0, 255).astype(np.uint8)
-        if self.augment and self.degradation_augment:
-            image = augment_video_degradation(image)
-        result = {
+        return {
             "image": normalize_image(image),
             "mask": torch.from_numpy(mask.astype(np.float32)[None, ...]),
             "image_path": str(image_path),
             "label_path": str(label_path),
             "positive": bool(np.any(mask)),
         }
-        if self.return_centerline:
-            result["centerline"] = torch.from_numpy(centerline_heatmap_target(mask)[None, ...])
-        return result
-
-
-def augment_video_degradation(image: np.ndarray) -> np.ndarray:
-    """Simulate common video degradations without changing string geometry."""
-    output = image
-    if random.random() < 0.35:
-        scale = random.uniform(0.45, 0.80)
-        height, width = output.shape[:2]
-        reduced = cv2.resize(
-            output,
-            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
-            interpolation=cv2.INTER_AREA,
-        )
-        output = cv2.resize(reduced, (width, height), interpolation=cv2.INTER_LINEAR)
-    if random.random() < 0.30:
-        if random.random() < 0.5:
-            kernel_size = random.choice((3, 5))
-            output = cv2.GaussianBlur(output, (kernel_size, kernel_size), random.uniform(0.2, 1.0))
-        else:
-            kernel_size = random.choice((3, 5, 7))
-            kernel = np.zeros((kernel_size, kernel_size), dtype=np.float32)
-            if random.random() < 0.5:
-                kernel[kernel_size // 2, :] = 1.0 / kernel_size
-            else:
-                kernel[:, kernel_size // 2] = 1.0 / kernel_size
-            output = cv2.filter2D(output, -1, kernel)
-    if random.random() < 0.35:
-        mean = output.mean(axis=(0, 1), keepdims=True)
-        contrast = random.uniform(0.65, 0.92)
-        output = np.clip(
-            (output.astype(np.float32) - mean) * contrast + mean,
-            0,
-            255,
-        ).astype(np.uint8)
-    if random.random() < 0.25:
-        quality = random.randint(45, 82)
-        ok, encoded = cv2.imencode(".jpg", output, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
-        if ok:
-            decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-            if decoded is not None:
-                output = decoded
-    return np.ascontiguousarray(output)
 
 
 def focal_dice_loss(
@@ -441,56 +378,6 @@ def focal_dice_loss(
         "hard_negative": float(hard_negative.detach().cpu()),
         "hard_negative_weight": hard_negative_weight,
     }
-
-
-def _soft_erode(value: torch.Tensor) -> torch.Tensor:
-    vertical = -nn.functional.max_pool2d(-value, kernel_size=(3, 1), stride=1, padding=(1, 0))
-    horizontal = -nn.functional.max_pool2d(-value, kernel_size=(1, 3), stride=1, padding=(0, 1))
-    return torch.minimum(vertical, horizontal)
-
-
-def _soft_dilate(value: torch.Tensor) -> torch.Tensor:
-    return nn.functional.max_pool2d(value, kernel_size=3, stride=1, padding=1)
-
-
-def _soft_open(value: torch.Tensor) -> torch.Tensor:
-    return _soft_dilate(_soft_erode(value))
-
-
-def _soft_skeletonize(value: torch.Tensor, iterations: int) -> torch.Tensor:
-    current = value.clamp(0.0, 1.0)
-    skeleton = nn.functional.relu(current - _soft_open(current))
-    for _ in range(max(1, int(iterations))):
-        current = _soft_erode(current)
-        delta = nn.functional.relu(current - _soft_open(current))
-        skeleton = skeleton + nn.functional.relu(delta - skeleton * delta)
-    return skeleton.clamp(0.0, 1.0)
-
-
-def soft_cldice_loss(
-    probability: torch.Tensor,
-    target: torch.Tensor,
-    iterations: int = 5,
-) -> torch.Tensor:
-    """Topology-aware centerline loss for positive thin-string masks."""
-    positive = target.sum(dim=(1, 2, 3)) > 0.0
-    if not torch.any(positive):
-        return probability.new_zeros(())
-    prediction = probability[positive].clamp(0.0, 1.0)
-    expected = target[positive].clamp(0.0, 1.0)
-    prediction_skeleton = _soft_skeletonize(prediction, iterations)
-    target_skeleton = _soft_skeletonize(expected, iterations)
-    epsilon = prediction.new_tensor(1e-6)
-    topology_precision = (prediction_skeleton * expected).sum(dim=(1, 2, 3)) / (
-        prediction_skeleton.sum(dim=(1, 2, 3)) + epsilon
-    )
-    topology_recall = (target_skeleton * prediction).sum(dim=(1, 2, 3)) / (
-        target_skeleton.sum(dim=(1, 2, 3)) + epsilon
-    )
-    score = (2.0 * topology_precision * topology_recall) / (
-        topology_precision + topology_recall + epsilon
-    )
-    return (1.0 - score).mean()
 
 
 def save_checkpoint(
@@ -569,155 +456,6 @@ def predict_prepared_probability(
 
 
 @torch.inference_mode()
-def predict_prepared_calibrated_ensemble_tensor(
-    primary_model: nn.Module,
-    secondary_model: nn.Module,
-    tensor: torch.Tensor,
-    alpha: float,
-    primary_threshold: float,
-    secondary_threshold: float,
-) -> torch.Tensor:
-    """Fuse compatible model outputs on-device and retain the result there."""
-    weight = float(alpha)
-    thresholds = (float(primary_threshold), float(secondary_threshold))
-    if not 0.0 <= weight <= 1.0:
-        raise ValueError("semantic ensemble alpha must be between 0 and 1")
-    if not all(0.0 < value < 1.0 for value in thresholds):
-        raise ValueError("semantic calibration thresholds must be between 0 and 1")
-
-    epsilon = 1e-5
-    primary_probability = torch.sigmoid(primary_model(tensor))[0, 0].clamp(
-        epsilon, 1.0 - epsilon,
-    )
-    secondary_probability = torch.sigmoid(secondary_model(tensor))[0, 0].clamp(
-        epsilon, 1.0 - epsilon,
-    )
-    if primary_probability.shape != secondary_probability.shape:
-        raise ValueError("semantic probability maps must have matching shapes")
-    primary_threshold_logit = math.log(thresholds[0] / (1.0 - thresholds[0]))
-    secondary_threshold_logit = math.log(thresholds[1] / (1.0 - thresholds[1]))
-    fused_logit = (
-        (1.0 - weight) * (torch.logit(primary_probability) - primary_threshold_logit)
-        + weight * (torch.logit(secondary_probability) - secondary_threshold_logit)
-    )
-    return torch.sigmoid(fused_logit)
-
-
-@torch.inference_mode()
-def predict_prepared_calibrated_ensemble(
-    primary_model: nn.Module,
-    secondary_model: nn.Module,
-    tensor: torch.Tensor,
-    alpha: float,
-    primary_threshold: float,
-    secondary_threshold: float,
-) -> np.ndarray:
-    """Fuse compatible model outputs on-device before one CPU transfer."""
-    return predict_prepared_calibrated_ensemble_tensor(
-        primary_model,
-        secondary_model,
-        tensor,
-        alpha,
-        primary_threshold,
-        secondary_threshold,
-    ).detach().cpu().numpy()
-
-
-class PreparedCalibratedEnsemblePredictor:
-    """Reuse a CUDA graph for fixed-shape calibrated ensemble inference."""
-
-    def __init__(
-        self,
-        primary_model: nn.Module,
-        secondary_model: nn.Module,
-        alpha: float,
-        primary_threshold: float,
-        secondary_threshold: float,
-        enable_cuda_graph: bool = True,
-    ) -> None:
-        self.primary_model = primary_model
-        self.secondary_model = secondary_model
-        self.alpha = float(alpha)
-        self.primary_threshold = float(primary_threshold)
-        self.secondary_threshold = float(secondary_threshold)
-        self.enable_cuda_graph = bool(enable_cuda_graph)
-        self._signature: tuple[Any, ...] | None = None
-        self._graph: torch.cuda.CUDAGraph | None = None
-        self._static_input: torch.Tensor | None = None
-        self._static_output: torch.Tensor | None = None
-
-    @property
-    def uses_cuda_graph(self) -> bool:
-        return self._graph is not None
-
-    def _capture(self, tensor: torch.Tensor) -> None:
-        self._static_input = tensor.detach().clone()
-        warmup_stream = torch.cuda.Stream(device=tensor.device)
-        warmup_stream.wait_stream(torch.cuda.current_stream(tensor.device))
-        with torch.cuda.stream(warmup_stream):
-            for _ in range(3):
-                predict_prepared_calibrated_ensemble_tensor(
-                    self.primary_model,
-                    self.secondary_model,
-                    self._static_input,
-                    self.alpha,
-                    self.primary_threshold,
-                    self.secondary_threshold,
-                )
-        torch.cuda.current_stream(tensor.device).wait_stream(warmup_stream)
-        torch.cuda.synchronize(tensor.device)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            static_output = predict_prepared_calibrated_ensemble_tensor(
-                self.primary_model,
-                self.secondary_model,
-                self._static_input,
-                self.alpha,
-                self.primary_threshold,
-                self.secondary_threshold,
-            )
-        self._graph = graph
-        self._static_output = static_output
-        self._signature = (
-            tensor.device.type,
-            tensor.device.index,
-            tensor.dtype,
-            tuple(tensor.shape),
-            tuple(tensor.stride()),
-        )
-
-    def predict(self, tensor: torch.Tensor) -> np.ndarray:
-        if (
-            not self.enable_cuda_graph
-            or tensor.device.type != "cuda"
-            or tensor.shape[0] != 1
-        ):
-            return predict_prepared_calibrated_ensemble(
-                self.primary_model,
-                self.secondary_model,
-                tensor,
-                self.alpha,
-                self.primary_threshold,
-                self.secondary_threshold,
-            )
-        signature = (
-            tensor.device.type,
-            tensor.device.index,
-            tensor.dtype,
-            tuple(tensor.shape),
-            tuple(tensor.stride()),
-        )
-        if self._graph is None or signature != self._signature:
-            self._capture(tensor)
-        assert self._static_input is not None
-        assert self._static_output is not None
-        assert self._graph is not None
-        self._static_input.copy_(tensor)
-        self._graph.replay()
-        return self._static_output.detach().cpu().numpy()
-
-
-@torch.inference_mode()
 def predict_letterboxed(
     model: nn.Module,
     frame_bgr: np.ndarray,
@@ -733,37 +471,6 @@ def predict_letterboxed(
     )
     probability = predict_prepared_probability(model, tensor)
     return probability, meta
-
-
-def fuse_calibrated_probabilities(
-    primary: np.ndarray,
-    secondary: np.ndarray,
-    alpha: float,
-    primary_threshold: float,
-    secondary_threshold: float,
-) -> np.ndarray:
-    """Blend two calibrated probability maps in threshold-relative logit space."""
-    if primary.shape != secondary.shape:
-        raise ValueError("semantic probability maps must have matching shapes")
-    weight = float(alpha)
-    if not 0.0 <= weight <= 1.0:
-        raise ValueError("semantic ensemble alpha must be between 0 and 1")
-    thresholds = (float(primary_threshold), float(secondary_threshold))
-    if not all(0.0 < value < 1.0 for value in thresholds):
-        raise ValueError("semantic calibration thresholds must be between 0 and 1")
-
-    epsilon = np.float32(1e-5)
-    left = np.clip(np.asarray(primary, dtype=np.float32), epsilon, 1.0 - epsilon)
-    right = np.clip(np.asarray(secondary, dtype=np.float32), epsilon, 1.0 - epsilon)
-    left_logit = np.log(left / (1.0 - left))
-    right_logit = np.log(right / (1.0 - right))
-    left_threshold_logit = math.log(thresholds[0] / (1.0 - thresholds[0]))
-    right_threshold_logit = math.log(thresholds[1] / (1.0 - thresholds[1]))
-    fused_logit = (
-        (1.0 - weight) * (left_logit - left_threshold_logit)
-        + weight * (right_logit - right_threshold_logit)
-    )
-    return (1.0 / (1.0 + np.exp(-fused_logit))).astype(np.float32)
 
 
 def load_dataset_manifest(dataset_dir: str | Path) -> dict[str, Any]:

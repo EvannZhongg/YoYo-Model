@@ -13,19 +13,14 @@ from string_segmentation.evaluate_consecutive import _group_artifact_stem
 from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
 from string_segmentation.semantic_model import (
     LetterboxMeta,
-    PreparedCalibratedEnsemblePredictor,
     ReviewedStringDataset,
     TinyUNet,
-    augment_video_degradation,
     build_string_model,
     focal_dice_loss,
-    soft_cldice_loss,
-    fuse_calibrated_probabilities,
     letterbox,
     load_checkpoint,
     normalize_image,
     normalize_image_for_inference,
-    predict_prepared_calibrated_ensemble,
     predict_prepared_probability,
     prepare_letterboxed_input,
     polyline_probability_support,
@@ -47,118 +42,12 @@ class SemanticStringTests(unittest.TestCase):
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.shape[:2], (8, 9))
 
-    def test_soft_cldice_loss_handles_empty_batch_and_backpropagates(self):
-        empty_probability = torch.full((2, 1, 16, 16), 0.5, requires_grad=True)
-        empty_target = torch.zeros_like(empty_probability)
-        empty_loss = soft_cldice_loss(empty_probability, empty_target)
-        self.assertEqual(float(empty_loss), 0.0)
-
-        probability = torch.full((1, 1, 16, 16), 0.5, requires_grad=True)
-        target = torch.zeros_like(probability)
-        target[:, :, 7:9, 2:14] = 1.0
-        loss = soft_cldice_loss(probability, target, iterations=3)
-        self.assertGreater(float(loss.detach()), 0.0)
-        loss.backward()
-        self.assertIsNotNone(probability.grad)
-
-    def test_video_degradation_augmentation_preserves_tensor_contract(self):
-        image = np.tile(np.arange(96, dtype=np.uint8), (64, 1))
-        image = np.repeat(image[:, :, None], 3, axis=2)
-        with (
-            patch("string_segmentation.semantic_model.random.random", return_value=0.0),
-            patch(
-                "string_segmentation.semantic_model.random.uniform",
-                side_effect=[0.5, 0.5, 0.7],
-            ),
-            patch("string_segmentation.semantic_model.random.choice", return_value=3),
-            patch("string_segmentation.semantic_model.random.randint", return_value=55),
-        ):
-            degraded = augment_video_degradation(image)
-
-        self.assertEqual(degraded.shape, image.shape)
-        self.assertEqual(degraded.dtype, np.uint8)
-        self.assertTrue(degraded.flags.c_contiguous)
-        self.assertFalse(np.array_equal(degraded, image))
-
     def test_consecutive_artifact_names_are_unique_per_group(self):
         first = _group_artifact_stem("performer--run:10-20")
         second = _group_artifact_stem("performer--run/10-20")
 
         self.assertNotEqual(first, second)
         self.assertTrue(first.startswith("performer--run-10-20-"))
-
-    def test_calibrated_probability_fusion_aligns_model_thresholds(self):
-        primary = np.asarray([[0.3985, 0.8]], dtype=np.float32)
-        secondary = np.asarray([[0.5, 0.8]], dtype=np.float32)
-
-        fused = fuse_calibrated_probabilities(
-            primary,
-            secondary,
-            alpha=0.3,
-            primary_threshold=0.3985,
-            secondary_threshold=0.5,
-        )
-
-        self.assertAlmostEqual(float(fused[0, 0]), 0.5, places=5)
-        self.assertGreater(float(fused[0, 1]), 0.8)
-
-    def test_prepared_ensemble_matches_numpy_calibrated_fusion(self):
-        class FixedLogits(torch.nn.Module):
-            def __init__(self, values):
-                super().__init__()
-                self.register_buffer("values", torch.tensor(values, dtype=torch.float32))
-
-            def forward(self, _):
-                return self.values
-
-        primary = FixedLogits([[[[-2.0, -0.4], [0.5, 4.0]]]])
-        secondary = FixedLogits([[[[-1.5, 0.2], [1.0, 3.0]]]])
-        tensor = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
-        actual = predict_prepared_calibrated_ensemble(
-            primary, secondary, tensor, 0.3, 0.3985, 0.5,
-        )
-        expected = fuse_calibrated_probabilities(
-            torch.sigmoid(primary.values)[0, 0].numpy(),
-            torch.sigmoid(secondary.values)[0, 0].numpy(),
-            0.3,
-            0.3985,
-            0.5,
-        )
-
-        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2e-7)
-
-    def test_prepared_ensemble_predictor_falls_back_on_cpu(self):
-        class FixedLogits(torch.nn.Module):
-            def __init__(self, values):
-                super().__init__()
-                self.register_buffer("values", torch.tensor(values, dtype=torch.float32))
-
-            def forward(self, _):
-                return self.values
-
-        primary = FixedLogits([[[[-2.0, -0.4], [0.5, 4.0]]]])
-        secondary = FixedLogits([[[[-1.5, 0.2], [1.0, 3.0]]]])
-        tensor = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
-        predictor = PreparedCalibratedEnsemblePredictor(
-            primary, secondary, 0.3, 0.3985, 0.5,
-        )
-
-        actual = predictor.predict(tensor)
-        expected = predict_prepared_calibrated_ensemble(
-            primary, secondary, tensor, 0.3, 0.3985, 0.5,
-        )
-
-        np.testing.assert_array_equal(actual, expected)
-        self.assertFalse(predictor.uses_cuda_graph)
-
-    def test_calibrated_probability_fusion_rejects_invalid_inputs(self):
-        probability = np.full((2, 2), 0.5, dtype=np.float32)
-        with self.assertRaisesRegex(ValueError, "matching shapes"):
-            fuse_calibrated_probabilities(probability, probability[:1], 0.3, 0.4, 0.5)
-        with self.assertRaisesRegex(ValueError, "alpha"):
-            fuse_calibrated_probabilities(probability, probability, 1.1, 0.4, 0.5)
-        with self.assertRaisesRegex(ValueError, "thresholds"):
-            fuse_calibrated_probabilities(probability, probability, 0.3, 0.0, 0.5)
 
     def test_polyline_probability_support_samples_source_space_geometry(self):
         probability = np.zeros((10, 10), dtype=np.float32)
@@ -235,25 +124,18 @@ class SemanticStringTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(actual, expected, atol=1e-6, rtol=0.0))
 
-    def test_shared_preprocessing_matches_independent_predictions(self):
+    def test_prepared_input_matches_independent_prediction(self):
         image = np.random.default_rng(7).integers(0, 256, size=(37, 53, 3), dtype=np.uint8)
-        primary = TinyUNet(base_channels=4).eval()
-        secondary = TinyUNet(base_channels=4).eval()
+        model = TinyUNet(base_channels=4).eval()
 
-        primary_image, _, independent_meta = letterbox(image, 96, 64)
-        primary_tensor = normalize_image_for_inference(primary_image, "cpu")
-        independent_primary = predict_prepared_probability(primary, primary_tensor)
-        secondary_image, _, secondary_meta = letterbox(image, 96, 64)
-        secondary_tensor = normalize_image_for_inference(secondary_image, "cpu")
-        independent_secondary = predict_prepared_probability(secondary, secondary_tensor)
-        tensor, shared_meta = prepare_letterboxed_input(image, 96, 64, "cpu")
-        shared_primary = predict_prepared_probability(primary, tensor)
-        shared_secondary = predict_prepared_probability(secondary, tensor)
+        prepared_image, _, independent_meta = letterbox(image, 96, 64)
+        independent_tensor = normalize_image_for_inference(prepared_image, "cpu")
+        independent = predict_prepared_probability(model, independent_tensor)
+        tensor, prepared_meta = prepare_letterboxed_input(image, 96, 64, "cpu")
+        prepared = predict_prepared_probability(model, tensor)
 
-        self.assertEqual(independent_meta, shared_meta)
-        self.assertEqual(secondary_meta, shared_meta)
-        np.testing.assert_array_equal(shared_primary, independent_primary)
-        np.testing.assert_array_equal(shared_secondary, independent_secondary)
+        self.assertEqual(independent_meta, prepared_meta)
+        np.testing.assert_array_equal(prepared, independent)
 
     def test_reviewed_dataset_reads_unicode_source_paths(self):
         with tempfile.TemporaryDirectory() as directory:

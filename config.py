@@ -68,9 +68,6 @@ class DatasetConfig:
     image_input_dir: Path = _as_path(
         _env_or_config("DATASET_IMAGE_DIR", "dataset.image_input_dir", "dataset/Positive_Sample/1A")
     )
-    current_action_group: str = str(
-        _env_or_config("DATASET_CURRENT_ACTION_GROUP", "dataset.current_action_group", "1A")
-    )
     annotation_output_dir: Path = _as_path(
         _env_or_config("ANNOTATION_OUTPUT_DIR", "dataset.annotation_output_dir", "annotations")
     )
@@ -247,7 +244,6 @@ class TrackingConfig:
     orientation_strong_switch_margin: float = float(
         _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_MARGIN", "tracking.orientation_strong_switch_margin", 0.1)
     )
-    export_json: bool = _as_bool(_env_or_config("TRACKING_EXPORT_JSON", "tracking.export_json", True), True)
 
 
 @dataclass(frozen=True)
