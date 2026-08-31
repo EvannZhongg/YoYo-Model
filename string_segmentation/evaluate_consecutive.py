@@ -190,26 +190,32 @@ def evaluate_consecutive_checkpoint(
                     if color.get("line_features"):
                         final_string["color_line_features"] = color["line_features"]
                 else:
-                    accepted_color_candidates += 1
                     final_string = dict(final_string)
                     polylines = list(final_string.get("polylines") or [final_string["points"]])
-                    polylines.append(color["points"])
-                    final_string.update({
-                        "polylines": polylines,
-                        "component_count": len(polylines),
-                        "method": (
-                            "semantic_color_probability_union"
-                            if color_probability_min_mean is not None
-                            else "semantic_color_union"
-                        ),
-                        "color_confidence": color.get("confidence"),
-                        "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
-                        "color_spatially_ambiguous": color.get("spatially_ambiguous"),
-                        "color_points": color["points"],
-                        "color_probability_support": color_support,
-                    })
-                    if color.get("line_features"):
-                        final_string["color_line_features"] = color["line_features"]
+                    if len(polylines) < max(1, int(max_components)):
+                        accepted_color_candidates += 1
+                        polylines.append(color["points"])
+                        component_count = int(
+                            final_string.get("component_count")
+                            or max(1, len(polylines) - 1)
+                        ) + 1
+                        final_string.update({
+                            "polylines": polylines,
+                            "component_count": component_count,
+                            "polyline_count": len(polylines),
+                            "method": (
+                                "semantic_color_probability_union"
+                                if color_probability_min_mean is not None
+                                else "semantic_color_union"
+                            ),
+                            "color_confidence": color.get("confidence"),
+                            "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
+                            "color_spatially_ambiguous": color.get("spatially_ambiguous"),
+                            "color_points": color["points"],
+                            "color_probability_support": color_support,
+                        })
+                        if color.get("line_features"):
+                            final_string["color_line_features"] = color["line_features"]
             if temporal:
                 frame_index = int(frame["frame_index"])
                 allow_unanchored_semantic = bool(

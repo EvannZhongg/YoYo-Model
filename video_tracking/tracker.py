@@ -253,6 +253,7 @@ def _augment_semantic_color_observation(
     semantic_prefilter: bool = False,
     include_bright_lines: bool = False,
     bright_line_min_mean: float | None = None,
+    max_components: int = 8,
 ) -> dict[str, Any] | None:
     """Add a color line only when the semantic map independently supports it."""
     if observation is None or yoyo is None:
@@ -302,11 +303,15 @@ def _augment_semantic_color_observation(
         return observation
     result = dict(observation)
     polylines = list(result.get("polylines") or [result["points"]])
+    if len(polylines) >= max(1, int(max_components)):
+        return observation
     polylines.append(color["points"])
+    component_count = int(result.get("component_count") or max(1, len(polylines) - 1)) + 1
     result.update(
         {
             "polylines": polylines,
-            "component_count": len(polylines),
+            "component_count": component_count,
+            "polyline_count": len(polylines),
             "method": "semantic_color_probability_union",
             "needs_review": True,
             "color_points": color["points"],
@@ -389,6 +394,7 @@ def _predict_string_model(
                 color_semantic_prefilter,
                 bright_line_augment,
                 bright_line_min_mean,
+                max_components,
             )
         if observation is not None:
             observation["inference_scale"] = round(scale, 4)

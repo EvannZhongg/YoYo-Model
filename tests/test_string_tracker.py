@@ -409,7 +409,12 @@ class StringTrackerTemporalTests(unittest.TestCase):
         yoyo = {"center": [120.0, 90.0], "bbox": [108.0, 78.0, 132.0, 102.0]}
         observation = {
             "points": [[120.0, 90.0], [150.0, 70.0]],
-            "polylines": [[[120.0, 90.0], [150.0, 70.0]]],
+            "polylines": [
+                [[120.0, 90.0], [150.0, 70.0]],
+                [[150.0, 70.0], [160.0, 60.0]],
+            ],
+            "component_count": 1,
+            "polyline_count": 2,
             "confidence": 0.8,
             "method": "semantic_segmentation",
         }
@@ -437,8 +442,37 @@ class StringTrackerTemporalTests(unittest.TestCase):
         )
 
         self.assertEqual(accepted["method"], "semantic_color_probability_union")
-        self.assertEqual(len(accepted["polylines"]), 2)
+        self.assertEqual(len(accepted["polylines"]), 3)
+        self.assertEqual(accepted["component_count"], 2)
+        self.assertEqual(accepted["polyline_count"], 3)
         self.assertEqual(rejected, observation)
+
+    def test_semantic_color_augmentation_respects_component_limit(self):
+        frame = np.zeros((180, 240, 3), dtype=np.uint8)
+        cv2.line(frame, (120, 90), (200, 40), (0, 255, 0), 4)
+        yoyo = {"center": [120.0, 90.0], "bbox": [108.0, 78.0, 132.0, 102.0]}
+        line = [[120.0, 90.0], [150.0, 70.0]]
+        observation = {
+            "points": line,
+            "polylines": [line] * 8,
+            "confidence": 0.8,
+            "method": "semantic_segmentation",
+        }
+        meta = SimpleNamespace(scale=1.0, pad_x=0, pad_y=0)
+
+        result = _augment_semantic_color_observation(
+            frame,
+            yoyo,
+            observation,
+            np.ones((180, 240), dtype=np.float32),
+            meta,
+            threshold=0.4,
+            min_mean=0.4,
+            min_fraction_at_0_10=0.5,
+            max_components=8,
+        )
+
+        self.assertEqual(result, observation)
 
     def test_bright_ridge_fallback_recovers_low_saturation_string(self):
         frame = np.full((180, 240, 3), (130, 160, 190), dtype=np.uint8)

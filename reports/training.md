@@ -67,6 +67,9 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 | --- | ---: | ---: | ---: | ---: | ---: |
 | test | 136 | 0.694979 | 0.927502 | 0.976562 | 33.500 |
 
+固定验证阈值 `0.9204` 后，覆盖式骨架中心线在 val/test 上的 centerline F1@8 分别为
+`0.739734` 和 `0.767794`；test precision/recall 为 `0.784026/0.752220`。
+
 训练阶段的 checkpoint 与阈值选择统一使用
 `pooled_centerline_f1_at_8_source_px`：由 mask 骨架化后映射到源图像坐标，采用与连续集相同的
 中心线采样和最近距离计算。上表的 Pixel Dice 与 Tolerant F1@3 继续作为静态语义诊断指标。
@@ -74,10 +77,12 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
 `0.9204`、颜色/亮脊增强、语义预筛、颜色候选概率均值门槛 `0.70` 和时序协议）上，pooled centerline F1@8 为
-`0.564291`（precision `0.883849`、recall `0.414447`），按 pair frame 加权的
-Chamfer 为 `48.8419 px`，HD95 为 `148.7856 px`。Presence F1 按来源组帧数加权为
-`0.991218`，零预测帧为 `19`；最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group
-为 `DSCF7145-e237bbfb5d`（F1@8 `0.362731`）。评估器默认门槛现已与追踪器配置统一，避免无门槛颜色候选造成协议漂移。
+`0.766228`（precision `0.880844`、recall `0.678006`），按 pair frame 加权的
+Chamfer 为 `14.4312 px`，HD95 为 `60.9098 px`。相对单主路径抽取的 F1@8
+`0.564291` 和 recall `0.414447`，覆盖式骨架抽取保留同一语义连通域中的主要分支，
+同时维持接近的 precision。pooled Presence F1 为 `0.991772`，零预测帧为 `18`；
+最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group 为 `池高宇-fef6c7bcb0`
+（F1@8 `0.612640`）。评估器默认门槛与追踪器配置统一为 `0.70`。
 
 晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏；
 Presence F1、最长缺失段/恢复延迟和 FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
@@ -90,15 +95,15 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 本身作为模型质量或晋升排名指标。
 
 同机邬聪聪视频 300 帧端到端复核（检测、语义、方向和异步写盘配置一致）吞吐为
-`15.7206 -> 17.4938 FPS`，无额外推理组件。
+`15.7206 -> 15.2890 FPS`，下降约 `2.7%`，无额外推理组件。
 
 复现证据：
 
 - `runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
-- `tmp/semantic_ablation_nomorph_foundation_r1_test/test_semantic_metrics_threshold_0p9204.json`
-- `tmp/diag_unified_all_color070/summary.json`
-- `tmp/fps_nomorph_json/邬聪聪_20260831T131740Z_8148524c/run.json`
-- `tmp/fps_production_json/邬聪聪_20260831T131820Z_a48ab48e/run.json`
+- `tmp/semantic_skeleton_cover_test_t092/test_semantic_metrics_threshold_0p9204.json`
+- `tmp/semantic_skeleton_cover_val_t092/val_semantic_metrics_threshold_0p9204.json`
+- `tmp/semantic_skeleton_cover_optimized/summary.json`
+- `tmp/fps_skeleton_cover_optimized/邬聪聪_20260831T174144Z_2f6fbd4e/run.json`
 
 ## 绳线追踪流程
 

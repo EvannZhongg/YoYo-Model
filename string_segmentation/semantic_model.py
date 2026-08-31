@@ -580,6 +580,88 @@ def _longest_skeleton_path(skeleton: np.ndarray, max_points: int = 64) -> np.nda
     return path
 
 
+def _skeleton_cover_paths(
+    skeleton: np.ndarray,
+    max_paths: int,
+    max_points: int,
+) -> list[np.ndarray]:
+    """Cover a branched skeleton with a bounded set of non-overlapping paths."""
+    coordinates = np.argwhere(skeleton > 0)
+    if len(coordinates) < 2:
+        return []
+    node_ids = np.full(skeleton.shape, -1, dtype=np.int32)
+    node_ids[coordinates[:, 0], coordinates[:, 1]] = np.arange(len(coordinates), dtype=np.int32)
+    adjacency: list[list[int]] = [[] for _ in range(len(coordinates))]
+    height, width = skeleton.shape
+    for index, (row, column) in enumerate(coordinates):
+        row = int(row)
+        column = int(column)
+        for neighbor_row in range(max(0, row - 1), min(height, row + 2)):
+            for neighbor_column in range(max(0, column - 1), min(width, column + 2)):
+                neighbor = int(node_ids[neighbor_row, neighbor_column])
+                if neighbor >= 0 and neighbor != index:
+                    adjacency[index].append(neighbor)
+
+    active = np.ones(len(coordinates), dtype=np.bool_)
+
+    def traverse(start: int, parents: np.ndarray | None = None) -> tuple[int, list[int]]:
+        visited = np.zeros(len(coordinates), dtype=np.bool_)
+        visited[start] = True
+        if parents is not None:
+            parents[start] = -1
+        queue = [start]
+        distances = [0]
+        farthest = start
+        farthest_distance = 0
+        for position, node in enumerate(queue):
+            distance = distances[position]
+            for neighbor in adjacency[node]:
+                if not active[neighbor] or visited[neighbor]:
+                    continue
+                visited[neighbor] = True
+                if parents is not None:
+                    parents[neighbor] = node
+                next_distance = distance + 1
+                queue.append(neighbor)
+                distances.append(next_distance)
+                if next_distance > farthest_distance:
+                    farthest = neighbor
+                    farthest_distance = next_distance
+        return farthest, queue
+
+    paths: list[np.ndarray] = []
+    while len(paths) < max(1, int(max_paths)):
+        largest_component: list[int] = []
+        first = -1
+        unseen = active.copy()
+        for start in np.flatnonzero(unseen):
+            if not unseen[start]:
+                continue
+            component_first, component = traverse(int(start))
+            unseen[component] = False
+            if len(component) > len(largest_component):
+                largest_component = component
+                first = component_first
+        if len(largest_component) < 2:
+            break
+
+        parents = np.full(len(coordinates), -1, dtype=np.int32)
+        second, _ = traverse(first, parents)
+        path_indices = []
+        current = second
+        while current >= 0:
+            path_indices.append(current)
+            current = int(parents[current])
+        path_indices.reverse()
+        active[path_indices] = False
+        path = coordinates[path_indices][:, [1, 0]].astype(np.float32)
+        if len(path) > max(2, int(max_points)):
+            indices = np.linspace(0, len(path) - 1, max(2, int(max_points)), dtype=np.int32)
+            path = path[indices]
+        paths.append(path)
+    return paths
+
+
 def semantic_mask_observation(
     probability: np.ndarray,
     meta: LetterboxMeta,
@@ -655,17 +737,18 @@ def semantic_mask_observation(
         if len(polygon) < 3:
             continue
         skeleton = _skeletonize(padded)
-        points = _longest_skeleton_path(
+        paths = _skeleton_cover_paths(
             skeleton,
+            max_paths=max(1, int(max_components)),
             max_points=max(2, int(max_polyline_points)),
         )
-        if len(points):
-            points += offset
-        if len(points) < 2:
+        if paths:
+            paths = [path + offset for path in paths]
+        else:
             centered = polygon - polygon.mean(axis=0)
             _, _, vh = np.linalg.svd(centered, full_matrices=False)
             projection = centered @ vh[0]
-            points = polygon[[int(np.argmin(projection)), int(np.argmax(projection))]]
+            paths = [polygon[[int(np.argmin(projection)), int(np.argmax(projection))]]]
         probability_crop = probability[
             component_y : component_y + component_height,
             component_x : component_x + component_width,
@@ -699,7 +782,7 @@ def semantic_mask_observation(
                 "distance_to_yoyo_target_px": distance,
                 "yoyo_body_overlap_fraction": yoyo_body_overlap_fraction,
                 "polygon": polygon,
-                "points": points,
+                "paths": paths,
             }
         )
     if not candidates:
@@ -711,17 +794,38 @@ def semantic_mask_observation(
             candidates.sort(key=lambda item: (item["distance_to_yoyo_target_px"], -item["mean_probability"], -item["area"]))
         else:
             candidates.sort(key=lambda item: (-item["mean_probability"], -item["area"]))
-    selected = candidates[:max(1, int(max_components))]
-    selected_polygons = [restore_coordinates(item["polygon"], meta) for item in selected]
-    selected_polylines = [restore_coordinates(item["points"], meta) for item in selected]
-    selected = [item for item, polygon, points in zip(selected, selected_polygons, selected_polylines) if len(polygon) >= 3 and len(points) >= 2]
+    component_limit = max(1, int(max_components))
+    selected = []
+    selected_polygons = []
+    selected_polylines = []
+    remaining_paths: list[list[list[float]]] = []
+    for item in candidates[:component_limit]:
+        polygon = restore_coordinates(item["polygon"], meta)
+        paths = [
+            restore_coordinates(path, meta)
+            for path in item["paths"]
+            if len(path) >= 2
+        ]
+        if len(polygon) < 3 or not paths:
+            continue
+        selected.append(item)
+        selected_polygons.append(polygon)
+        selected_polylines.append(paths[0])
+        remaining_paths.append(paths[1:])
     if not selected:
         return None
+    while len(selected_polylines) < component_limit:
+        added = False
+        for paths in remaining_paths:
+            if not paths or len(selected_polylines) >= component_limit:
+                continue
+            selected_polylines.append(paths.pop(0))
+            added = True
+        if not added:
+            break
     hand_supported_component_count = sum(id(item) in hand_supported_ids for item in selected)
     if selection_mode == "yoyo_and_hand_anchors" and hand_supported_component_count == 0:
         selection_mode = "yoyo_anchor"
-    selected_polygons = [restore_coordinates(item["polygon"], meta) for item in selected]
-    selected_polylines = [restore_coordinates(item["points"], meta) for item in selected]
     primary = selected[0]
     primary_distance_px = float(primary["distance_to_yoyo_target_px"] / max(float(meta.scale), 1e-6)) if yoyo else None
     spatially_ambiguous = bool(
@@ -740,6 +844,7 @@ def semantic_mask_observation(
         "probability_threshold": round(float(threshold), 4),
         "mask_area_target_px": int(sum(item["area"] for item in selected)),
         "component_count": len(selected),
+        "polyline_count": len(selected_polylines),
         "component_selection": selection_mode,
         "hand_supported_component_count": hand_supported_component_count,
         "distance_to_yoyo_px": round(primary_distance_px, 2) if primary_distance_px is not None else None,
