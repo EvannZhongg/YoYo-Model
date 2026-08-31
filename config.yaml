@@ -17,12 +17,11 @@ yolo:
   model_url_template: "https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
 
 semantic_string:
-  # Single-class semantic baseline for thin strings. It consumes only the
-  # review-gated string_seg split and is versioned separately from YOLO runs.
+  # Single-class MobileNetV3-FPN model for thin strings.
   dataset_dir: "datasets/1Ayoyo_dataset/string_segmentation"
-  project: "runs/semantic"
-  run_name: "yoyo_string_semantic_candidate"
-  epochs: 40
+  project: "runs/v2v3"
+  run_name: "yoyo_v2v3_semantic_string"
+  epochs: 12
   input_width: 960
   input_height: 544
   batch: 2
@@ -30,7 +29,15 @@ semantic_string:
   learning_rate: 0.001
   base_channels: 16
   min_mask_width_px: 1
-  seed: 42
+  architecture: "mobilenet_v3_fpn"
+  pretrained_backbone: true
+  freeze_backbone_epochs: 3
+  backbone_lr_multiplier: 0.05
+  hard_negative_weight: 0.2
+  negative_sample_weight: 4.0
+  early_stopping_patience: 0
+  early_stopping_min_epochs: 10
+  seed: 20260830
   device: "cuda"
 
 tracking:

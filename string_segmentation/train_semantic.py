@@ -111,39 +111,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--architecture",
         choices=["tiny_unet", "lraspp_mobilenet_v3", "mobilenet_v3_fpn"],
-        default="tiny_unet",
+        default=SEMANTIC_STRING_CONFIG.architecture,
         help="Semantic model architecture.",
     )
     parser.add_argument(
         "--pretrained-backbone",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=SEMANTIC_STRING_CONFIG.pretrained_backbone,
         help="Initialize a MobileNetV3 backbone from ImageNet weights.",
     )
     parser.add_argument(
         "--freeze-backbone-epochs",
         type=int,
-        default=0,
+        default=SEMANTIC_STRING_CONFIG.freeze_backbone_epochs,
         help="Train only the new decoder for this many initial epochs.",
     )
     parser.add_argument(
         "--backbone-lr-multiplier",
         type=float,
-        default=1.0,
+        default=SEMANTIC_STRING_CONFIG.backbone_lr_multiplier,
         help="Learning-rate multiplier for the pretrained encoder after unfreezing.",
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
-    parser.add_argument("--hard-negative-weight", type=float, default=0.05)
+    parser.add_argument("--hard-negative-weight", type=float, default=SEMANTIC_STRING_CONFIG.hard_negative_weight)
     parser.add_argument(
         "--negative-sample-weight",
         type=float,
-        default=4.0,
+        default=SEMANTIC_STRING_CONFIG.negative_sample_weight,
         help="Relative sampling weight for reviewed empty-mask train images; 1 disables rebalancing.",
     )
     parser.add_argument("--seed", type=int, default=SEMANTIC_STRING_CONFIG.seed)
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--initial-weights", default="")
-    parser.add_argument("--early-stopping-patience", type=int, default=0)
-    parser.add_argument("--early-stopping-min-epochs", type=int, default=10)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=SEMANTIC_STRING_CONFIG.early_stopping_patience,
+    )
+    parser.add_argument(
+        "--early-stopping-min-epochs",
+        type=int,
+        default=SEMANTIC_STRING_CONFIG.early_stopping_min_epochs,
+    )
     parser.add_argument("--exist-ok", action="store_true")
     return parser.parse_args()
 

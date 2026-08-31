@@ -178,7 +178,7 @@ class TrackingConfig:
         _env_or_config(
             "TRACKING_STRING_COLOR_PROBABILITY_MIN_MEAN",
             "tracking.string_color_probability_min_mean",
-            0.40,
+            0.70,
         )
     )
     string_color_probability_min_fraction: float = float(
@@ -251,9 +251,9 @@ class SemanticStringConfig:
     dataset_dir: Path = _as_path(
         _env_or_config("SEMANTIC_STRING_DATASET_DIR", "semantic_string.dataset_dir", "datasets/1Ayoyo_dataset/string_segmentation")
     )
-    project: Path = _as_path(_env_or_config("SEMANTIC_STRING_PROJECT", "semantic_string.project", "runs/semantic"))
-    run_name: str = str(_env_or_config("SEMANTIC_STRING_RUN_NAME", "semantic_string.run_name", "yoyo_string_semantic_candidate"))
-    epochs: int = int(_env_or_config("SEMANTIC_STRING_EPOCHS", "semantic_string.epochs", 40))
+    project: Path = _as_path(_env_or_config("SEMANTIC_STRING_PROJECT", "semantic_string.project", "runs/v2v3"))
+    run_name: str = str(_env_or_config("SEMANTIC_STRING_RUN_NAME", "semantic_string.run_name", "yoyo_v2v3_semantic_string"))
+    epochs: int = int(_env_or_config("SEMANTIC_STRING_EPOCHS", "semantic_string.epochs", 12))
     input_width: int = int(_env_or_config("SEMANTIC_STRING_INPUT_WIDTH", "semantic_string.input_width", 960))
     input_height: int = int(_env_or_config("SEMANTIC_STRING_INPUT_HEIGHT", "semantic_string.input_height", 544))
     batch: int = int(_env_or_config("SEMANTIC_STRING_BATCH", "semantic_string.batch", 2))
@@ -267,7 +267,32 @@ class SemanticStringConfig:
     min_mask_width_px: int = int(
         _env_or_config("SEMANTIC_STRING_MIN_MASK_WIDTH_PX", "semantic_string.min_mask_width_px", 1)
     )
-    seed: int = int(_env_or_config("SEMANTIC_STRING_SEED", "semantic_string.seed", 42))
+    architecture: str = str(
+        _env_or_config("SEMANTIC_STRING_ARCHITECTURE", "semantic_string.architecture", "mobilenet_v3_fpn")
+    )
+    pretrained_backbone: bool = _as_bool(
+        _env_or_config("SEMANTIC_STRING_PRETRAINED_BACKBONE", "semantic_string.pretrained_backbone", True),
+        True,
+    )
+    freeze_backbone_epochs: int = int(
+        _env_or_config("SEMANTIC_STRING_FREEZE_BACKBONE_EPOCHS", "semantic_string.freeze_backbone_epochs", 3)
+    )
+    backbone_lr_multiplier: float = float(
+        _env_or_config("SEMANTIC_STRING_BACKBONE_LR_MULTIPLIER", "semantic_string.backbone_lr_multiplier", 0.05)
+    )
+    hard_negative_weight: float = float(
+        _env_or_config("SEMANTIC_STRING_HARD_NEGATIVE_WEIGHT", "semantic_string.hard_negative_weight", 0.2)
+    )
+    negative_sample_weight: float = float(
+        _env_or_config("SEMANTIC_STRING_NEGATIVE_SAMPLE_WEIGHT", "semantic_string.negative_sample_weight", 4.0)
+    )
+    early_stopping_patience: int = int(
+        _env_or_config("SEMANTIC_STRING_EARLY_STOPPING_PATIENCE", "semantic_string.early_stopping_patience", 0)
+    )
+    early_stopping_min_epochs: int = int(
+        _env_or_config("SEMANTIC_STRING_EARLY_STOPPING_MIN_EPOCHS", "semantic_string.early_stopping_min_epochs", 10)
+    )
+    seed: int = int(_env_or_config("SEMANTIC_STRING_SEED", "semantic_string.seed", 20260830))
     device: str = str(_env_or_config("SEMANTIC_STRING_DEVICE", "semantic_string.device", "cuda"))
 
 

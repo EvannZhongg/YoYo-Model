@@ -240,7 +240,7 @@ def create_demo():
                             tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(TRACKING_CONFIG.string_weights_path))
                             with gr.Row():
                                 tracking_string_conf = gr.Slider(
-                                    label="String Confidence", minimum=0.01, maximum=0.95,
+                                    label="String Confidence Floor", minimum=0.01, maximum=0.95,
                                     value=TRACKING_CONFIG.string_confidence, step=0.01,
                                 )
                                 tracking_string_scale = gr.Slider(

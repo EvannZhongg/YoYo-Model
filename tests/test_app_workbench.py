@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app import create_demo, run_video_tracking
-from config import TRACKING_CONFIG
+from config import SEMANTIC_STRING_CONFIG, TRACKING_CONFIG
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
 from workbench.score_annotation import (
     ANCHOR_SOURCES,
@@ -330,6 +330,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
             default_kwargs["string_color_semantic_prefilter"],
             TRACKING_CONFIG.string_color_semantic_prefilter,
         )
+        self.assertEqual(TRACKING_CONFIG.string_color_probability_min_mean, 0.70)
 
     def test_tracking_without_video_returns_empty_output(self):
         outputs = run_video_tracking(
@@ -368,6 +369,16 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("string_segmentation.train_semantic", args)
         self.assertEqual(args[args.index("--name") + 1], "dataset-123_semantic_string")
         self.assertEqual(Path(args[args.index("--dataset-dir") + 1]).name, "string_segmentation")
+        self.assertEqual(args[args.index("--architecture") + 1], SEMANTIC_STRING_CONFIG.architecture)
+        self.assertEqual(
+            float(args[args.index("--hard-negative-weight") + 1]),
+            SEMANTIC_STRING_CONFIG.hard_negative_weight,
+        )
+        self.assertEqual(
+            int(args[args.index("--freeze-backbone-epochs") + 1]),
+            SEMANTIC_STRING_CONFIG.freeze_backbone_epochs,
+        )
+        self.assertIn("--pretrained-backbone", args)
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
     def test_evaluation_uses_training_v3_evaluator(self, run_command):

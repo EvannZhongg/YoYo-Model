@@ -67,16 +67,22 @@ RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放
 - `orientation`
 - `all`
 
-语义绳模型继续使用统一数据集的 `string_segmentation` view：
+语义绳模型使用统一数据集的 `string_segmentation` view。默认训练协议与当前
+MobileNetV3-FPN 权重一致：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train_semantic `
   --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
   --project runs/v2v3 `
   --name yoyo_v2v3_semantic_string `
-  --architecture lraspp_mobilenet_v3 `
+  --epochs 12 `
+  --architecture mobilenet_v3_fpn `
   --pretrained-backbone `
+  --freeze-backbone-epochs 3 `
+  --backbone-lr-multiplier 0.05 `
+  --hard-negative-weight 0.2 `
   --negative-sample-weight 4.0 `
+  --seed 20260830 `
   --device cuda
 ```
 
@@ -88,6 +94,11 @@ ROI 方向模型使用：
   --project-dir runs/v2v3 `
   --device 0
 ```
+
+`prepare_orientation_view` 默认以 `presentation_orientation` 生成四分类训练视图；
+追踪时将 `frontal/edge_vertical` 映射为 `normal`、`edge_horizontal` 映射为
+`horizontal`、`unknown` 映射为 `not_applicable`，对外输出仍是
+`trick_orientation` 三分类。当前默认部署权重本身是三分类模型。
 
 Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbench_train_v2v3`，评估使用 `workbench_evaluate_v2v3`。
 
@@ -113,6 +124,9 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 绳线追踪或方向识别，因此 `tracking.enable_pose=false`，Workbench 中需要人体/手部
 审核信息时可勾选 RTMPose，CLI 可传入 `--pose`。姿态推理只使用 RTMPose WholeBody
 及其 YOLOX 人体检测器。每次运行输出：
+
+`tracking.string_confidence` 是语义阈值下限；实际阈值取 checkpoint 验证阈值和该值
+的较大者。当前默认 checkpoint 的验证阈值为 `0.9204`，因此默认实际阈值为 `0.9204`。
 
 - 完整追踪视频
 - 逐帧 JSONL

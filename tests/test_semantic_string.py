@@ -28,10 +28,23 @@ from string_segmentation.semantic_model import (
     save_checkpoint,
     semantic_mask_observation,
 )
-from string_segmentation.train_semantic import _initialization_lineage, _reviewed_sample_weights
+from string_segmentation.train_semantic import _initialization_lineage, _reviewed_sample_weights, parse_args
 
 
 class SemanticStringTests(unittest.TestCase):
+    def test_cli_defaults_match_current_semantic_training_config(self):
+        with patch("sys.argv", ["train_semantic.py"]):
+            args = parse_args()
+
+        self.assertEqual(args.architecture, "mobilenet_v3_fpn")
+        self.assertTrue(args.pretrained_backbone)
+        self.assertEqual(args.freeze_backbone_epochs, 3)
+        self.assertEqual(args.backbone_lr_multiplier, 0.05)
+        self.assertEqual(args.hard_negative_weight, 0.2)
+        self.assertEqual(args.negative_sample_weight, 4.0)
+        self.assertEqual(args.epochs, 12)
+        self.assertEqual(args.seed, 20260830)
+
     def test_evaluation_image_reader_supports_unicode_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "悠悠球-绳线.jpg"

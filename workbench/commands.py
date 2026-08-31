@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from config import BASE_DIR
+from config import BASE_DIR, SEMANTIC_STRING_CONFIG
 
 
 def _run_workbench_command(args: list[str]) -> str:
@@ -57,16 +57,24 @@ def workbench_train_v2v3(
             "--project", project_dir,
             "--name", f"{manifest['dataset_id']}_semantic_string",
             "--epochs", str(int(epochs)),
-            "--architecture", "lraspp_mobilenet_v3",
-            "--pretrained-backbone",
-            "--input-width", "960",
-            "--input-height", "544",
-            "--batch", "2",
-            "--hard-negative-weight", "0.1",
-            "--negative-sample-weight", "4.0",
-            "--early-stopping-patience", "10",
-            "--early-stopping-min-epochs", "15",
+            "--architecture", SEMANTIC_STRING_CONFIG.architecture,
+            "--input-width", str(SEMANTIC_STRING_CONFIG.input_width),
+            "--input-height", str(SEMANTIC_STRING_CONFIG.input_height),
+            "--batch", str(SEMANTIC_STRING_CONFIG.batch),
+            "--workers", str(SEMANTIC_STRING_CONFIG.workers),
+            "--lr", str(SEMANTIC_STRING_CONFIG.learning_rate),
+            "--base-channels", str(SEMANTIC_STRING_CONFIG.base_channels),
+            "--min-mask-width-px", str(SEMANTIC_STRING_CONFIG.min_mask_width_px),
+            "--freeze-backbone-epochs", str(SEMANTIC_STRING_CONFIG.freeze_backbone_epochs),
+            "--backbone-lr-multiplier", str(SEMANTIC_STRING_CONFIG.backbone_lr_multiplier),
+            "--hard-negative-weight", str(SEMANTIC_STRING_CONFIG.hard_negative_weight),
+            "--negative-sample-weight", str(SEMANTIC_STRING_CONFIG.negative_sample_weight),
+            "--early-stopping-patience", str(SEMANTIC_STRING_CONFIG.early_stopping_patience),
+            "--early-stopping-min-epochs", str(SEMANTIC_STRING_CONFIG.early_stopping_min_epochs),
+            "--seed", str(SEMANTIC_STRING_CONFIG.seed),
         ]
+        if SEMANTIC_STRING_CONFIG.pretrained_backbone:
+            args.append("--pretrained-backbone")
     elif task == "orientation_roi":
         args = [
             "-m", "training_v3.train_orientation",
