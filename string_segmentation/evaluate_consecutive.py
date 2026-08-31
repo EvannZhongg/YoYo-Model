@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -377,7 +378,9 @@ def main() -> int:
         "chamfer_mean_px": item["string"]["centerline"]["chamfer_mean_px"],
         "mean_prediction_components": item["mean_prediction_components"],
     } for item in result["groups"]]
-    print(json.dumps(compact, ensure_ascii=False, indent=2))
+    document = json.dumps(compact, ensure_ascii=False, indent=2)
+    encoding = sys.stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 
