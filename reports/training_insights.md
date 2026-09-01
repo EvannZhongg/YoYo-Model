@@ -40,136 +40,26 @@
 
 **后续建议**：保持当前解码器容量，优先投入真实视频 hard-negative 的人工确认与来源隔离训练；只有在新数据扩大后才重新验证容量变化。
 
-## Hard-negative 重加权
+## 检测 hard-negative 重加权
 
 **结论**：在 replay 检测训练中将 5 个 reviewed not-visible hard negatives 各重复 5 次，会消除连续集误检但显著损害召回，不能作为当前生产权重。
 
 **证据**：固定 `imgsz=1024`、`conf=0.15`、`IoU=0.7` 的 9 个连续序列评估中，当前 replay+soup 为 `TP/FN/FP=778/27/9`、Presence F1 `0.9774`；重加权候选为 `718/87/0`、Presence F1 `0.9429`，邬聪聪组 F1 从 `0.9444` 降至 `0.7445`。将采样降为每个 hard negative 1 次并缩短至 6 epoch 后仍为 `698/107/1`、Presence F1 `0.9282`。候选 native test mAP50-95 为 `0.5583`（召回 `0.8024`），与连续集回退一致。
 
-将 5 倍候选与生产权重做参数插值可恢复大部分召回：`alpha=0.05/0.10` 均为 `TP/FN/FP=777/28/8`、Presence F1 `0.97736`，平均 IoU 分别为 `0.80355/0.80806`；但主 F1 仍低于生产，邬聪聪组 F1 为 `0.94382`，不具备晋升资格。
+将 5 倍候选与生产权重做参数插值可恢复大部分召回：`alpha=0.05/0.10` 均为 `TP/FN/FP=777/28/8`、Presence F1 `0.97736`、平均 IoU `0.80355/0.80806`；但主 F1 仍低于生产，邬聪聪组 F1 为 `0.94382`，不具备晋升资格。
 
 **适用范围**：YOLO11s、`detection_replay_20260830_r2_hn_reweight` manifest、5 个训练来源 hard negatives、12 epoch 微调及当前 `1Ayoyo_consecutive` 评估协议。
 
 **后续建议**：保留 replay+soup 作为默认；hard negative 应扩大来源和数量，并采用较低采样权重后在独立连续集重新验证。
 
-## 语义训练 hard-negative 与负样本采样消融优先级
+## 语义 hard-negative 与负样本采样消融
 
-**结论**：当前语义生产训练口径不是单纯的“Focal + Dice”，而是额外包含
-`0.2 × hard-negative` 与空 mask `negative sampling ×4`。下一阶段应先固定模型结构、
-输入、增强、seed 和数据 manifest，对这两个训练约束做独立及组合消融，再考虑继续增加
-新的 Loss 项。
+当前语义生产训练并非单纯的“Focal + Dice”，还包含 `hard-negative_weight=0.2` 和空 mask `negative sampling ×4`。本轮固定 MobileNetV3-FPN、`960x544` 输入、manifest `f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964` 以及现有颜色/亮脊/时序协议，集中比较 hard-negative 权重、负样本采样和训练日程；参数与 lineage 均记录在各 run 的 `run_manifest.json`。
 
-**证据**：生产 run `semantic_ablation_nomorph_foundation_r1` 的 manifest 记录
-`hard_negative_weight=0.2`、`negative_sample_weight=4.0`；同一代码路径中的历史
-`semantic_nomorph_hn005_ft_r1` 已显示将 hard-negative 权重降至 `0.05` 会改变最佳
-阈值和验证行为，但该 run 为 warm-start，不能作为独立晋升证据。现有训练入口已将两
-参数写入 `run_manifest.json`，可直接复用以保证消融可追溯。
+在相同 foundation、batch 8、冻结 backbone 3 epoch、12 epoch 的四格消融中，固定 test 阈值 `0.92` 的 centerline F1@8 / Presence F1 / 负图平均误检像素为：`(0,1)=0.7474/0.9725/64.0`、`(0,4)=0.7461/0.9764/45.4`、`(0.2,1)=0.7488/0.9804/36.3`、`(0.2,4)=0.7575/0.9881/20.9`。因此 `(0.2,4)` 在静态 test 上同时取得较低误检和较高 Presence，但连续集复核仍不足：`(0.2,4)` pooled F1@8 `0.7378`、最弱组 `0.5538`、Presence `0.9907`、缺失/恢复 `6/6`；`(0,4)` 为 `0.7429/0.5513/0.9806/7/7`，均低于生产 pooled `0.7662`。快速冻结筛选中，`(0,1)`/`(0,4)` 的 val F1@8 为 `0.6229/0.6246`，启用 `0.2` 的两格在工作阈值下无正预测；该现象只说明短训练阶段响应受抑，不能外推到完整训练。4 epoch warm-up 或降至 `0.1` 也没有形成更好的折中：warm-up 的 val/test F1@8 为 `0.7116/0.7565`，中间权重为 `0.7161/0.7565`，均未进入晋升。
 
-**适用范围**：当前 632/136/136 reviewed semantic split、MobileNetV3-FPN、
-`960x544` 输入和现有阈值/连续集评估协议；历史 warm-start 结果仅作方向提示。
+固定 seed `20260902` 的 2 epoch warm-start 去 hard-negative 结果在两个 seed 上分别为连续集 F1@8 `0.780601` 和 `0.783599`，方向不稳定。为排除分段 resume 的 scheduler 差异，又从同一生产 checkpoint 直接训练 12 epoch：`hard-negative=0.0` 的连续集 pooled F1@8 为 `0.782017`，`0.2` 为 `0.781829`，差值仅 `0.000188`；Presence 均为 `0.991209`，最长缺失/恢复均为 `4/4`，最弱组为 `0.625142/0.625423`，Chamfer 为 `14.0352/14.0369 px`，HD95 为 `60.3637/60.3906 px`。独立 test F1@8 为 `0.764793/0.764385`，Presence 均为 `0.980392`。在当前 warm-start、低学习率和 12 epoch 条件下，移除 hard-negative 没有产生可辨识的不同最终 basin，差异低于当前数据波动。
 
-**后续建议**：优先运行四格配置 `(hard-negative weight ∈ {0, 0.2}) ×
-(negative sample weight ∈ {1, 4})`，每格使用独立 foundation 初始化或明确标注 lineage，
-并以连续集 pooled centerline F1@8 为主指标，同时检查最弱来源组、Presence F1、最长缺失
-段/恢复延迟和 FPS。只有在该消融显示稳定收益且通过独立 test/连续集护栏后，才考虑新 Loss。
+综合来看，`0.2 × hard-negative` 与 `negative sampling ×4` 仍是当前生产配置；本轮没有证据支持直接删除 hard-negative，也没有必要继续堆叠新的 Loss。该结论只适用于当前 632/136/136 reviewed split、输入尺寸和训练日程，不外推到从头训练、不同学习率或更大真实 hard-negative 数据。后续若要重新判断，应在多个 seed、从头训练和扩充真实 hard-negative 来源后，继续以连续集 pooled centerline F1@8、最弱来源组、Presence 及缺失段护栏共同评估。
 
-**筛选记录（非晋升证据）**：在同一 foundation、`960x544`、batch 8、冻结 backbone
-两 epoch 的快速筛选中，关闭 hard-negative 的 `(0,1)` 与 `(0,4)` 两格 val
-centerline F1@8 分别为 `0.6229` 和 `0.6246`；启用 `0.2` 的 `(0.2,1)` 与
-`(0.2,4)` 在工作阈值 `0.85/0.92/0.97` 下均无正预测（F1=0）。该结果只说明
-hard-negative 在短训练和冻结阶段会强烈压低响应，不能外推到完整 12 epoch 或生产阈值。
-对应 run manifest 保存在 `runs/experiments/semantic_ablation_*_screen_r*`。
-
-**完整四格结果**：在相同 foundation、`960x544`、batch 8、冻结 backbone 3 epoch、
-12 epoch 训练下，固定 test 阈值 `0.92` 的 centerline F1@8 / Presence F1 / 负图
-平均误检像素分别为：`(0,1)=0.7474/0.9725/64.0`、
-`(0,4)=0.7461/0.9764/45.4`、`(0.2,1)=0.7488/0.9804/36.3`、
-`(0.2,4)=0.7575/0.9881/20.9`。在连续集上仅复核了 test 最优的 `(0.2,4)` 与
-去掉 hard-negative 的 `(0,4)`（固定阈值 `0.9204`）：前者 pooled centerline F1@8
-`0.7378`、Presence F1 `0.9907`、最弱来源组 `0.5538`、最长缺失/恢复 `6/6`；后者为
-`0.7429/0.9806`、最弱 `0.5513`、最长缺失/恢复 `7/7`。两者均低于生产 pooled
-`0.7662` 且未通过缺失段护栏，故不晋升；由于几何护栏已失败，未将其作为部署候选测量
-FPS。完整 run 位于
-`runs/experiments/semantic_ablation_hn*_neg*_fullscreen_r1`，连续集 summary
-位于各 run 的 `consecutive_full/summary.json`。
-
-**解释与后续**：在当前数据规模和训练日程下，`0.2 × hard-negative` 与
-`negative sampling ×4` 的组合在独立 test 上同时带来最低误检和最高 Presence F1，
-但连续集几何质量仍不足；去掉 hard-negative 未带来可靠的中心线收益。该结论不支持
-继续增加新 Loss，也不支持直接删除现有 FP 约束。下一轮若要继续，应固定这两个约束，
-优先尝试更长 warm-up/解冻日程或补充真实 hard-negative，并重新跑同一连续集护栏。
-
-## Hard-negative 权重 warm-up
-
-**结论**：在当前训练日程中，将 `0.2` hard-negative 权重在前 4 个 epoch 从 0
-线性升高，未改善独立验证或 test 的中心线质量，不替换固定权重方案。
-
-**证据**：相同 foundation、MobileNetV3-FPN、`960x544`、batch 8、12 epoch 和
-`negative sampling ×4` 下，warm-up run `semantic_hn02_neg4_warmup4_fullscreen_r1`
-的 val centerline F1@8 为 `0.7116`，固定权重 `(0.2,4)` 为 `0.7219`；固定 test
-阈值 `0.92` 时 warm-up 的 centerline F1@8 / Presence F1 / 负图平均误检为
-`0.7565/0.9841/17.4 px`，固定权重为 `0.7575/0.9881/20.9 px`。warm-up 虽略降
-误检，但中心线和 Presence 均未提升，未进入连续集晋升评估。
-
-**适用范围**：当前 632/136/136 reviewed split、batch 8、冻结 backbone 3 epoch、
-12 epoch 训练；该结果不代表其他 warm-up 长度或更大真实 hard-negative 数据。
-
-**后续建议**：保留固定 `0.2` 权重作为默认，后续优先扩大真实 hard-negative 来源，
-只有训练日程或数据规模变化时才重新筛选 warm-up。
-
-## Hard-negative 中间权重筛选
-
-**结论**：将 hard-negative 权重从 `0.2` 降至 `0.1`，在当前数据和训练日程下没有
-形成更好的 FP/召回折中，不值得进入连续集评估。
-
-**证据**：相同 foundation、MobileNetV3-FPN、`960x544`、batch 8、冻结 backbone
-3 epoch、12 epoch 训练和 `negative sampling ×4` 下，`semantic_ablation_hn01_neg4_fullscreen_r1`
-的 val centerline F1@8 为 `0.7161`；固定 test 阈值 `0.92` 时 centerline F1@8 /
-Presence F1 / 负图平均误检为 `0.7565/0.9843/24.5 px`，而固定 `0.2/4` 为
-`0.7575/0.9881/20.9 px`。中间权重在三个指标上均未改善，未进入连续集复核。
-
-**适用范围**：当前 632/136/136 reviewed split、batch 8、冻结 backbone 3 epoch、
-12 epoch 训练；不外推到更大 hard-negative 数据或不同优化日程。
-
-**后续建议**：保留固定 `0.2` 权重，停止在 `0.1` 附近继续微调；下一步优先收集
-真实 hard-negative 或改进来源平衡，再进行大范围权重搜索。
-
-## Warm-start 去除 hard-negative 的 seed 稳定性
-
-**结论**：从当前生产权重 warm-start、移除 hard-negative（`0.0`）并仅训练 2 个
-epoch 的方向，在当前连续集上对随机 seed 敏感，尚无稳定晋升证据。
-
-**证据**：相同 foundation、`negative sampling ×4`、batch 2、学习率 `1e-5` 和
-完整 `1Ayoyo_consecutive` 协议下，seed `20260901` 的 pooled centerline F1@8 为
-`0.780601`（生产重跑 `0.781939`），seed `20260902` 为 `0.783599`；两者最弱来源组
-分别为 `0.618013` 和 `0.620159`，Presence F1 均为 `0.990654`（生产 `0.991772`），
-最长缺失/恢复均为 `4/4`。独立 test centerline F1@8 分别为 `0.768493` 和
-`0.769260`，但连续集方向不一致。
-
-**适用范围**：当前 632/136/136 reviewed split、MobileNetV3-FPN、`960x544` 输入、
-生产权重 warm-start、2 epoch 低学习率微调及现有连续集评估协议；不外推到更长训练
-或不同初始化。
-
-**后续建议**：保留固定 `0.2` hard-negative 生产配置；若继续探索 warm-start，应先
-增加独立 seed 和训练步数，再以连续集 pooled centerline F1@8 及 Presence/缺失段护栏
-共同判断。
-
-## 同初始化的 hard-negative 长程对照
-
-**结论**：在当前生产权重 warm-start、低学习率和 12 个 epoch 的条件下，移除
-hard-negative 没有显示出不同的最终 basin；两种设置的端到端差异低于当前数据波动。
-
-**证据**：固定 seed `20260902`、同一生产初始化、batch 2、`lr=1e-5`、
-`negative sampling ×4` 和同一完整连续集协议，`hard-negative=0.0` 的 pooled
-centerline F1@8 为 `0.782017`，`hard-negative=0.2` 为 `0.781829`，差值仅 `0.000188`。
-两者 Presence F1 均为 `0.991209`，最长缺失/恢复均为 `4/4`，最弱来源组分别为
-`0.625142` 和 `0.625423`；Chamfer 分别为 `14.0352/14.0369 px`，HD95 分别为
-`60.3637/60.3906 px`。独立 test centerline F1@8 分别为 `0.764793` 和 `0.764385`，
-Presence F1 均为 `0.980392`。
-
-**适用范围**：当前 632/136/136 reviewed split、MobileNetV3-FPN、`960x544` 输入、
-生产权重 warm-start、seed `20260902`、batch 2、`lr=1e-5`、12 epoch；不外推到
-foundation 从头训练、不同学习率或更大 hard-negative 数据。
-
-**后续建议**：不能据此删除 hard-negative；若要确认其长期必要性，应在多个 seed、
-从头训练和更大真实 hard-negative 集上复验，并继续以连续集主指标和安全护栏共同判定。
+可复现实验位于 `runs/experiments/semantic_ablation_hn*_neg*_fullscreen_r1`、`runs/experiments/semantic_warmprod_hn0_seed20260902_full12_r1` 和 `runs/experiments/semantic_warmprod_hn02_seed20260902_full12_r1`。
