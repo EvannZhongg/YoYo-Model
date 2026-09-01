@@ -32,7 +32,12 @@ from string_segmentation.semantic_model import (
     save_checkpoint,
     semantic_mask_observation,
 )
-from string_segmentation.train_semantic import _initialization_lineage, _reviewed_sample_weights, parse_args
+from string_segmentation.train_semantic import (
+    _initialization_lineage,
+    _reviewed_sample_weights,
+    _scheduled_hard_negative_weight,
+    parse_args,
+)
 
 
 class SemanticStringTests(unittest.TestCase):
@@ -50,12 +55,18 @@ class SemanticStringTests(unittest.TestCase):
         self.assertEqual(args.threshold_values, "")
         self.assertEqual(args.epochs, 12)
         self.assertEqual(args.seed, 20260830)
+        self.assertEqual(args.hard_negative_warmup_epochs, 0)
 
     def test_cli_accepts_threshold_value_override(self):
         with patch("sys.argv", ["train_semantic.py", "--threshold-values", "0.85, 0.92,0.97"]):
             args = parse_args()
 
         self.assertEqual(args.threshold_values, "0.85, 0.92,0.97")
+
+    def test_hard_negative_weight_schedule(self):
+        self.assertEqual(_scheduled_hard_negative_weight(0.2, 1, 0), 0.2)
+        self.assertAlmostEqual(_scheduled_hard_negative_weight(0.2, 2, 4), 0.1)
+        self.assertEqual(_scheduled_hard_negative_weight(0.2, 4, 4), 0.2)
 
     def test_evaluation_image_reader_supports_unicode_paths(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -101,6 +101,14 @@ def _initialization_lineage(
     }
 
 
+def _scheduled_hard_negative_weight(base_weight: float, epoch: int, warmup_epochs: int) -> float:
+    base = max(0.0, float(base_weight))
+    warmup = max(0, int(warmup_epochs))
+    if warmup <= 0:
+        return base
+    return base * min(1.0, max(0.0, float(epoch)) / float(warmup))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the reviewed semantic yoyo-string model.")
     parser.add_argument("--dataset-dir", default=str(SEMANTIC_STRING_CONFIG.dataset_dir))
@@ -139,6 +147,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
     parser.add_argument("--hard-negative-weight", type=float, default=SEMANTIC_STRING_CONFIG.hard_negative_weight)
+    parser.add_argument(
+        "--hard-negative-warmup-epochs",
+        type=int,
+        default=0,
+        help="Linearly ramp hard-negative weight from zero; 0 preserves a constant weight.",
+    )
     parser.add_argument(
         "--negative-sample-weight",
         type=float,
@@ -199,6 +213,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("staged backbone optimization is only supported by mobilenet_v3_fpn")
     if args.hard_negative_weight < 0:
         raise ValueError("hard-negative weight must be non-negative")
+    if args.hard_negative_warmup_epochs < 0:
+        raise ValueError("hard-negative warmup epochs must be non-negative")
     if args.negative_sample_weight <= 0:
         raise ValueError("negative sample weight must be positive")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
@@ -355,13 +371,18 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         model.train()
         loss_total = focal_total = dice_total = hard_negative_total = 0.0
         batch_count = 0
+        effective_hard_negative_weight = _scheduled_hard_negative_weight(
+            args.hard_negative_weight,
+            epoch,
+            args.hard_negative_warmup_epochs,
+        )
         for batch_data in train_loader:
             images = batch_data["image"].to(device, non_blocking=True)
             masks = batch_data["mask"].to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 logits = model(images)
-                loss, parts = focal_dice_loss(logits, masks, args.hard_negative_weight)
+                loss, parts = focal_dice_loss(logits, masks, effective_hard_negative_weight)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
@@ -400,6 +421,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "train_focal": focal_total / max(1, batch_count),
             "train_dice_loss": dice_total / max(1, batch_count),
             "train_hard_negative": hard_negative_total / max(1, batch_count),
+            "hard_negative_weight_effective": effective_hard_negative_weight,
             "is_best": improved,
             "validation_performed": validation_performed,
             "validation": validation_metrics if validation_performed else None,
@@ -480,6 +502,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "device": str(device),
             "seed": int(args.seed),
             "hard_negative_weight": float(args.hard_negative_weight),
+            "hard_negative_warmup_epochs": int(args.hard_negative_warmup_epochs),
             "negative_sample_weight": float(args.negative_sample_weight),
             "freeze_backbone_epochs": int(args.freeze_backbone_epochs),
             "backbone_lr_multiplier": float(args.backbone_lr_multiplier),

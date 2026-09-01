@@ -98,3 +98,21 @@ FPS。完整 run 位于
 但连续集几何质量仍不足；去掉 hard-negative 未带来可靠的中心线收益。该结论不支持
 继续增加新 Loss，也不支持直接删除现有 FP 约束。下一轮若要继续，应固定这两个约束，
 优先尝试更长 warm-up/解冻日程或补充真实 hard-negative，并重新跑同一连续集护栏。
+
+## Hard-negative 权重 warm-up
+
+**结论**：在当前训练日程中，将 `0.2` hard-negative 权重在前 4 个 epoch 从 0
+线性升高，未改善独立验证或 test 的中心线质量，不替换固定权重方案。
+
+**证据**：相同 foundation、MobileNetV3-FPN、`960x544`、batch 8、12 epoch 和
+`negative sampling ×4` 下，warm-up run `semantic_hn02_neg4_warmup4_fullscreen_r1`
+的 val centerline F1@8 为 `0.7116`，固定权重 `(0.2,4)` 为 `0.7219`；固定 test
+阈值 `0.92` 时 warm-up 的 centerline F1@8 / Presence F1 / 负图平均误检为
+`0.7565/0.9841/17.4 px`，固定权重为 `0.7575/0.9881/20.9 px`。warm-up 虽略降
+误检，但中心线和 Presence 均未提升，未进入连续集晋升评估。
+
+**适用范围**：当前 632/136/136 reviewed split、batch 8、冻结 backbone 3 epoch、
+12 epoch 训练；该结果不代表其他 warm-up 长度或更大真实 hard-negative 数据。
+
+**后续建议**：保留固定 `0.2` 权重作为默认，后续优先扩大真实 hard-negative 来源，
+只有训练日程或数据规模变化时才重新筛选 warm-up。
