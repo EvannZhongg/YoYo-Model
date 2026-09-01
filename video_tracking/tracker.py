@@ -931,6 +931,8 @@ def track_video(
     orientation_switch_confirmations: int = TRACKING_CONFIG.orientation_switch_confirmations,
     orientation_strong_switch_confidence: float = TRACKING_CONFIG.orientation_strong_switch_confidence,
     orientation_strong_switch_margin: float = TRACKING_CONFIG.orientation_strong_switch_margin,
+    orientation_switch_confirmation_seconds: float = TRACKING_CONFIG.orientation_switch_confirmation_seconds,
+    orientation_ema_time_constant_seconds: float = TRACKING_CONFIG.orientation_ema_time_constant_seconds,
     export_json: bool = True,
     start_seconds: float = 0.0,
     max_frames: int = 0,
@@ -958,6 +960,10 @@ def track_video(
         raise ValueError("orientation_adaptive_min_confidence must be between 0 and 1")
     if int(orientation_adaptive_stable_observations) < 1:
         raise ValueError("orientation_adaptive_stable_observations must be positive")
+    if float(orientation_switch_confirmation_seconds) < 0.0:
+        raise ValueError("orientation_switch_confirmation_seconds must be non-negative")
+    if float(orientation_ema_time_constant_seconds) < 0.0:
+        raise ValueError("orientation_ema_time_constant_seconds must be non-negative")
     source_video_path, weights_path, output_dir = Path(source_video_path), Path(weights_path), Path(output_dir)
     if not source_video_path.exists():
         raise FileNotFoundError(f"Video file not found: {source_video_path}")
@@ -988,6 +994,14 @@ def track_video(
             switch_confirmations=orientation_switch_confirmations,
             strong_switch_confidence=orientation_strong_switch_confidence,
             strong_switch_margin=orientation_strong_switch_margin,
+            switch_confirmation_seconds=(
+                orientation_switch_confirmation_seconds
+                if float(orientation_switch_confirmation_seconds) > 0.0 else None
+            ),
+            ema_time_constant_seconds=(
+                orientation_ema_time_constant_seconds
+                if float(orientation_ema_time_constant_seconds) > 0.0 else None
+            ),
         )
         if orientation_model is not None and orientation_temporal_filter
         else None
@@ -1262,7 +1276,7 @@ def track_video(
                     direct_inference=orientation_direct_inference,
                 )
                 trick_orientation = (
-                    orientation_filter_state.update(raw_orientation)
+                    orientation_filter_state.update(raw_orientation, timestamp_s=frame_index / fps)
                     if raw_orientation is not None and orientation_filter_state is not None
                     else raw_orientation
                 )

@@ -35,10 +35,14 @@ class OrientationTemporalFilter:
     switch_confirmations: int = 3
     strong_switch_confidence: float = 0.9
     strong_switch_margin: float = 0.2
+    switch_confirmation_seconds: float | None = None
+    ema_time_constant_seconds: float | None = None
     _ema: dict[str, float] | None = field(default=None, init=False, repr=False)
     _label: str | None = field(default=None, init=False, repr=False)
     _pending_label: str | None = field(default=None, init=False, repr=False)
     _pending_count: int = field(default=0, init=False, repr=False)
+    _pending_since_s: float | None = field(default=None, init=False, repr=False)
+    _last_timestamp_s: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not 0.0 < float(self.ema_alpha) <= 1.0:
@@ -51,8 +55,12 @@ class OrientationTemporalFilter:
             raise ValueError("strong_switch_confidence must be between 0 and 1")
         if not 0.0 <= float(self.strong_switch_margin) <= 1.0:
             raise ValueError("strong_switch_margin must be between 0 and 1")
+        if self.switch_confirmation_seconds is not None and float(self.switch_confirmation_seconds) <= 0.0:
+            raise ValueError("switch_confirmation_seconds must be positive when set")
+        if self.ema_time_constant_seconds is not None and float(self.ema_time_constant_seconds) <= 0.0:
+            raise ValueError("ema_time_constant_seconds must be positive when set")
 
-    def update(self, prediction: dict[str, Any]) -> dict[str, Any]:
+    def update(self, prediction: dict[str, Any], timestamp_s: float | None = None) -> dict[str, Any]:
         raw_probabilities = prediction.get("probabilities") or {}
         if set(raw_probabilities) != ORIENTATION_CLASSES:
             raise ValueError(f"orientation probabilities have incompatible classes: {raw_probabilities}")
@@ -65,13 +73,20 @@ class OrientationTemporalFilter:
         probabilities = {name: value / total for name, value in probabilities.items()}
         raw_label = max(ORIENTATION_CLASS_ORDER, key=probabilities.__getitem__)
 
+        timestamp = None if timestamp_s is None else float(timestamp_s)
+        if timestamp is not None and not math.isfinite(timestamp):
+            raise ValueError("timestamp_s must be finite when set")
         status = "stable"
         if self._ema is None:
             self._ema = dict(probabilities)
             self._label = raw_label
             status = "initialized"
         else:
-            alpha = float(self.ema_alpha)
+            if self.ema_time_constant_seconds is not None and timestamp is not None and self._last_timestamp_s is not None:
+                dt = max(0.0, timestamp - self._last_timestamp_s)
+                alpha = 1.0 - math.exp(-dt / float(self.ema_time_constant_seconds))
+            else:
+                alpha = float(self.ema_alpha)
             self._ema = {
                 name: (1.0 - alpha) * self._ema[name] + alpha * probabilities[name]
                 for name in ORIENTATION_CLASS_ORDER
@@ -80,17 +95,21 @@ class OrientationTemporalFilter:
             if candidate == self._label:
                 self._pending_label = None
                 self._pending_count = 0
+                self._pending_since_s = None
             else:
                 if candidate == self._pending_label:
                     self._pending_count += 1
                 else:
                     self._pending_label = candidate
                     self._pending_count = 1
+                    self._pending_since_s = timestamp
                 current_label = str(self._label)
-                confirmed = (
-                    self._pending_count >= int(self.switch_confirmations)
-                    and self._ema[candidate] - self._ema[current_label] >= float(self.switch_margin)
-                )
+                margin_ok = self._ema[candidate] - self._ema[current_label] >= float(self.switch_margin)
+                if self.switch_confirmation_seconds is not None and timestamp is not None and self._pending_since_s is not None:
+                    confirmation_ok = timestamp - self._pending_since_s >= float(self.switch_confirmation_seconds)
+                else:
+                    confirmation_ok = self._pending_count >= int(self.switch_confirmations)
+                confirmed = confirmation_ok and margin_ok
                 strong = (
                     raw_label == candidate
                     and probabilities[candidate] >= float(self.strong_switch_confidence)
@@ -101,10 +120,12 @@ class OrientationTemporalFilter:
                     self._label = candidate
                     self._pending_label = None
                     self._pending_count = 0
+                    self._pending_since_s = None
                     status = "strong_switched" if strong else "confirmed_switched"
                 else:
                     status = "pending"
 
+        self._last_timestamp_s = timestamp if timestamp is not None else self._last_timestamp_s
         label = str(self._label)
         result = dict(prediction)
         result.update({
@@ -122,11 +143,17 @@ class OrientationTemporalFilter:
                 "status": status,
                 "pending_label": self._pending_label,
                 "pending_count": int(self._pending_count),
+                "pending_duration_s": (
+                    round(max(0.0, timestamp - self._pending_since_s), 6)
+                    if timestamp is not None and self._pending_since_s is not None else None
+                ),
                 "ema_alpha": float(self.ema_alpha),
                 "switch_margin": float(self.switch_margin),
                 "switch_confirmations": int(self.switch_confirmations),
                 "strong_switch_confidence": float(self.strong_switch_confidence),
                 "strong_switch_margin": float(self.strong_switch_margin),
+                "switch_confirmation_seconds": self.switch_confirmation_seconds,
+                "ema_time_constant_seconds": self.ema_time_constant_seconds,
             },
         })
         return result

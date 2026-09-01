@@ -169,7 +169,10 @@ def _replay(
                     "confidence": record["confidence"],
                     "probabilities": record["probabilities"],
                 }
-                prediction = temporal_filter.update(raw) if temporal_filter is not None else raw
+                prediction = (
+                    temporal_filter.update(raw, timestamp_s=float(record["timestamp_s"]))
+                    if temporal_filter is not None else raw
+                )
                 label = str(prediction["label"])
                 inference_count += 1
                 if adaptive_kwargs is not None:
@@ -297,6 +300,14 @@ def main() -> int:
         "switch_confirmations": TRACKING_CONFIG.orientation_switch_confirmations,
         "strong_switch_confidence": TRACKING_CONFIG.orientation_strong_switch_confidence,
         "strong_switch_margin": TRACKING_CONFIG.orientation_strong_switch_margin,
+        "switch_confirmation_seconds": (
+            TRACKING_CONFIG.orientation_switch_confirmation_seconds
+            if TRACKING_CONFIG.orientation_switch_confirmation_seconds > 0.0 else None
+        ),
+        "ema_time_constant_seconds": (
+            TRACKING_CONFIG.orientation_ema_time_constant_seconds
+            if TRACKING_CONFIG.orientation_ema_time_constant_seconds > 0.0 else None
+        ),
     }
     baseline_replay = _replay(records, args.baseline_fps, None)
     adaptive_kwargs = {

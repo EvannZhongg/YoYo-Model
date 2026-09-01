@@ -101,3 +101,6 @@ tracking:
   orientation_switch_confirmations: 4
   orientation_strong_switch_confidence: 0.9
   orientation_strong_switch_margin: 0.1
+  # Set positive values to enable continuous-time hysteresis/EMA in experiments.
+  orientation_switch_confirmation_seconds: 0.0
+  orientation_ema_time_constant_seconds: 0.0

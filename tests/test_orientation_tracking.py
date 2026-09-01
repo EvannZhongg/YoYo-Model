@@ -179,5 +179,20 @@ class OrientationTrackingTests(unittest.TestCase):
         self.assertEqual(outputs[3]["label"], "horizontal")
         self.assertEqual(outputs[3]["temporal_filter"]["status"], "confirmed_switched")
 
+    def test_time_based_confirmation_is_independent_of_observation_count(self):
+        temporal_filter = OrientationTemporalFilter(
+            strong_switch_confidence=1.0,
+            switch_confirmation_seconds=0.14,
+            ema_time_constant_seconds=0.1,
+        )
+        temporal_filter.update(self._prediction(0.05, 0.9, 0.05), timestamp_s=0.0)
+        outputs = [
+            temporal_filter.update(self._prediction(0.98, 0.01, 0.01), timestamp_s=timestamp)
+            for timestamp in (0.04, 0.08, 0.12, 0.24)
+        ]
+        self.assertEqual([item["label"] for item in outputs[:3]], ["normal"] * 3)
+        self.assertEqual(outputs[3]["label"], "horizontal")
+        self.assertEqual(outputs[3]["temporal_filter"]["status"], "confirmed_switched")
+
 if __name__ == "__main__":
     unittest.main()

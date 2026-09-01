@@ -244,6 +244,20 @@ class TrackingConfig:
     orientation_strong_switch_margin: float = float(
         _env_or_config("TRACKING_ORIENTATION_STRONG_SWITCH_MARGIN", "tracking.orientation_strong_switch_margin", 0.1)
     )
+    orientation_switch_confirmation_seconds: float = float(
+        _env_or_config(
+            "TRACKING_ORIENTATION_SWITCH_CONFIRMATION_SECONDS",
+            "tracking.orientation_switch_confirmation_seconds",
+            0.0,
+        )
+    )
+    orientation_ema_time_constant_seconds: float = float(
+        _env_or_config(
+            "TRACKING_ORIENTATION_EMA_TIME_CONSTANT_SECONDS",
+            "tracking.orientation_ema_time_constant_seconds",
+            0.0,
+        )
+    )
 
 
 @dataclass(frozen=True)
