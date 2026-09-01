@@ -86,7 +86,7 @@ MobileNetV3-FPN 权重一致：
   --device cuda
 ```
 
-ROI 方向模型使用：
+ROI 方向模型使用（默认四分类画面朝向视图）：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train_orientation `
@@ -98,7 +98,10 @@ ROI 方向模型使用：
 `prepare_orientation_view` 默认以 `presentation_orientation` 生成四分类训练视图；
 追踪时将 `frontal/edge_vertical` 映射为 `normal`、`edge_horizontal` 映射为
 `horizontal`、`unknown` 映射为 `not_applicable`，对外输出仍是
-`trick_orientation` 三分类。当前默认部署权重本身是三分类模型。
+`trick_orientation` 三分类。三分类训练视图可直接调用
+`training_v3.orientation_three.build_orientation_view`，四分类训练视图可调用
+`training_v3.orientation_four.build_orientation_view`；两者共用 ROI 裁剪和
+manifest 生成流程。当前默认部署权重本身是三分类模型。
 
 Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbench_train_v2v3`，评估使用 `workbench_evaluate_v2v3`。
 

@@ -15,17 +15,16 @@ from typing import Any
 from PIL import Image
 
 from common.files import sha256_file
+from common.orientation import (
+    PRESENTATION_ORIENTATION_CLASS_ORDER,
+    PRESENTATION_TO_TRICK,
+    TRICK_ORIENTATION_CLASS_ORDER,
+)
 from config import BASE_DIR
 
 
-PRESENTATION_ORIENTATIONS = ("frontal", "edge_horizontal", "edge_vertical", "unknown")
-COARSE_ORIENTATIONS = ("horizontal", "normal", "not_applicable")
-PRESENTATION_TO_TRICK = {
-    "frontal": "normal",
-    "edge_vertical": "normal",
-    "edge_horizontal": "horizontal",
-    "unknown": "not_applicable",
-}
+PRESENTATION_ORIENTATIONS = PRESENTATION_ORIENTATION_CLASS_ORDER
+COARSE_ORIENTATIONS = TRICK_ORIENTATION_CLASS_ORDER
 
 
 def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] | None:
@@ -66,19 +65,20 @@ def _link(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def _training_class(presentation_orientation: str, coarse_classes: bool) -> str:
-    if not coarse_classes:
+def _training_class(presentation_orientation: str, class_order: tuple[str, ...]) -> str:
+    if class_order == PRESENTATION_ORIENTATIONS:
         return presentation_orientation
     return PRESENTATION_TO_TRICK[presentation_orientation]
 
 
-def build_orientation_view(
+def _build_orientation_view(
     dataset_dir: Path,
     clear: bool = False,
     include_backup_yoyos_train: bool = False,
     output_name: str = "orientation_roi",
-    coarse_classes: bool = False,
+    class_order: tuple[str, ...] = PRESENTATION_ORIENTATIONS,
 ) -> dict[str, Any]:
+    coarse_classes = class_order == COARSE_ORIENTATIONS
     dataset_dir = dataset_dir.resolve()
     parent_path = dataset_dir / "manifest.json"
     parent = json.loads(parent_path.read_text(encoding="utf-8"))
@@ -113,7 +113,7 @@ def build_orientation_view(
             raise ValueError(f"invalid presentation orientation: {orientation}")
         yoyo_visibility_counts[str(active_yoyo.get("visibility") or "uncertain")] += 1
         name = f"{record['source_group']}__{source.stem}.jpg"
-        training_class = _training_class(orientation, coarse_classes)
+        training_class = _training_class(orientation, class_order)
         target = output / split / training_class / name
         target.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(source) as image:
@@ -161,7 +161,7 @@ def build_orientation_view(
                 if backup_orientation not in PRESENTATION_ORIENTATIONS:
                     raise ValueError(f"invalid backup presentation orientation: {backup_orientation}")
                 backup_name = f"{record['source_group']}__{source.stem}__backup_{backup_index + 1:02d}.jpg"
-                backup_class = _training_class(backup_orientation, coarse_classes)
+                backup_class = _training_class(backup_orientation, class_order)
                 backup_target = output / split / backup_class / backup_name
                 backup_target.parent.mkdir(parents=True, exist_ok=True)
                 with Image.open(source) as image:
@@ -215,7 +215,7 @@ def build_orientation_view(
         "source_policy": parent["source_policy"],
         "source_groups": parent["split_policy"]["source_groups"],
         "counts": {split: dict(values) for split, values in counts.items()},
-        "classes": list(COARSE_ORIENTATIONS if coarse_classes else PRESENTATION_ORIENTATIONS),
+        "classes": list(class_order),
         "label_field": "active_yoyo.presentation_orientation",
         "coarse_mapping": dict(PRESENTATION_TO_TRICK),
         "crop_policy": identity["crop_policy"],
@@ -237,6 +237,50 @@ def build_orientation_view(
     }
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest
+
+
+def build_three_class_orientation_view(
+    dataset_dir: Path,
+    clear: bool = False,
+    include_backup_yoyos_train: bool = False,
+    output_name: str = "orientation_roi",
+) -> dict[str, Any]:
+    """Build the coarse trick-orientation (three-class) view."""
+    return _build_orientation_view(
+        dataset_dir,
+        clear,
+        include_backup_yoyos_train,
+        output_name,
+        TRICK_ORIENTATION_CLASS_ORDER,
+    )
+
+
+def build_four_class_orientation_view(
+    dataset_dir: Path,
+    clear: bool = False,
+    include_backup_yoyos_train: bool = False,
+    output_name: str = "orientation_roi",
+) -> dict[str, Any]:
+    """Build the presentation-orientation (four-class) view."""
+    return _build_orientation_view(
+        dataset_dir,
+        clear,
+        include_backup_yoyos_train,
+        output_name,
+        PRESENTATION_ORIENTATION_CLASS_ORDER,
+    )
+
+
+def build_orientation_view(
+    dataset_dir: Path,
+    clear: bool = False,
+    include_backup_yoyos_train: bool = False,
+    output_name: str = "orientation_roi",
+    coarse_classes: bool = False,
+) -> dict[str, Any]:
+    """Compatibility entry point; defaults to the four-class view."""
+    builder = build_three_class_orientation_view if coarse_classes else build_four_class_orientation_view
+    return builder(dataset_dir, clear, include_backup_yoyos_train, output_name)
 
 
 def main() -> int:

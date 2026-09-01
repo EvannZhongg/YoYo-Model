@@ -84,7 +84,7 @@ tracking:
   string_flow_fb_max_error: 4.0
   # Competition division metadata used for hand-anchor annotation.
   yoyo_division: "1A"
-  # Coarse three-way orientation classifier.
+  # Orientation classifier weights; runtime accepts the three- or four-class variant.
   orientation_weights_path: "runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt"
   enable_orientation_model: true
   orientation_imgsz: 320

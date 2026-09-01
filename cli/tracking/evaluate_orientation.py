@@ -14,12 +14,15 @@ import cv2
 import numpy as np
 
 from common.files import sha256_file
+from common.orientation import (
+    PRESENTATION_ORIENTATION_CLASS_ORDER,
+    PRESENTATION_TO_TRICK,
+    to_trick_probabilities,
+    validate_orientation_names,
+)
 from config import BASE_DIR, TRACKING_CONFIG
 from video_tracking.orientation import (
     ORIENTATION_CLASS_ORDER,
-    PRESENTATION_ORIENTATION_CLASS_ORDER,
-    PRESENTATION_ORIENTATION_CLASSES,
-    PRESENTATION_TO_TRICK,
     OrientationTemporalFilter,
     orientation_observation_is_unstable,
     orientation_crop_box,
@@ -93,16 +96,15 @@ def _predict_dataset(
         verbose=False,
     )
     names = {int(key): str(value) for key, value in dict(model.names).items()}
-    model_classes = set(names.values())
-    if model_classes not in (set(ORIENTATION_CLASS_ORDER), PRESENTATION_ORIENTATION_CLASSES):
+    try:
+        model_variant = validate_orientation_names(names)
+    except ValueError:
         raise ValueError(f"Incompatible orientation classes: {names}")
     for record, result in zip(records, results):
         values = [float(value) for value in result.probs.data.detach().cpu().tolist()]
         raw_probabilities = {names[index]: values[index] for index in range(len(values))}
-        if model_classes == PRESENTATION_ORIENTATION_CLASSES:
-            coarse_probabilities = {name: 0.0 for name in ORIENTATION_CLASS_ORDER}
-            for presentation, value in raw_probabilities.items():
-                coarse_probabilities[PRESENTATION_TO_TRICK[presentation]] += value
+        if model_variant == "four":
+            coarse_probabilities = to_trick_probabilities(raw_probabilities)
             record["presentation_probabilities"] = raw_probabilities
             record["presentation_predicted"] = names[int(result.probs.top1)]
         else:
