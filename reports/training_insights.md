@@ -133,3 +133,23 @@ Presence F1 / 负图平均误检为 `0.7565/0.9843/24.5 px`，而固定 `0.2/4` 
 
 **后续建议**：保留固定 `0.2` 权重，停止在 `0.1` 附近继续微调；下一步优先收集
 真实 hard-negative 或改进来源平衡，再进行大范围权重搜索。
+
+## Warm-start 去除 hard-negative 的 seed 稳定性
+
+**结论**：从当前生产权重 warm-start、移除 hard-negative（`0.0`）并仅训练 2 个
+epoch 的方向，在当前连续集上对随机 seed 敏感，尚无稳定晋升证据。
+
+**证据**：相同 foundation、`negative sampling ×4`、batch 2、学习率 `1e-5` 和
+完整 `1Ayoyo_consecutive` 协议下，seed `20260901` 的 pooled centerline F1@8 为
+`0.780601`（生产重跑 `0.781939`），seed `20260902` 为 `0.783599`；两者最弱来源组
+分别为 `0.618013` 和 `0.620159`，Presence F1 均为 `0.990654`（生产 `0.991772`），
+最长缺失/恢复均为 `4/4`。独立 test centerline F1@8 分别为 `0.768493` 和
+`0.769260`，但连续集方向不一致。
+
+**适用范围**：当前 632/136/136 reviewed split、MobileNetV3-FPN、`960x544` 输入、
+生产权重 warm-start、2 epoch 低学习率微调及现有连续集评估协议；不外推到更长训练
+或不同初始化。
+
+**后续建议**：保留固定 `0.2` hard-negative 生产配置；若继续探索 warm-start，应先
+增加独立 seed 和训练步数，再以连续集 pooled centerline F1@8 及 Presence/缺失段护栏
+共同判断。
