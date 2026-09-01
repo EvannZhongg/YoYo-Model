@@ -79,3 +79,21 @@ centerline F1@8 分别为 `0.6229` 和 `0.6246`；启用 `0.2` 的 `(0.2,1)` 与
 `(0.2,4)` 在工作阈值 `0.85/0.92/0.97` 下均无正预测（F1=0）。该结果只说明
 hard-negative 在短训练和冻结阶段会强烈压低响应，不能外推到完整 12 epoch 或生产阈值。
 对应 run manifest 保存在 `runs/experiments/semantic_ablation_*_screen_r*`。
+
+**完整四格结果**：在相同 foundation、`960x544`、batch 8、冻结 backbone 3 epoch、
+12 epoch 训练下，固定 test 阈值 `0.92` 的 centerline F1@8 / Presence F1 / 负图
+平均误检像素分别为：`(0,1)=0.7474/0.9725/64.0`、
+`(0,4)=0.7461/0.9764/45.4`、`(0.2,1)=0.7488/0.9804/36.3`、
+`(0.2,4)=0.7575/0.9881/20.9`。在连续集上仅复核了 test 最优的 `(0.2,4)` 与
+去掉 hard-negative 的 `(0,4)`：前者 pooled centerline F1@8 `0.7379`、Presence
+F1 `0.9907`、最弱来源组 `0.5548`、最长缺失/恢复 `6/6`；后者为
+`0.7433/0.9806`、最弱 `0.5515`、最长缺失/恢复 `7/7`。两者均低于生产 pooled
+`0.7662` 且未通过缺失段护栏，故不晋升。完整 run 位于
+`runs/experiments/semantic_ablation_hn*_neg*_fullscreen_r1`，连续集 summary
+位于各 run 的 `consecutive_full/summary.json`。
+
+**解释与后续**：在当前数据规模和训练日程下，`0.2 × hard-negative` 与
+`negative sampling ×4` 的组合在独立 test 上同时带来最低误检和最高 Presence F1，
+但连续集几何质量仍不足；去掉 hard-negative 未带来可靠的中心线收益。该结论不支持
+继续增加新 Loss，也不支持直接删除现有 FP 约束。下一轮若要继续，应固定这两个约束，
+优先尝试更长 warm-up/解冻日程或补充真实 hard-negative，并重新跑同一连续集护栏。

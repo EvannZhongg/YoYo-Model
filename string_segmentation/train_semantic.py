@@ -169,6 +169,12 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional comma-separated validation thresholds; overrides --threshold-sweep-count.",
     )
+    parser.add_argument(
+        "--validation-every",
+        type=int,
+        default=1,
+        help="Run validation every N epochs and always on the final epoch; 1 preserves the production protocol.",
+    )
     parser.add_argument("--exist-ok", action="store_true")
     return parser.parse_args()
 
@@ -199,6 +205,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("early-stopping patience must be non-negative and minimum epochs must be positive")
     if args.threshold_sweep_count < 1:
         raise ValueError("threshold-sweep-count must be positive")
+    if args.validation_every < 1:
+        raise ValueError("validation-every must be positive")
     threshold_values_arg = str(args.threshold_values).strip()
     if threshold_values_arg:
         try:
@@ -365,13 +373,21 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             hard_negative_total += parts["hard_negative"]
             batch_count += 1
         scheduler.step()
-        validation_samples = collect_probabilities(model, val_loader, device)
-        threshold, validation_metrics, threshold_sweep = select_threshold(
-            validation_samples,
-            thresholds=threshold_values,
-        )
-        key = balanced_validation_key(validation_metrics)
-        improved = not best_metrics or validation_is_better(validation_metrics, best_metrics)
+        validation_performed = epoch % int(args.validation_every) == 0 or epoch == args.epochs
+        if validation_performed:
+            validation_samples = collect_probabilities(model, val_loader, device)
+            threshold, validation_metrics, threshold_sweep = select_threshold(
+                validation_samples,
+                thresholds=threshold_values,
+            )
+            key = balanced_validation_key(validation_metrics)
+            improved = not best_metrics or validation_is_better(validation_metrics, best_metrics)
+        else:
+            threshold = best_threshold
+            validation_metrics = best_metrics
+            threshold_sweep = []
+            key = balanced_validation_key(best_metrics) if best_metrics else (0.0, 0.0, 0.0, 0.0, 0.0)
+            improved = False
         row = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
@@ -385,27 +401,34 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "train_dice_loss": dice_total / max(1, batch_count),
             "train_hard_negative": hard_negative_total / max(1, batch_count),
             "is_best": improved,
-            "validation": validation_metrics,
+            "validation_performed": validation_performed,
+            "validation": validation_metrics if validation_performed else None,
             "threshold_sweep": threshold_sweep,
         }
         with history_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(
-            f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} "
-            f"threshold={threshold:.2f} val_primary_centerline_f1={key[0]:.4f} "
-            f"val_centerline_f1_at_8={validation_metrics['centerline']['f1']:.4f} "
-            f"val_tol_f1_at_3={validation_metrics['tolerant']['f1']:.4f} "
-            f"val_presence_f1={validation_metrics['image_presence']['f1']:.4f} "
-            f"val_dice={validation_metrics['pixel']['dice']:.4f}",
-            flush=True,
-        )
+        if validation_performed:
+            print(
+                f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} "
+                f"threshold={threshold:.2f} val_primary_centerline_f1={key[0]:.4f} "
+                f"val_centerline_f1_at_8={validation_metrics['centerline']['f1']:.4f} "
+                f"val_tol_f1_at_3={validation_metrics['tolerant']['f1']:.4f} "
+                f"val_presence_f1={validation_metrics['image_presence']['f1']:.4f} "
+                f"val_dice={validation_metrics['pixel']['dice']:.4f}",
+                flush=True,
+            )
+        else:
+            print(
+                f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} validation=skipped",
+                flush=True,
+            )
         save_checkpoint(
             weights_dir / "last.pt",
             model,
             model_config,
-            threshold,
+            best_threshold if not validation_performed else threshold,
             epoch,
-            validation_metrics,
+            best_metrics if not validation_performed else validation_metrics,
             manifest_hash,
         )
         completed_epochs = epoch
@@ -426,7 +449,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         else:
             epochs_without_improvement += 1
         if (
-            args.early_stopping_patience > 0
+            validation_performed
+            and args.early_stopping_patience > 0
             and epoch >= args.early_stopping_min_epochs
             and epochs_without_improvement >= args.early_stopping_patience
         ):
@@ -463,6 +487,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
             "threshold_sweep_count": int(args.threshold_sweep_count),
             "threshold_values": [float(value) for value in threshold_values],
+            "validation_every": int(args.validation_every),
             **model_config,
         },
         "training": {
