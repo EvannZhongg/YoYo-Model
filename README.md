@@ -117,6 +117,17 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 当前已固化的训练版本、独立测试指标和权重哈希见 [`reports/training.md`](reports/training.md)。
 
+从真实视频采集检测器候选帧用于 hard-negative 人工复核：
+
+```powershell
+.\.venv\Scripts\python.exe -m cli.training.mine_hard_negatives `
+  --video path\to\video.mp4 `
+  --start-frame 0 `
+  --output-dir tmp\hard_negative_mining
+```
+
+输出的 `manifest.json` 记录视频/权重哈希、帧号、检测框和 `needs_review` 状态；候选在人工确认前不会进入训练负样本。
+
 ## 完整视频追踪
 
 ```powershell
