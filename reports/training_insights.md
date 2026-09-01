@@ -116,3 +116,20 @@ FPS。完整 run 位于
 
 **后续建议**：保留固定 `0.2` 权重作为默认，后续优先扩大真实 hard-negative 来源，
 只有训练日程或数据规模变化时才重新筛选 warm-up。
+
+## Hard-negative 中间权重筛选
+
+**结论**：将 hard-negative 权重从 `0.2` 降至 `0.1`，在当前数据和训练日程下没有
+形成更好的 FP/召回折中，不值得进入连续集评估。
+
+**证据**：相同 foundation、MobileNetV3-FPN、`960x544`、batch 8、冻结 backbone
+3 epoch、12 epoch 训练和 `negative sampling ×4` 下，`semantic_ablation_hn01_neg4_fullscreen_r1`
+的 val centerline F1@8 为 `0.7161`；固定 test 阈值 `0.92` 时 centerline F1@8 /
+Presence F1 / 负图平均误检为 `0.7565/0.9843/24.5 px`，而固定 `0.2/4` 为
+`0.7575/0.9881/20.9 px`。中间权重在三个指标上均未改善，未进入连续集复核。
+
+**适用范围**：当前 632/136/136 reviewed split、batch 8、冻结 backbone 3 epoch、
+12 epoch 训练；不外推到更大 hard-negative 数据或不同优化日程。
+
+**后续建议**：保留固定 `0.2` 权重，停止在 `0.1` 附近继续微调；下一步优先收集
+真实 hard-negative 或改进来源平衡，再进行大范围权重搜索。
