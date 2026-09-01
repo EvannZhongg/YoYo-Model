@@ -280,6 +280,18 @@ def main() -> int:
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--baseline-fps", type=float, default=5.0)
     parser.add_argument("--burst-fps", type=float, default=TRACKING_CONFIG.orientation_burst_inference_fps)
+    parser.add_argument(
+        "--switch-confirmation-seconds",
+        type=float,
+        default=None,
+        help="Enable time-based switch confirmation for this replay (<=0 disables it).",
+    )
+    parser.add_argument(
+        "--ema-time-constant-seconds",
+        type=float,
+        default=None,
+        help="Enable continuous-time EMA for this replay (<=0 disables it).",
+    )
     args = parser.parse_args()
 
     dataset_dir = Path(args.dataset_dir).resolve()
@@ -294,6 +306,14 @@ def main() -> int:
     raw_path = output_dir / "raw_predictions.json"
     raw_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     records = list(raw["records"])
+    switch_confirmation_seconds = (
+        TRACKING_CONFIG.orientation_switch_confirmation_seconds
+        if args.switch_confirmation_seconds is None else float(args.switch_confirmation_seconds)
+    )
+    ema_time_constant_seconds = (
+        TRACKING_CONFIG.orientation_ema_time_constant_seconds
+        if args.ema_time_constant_seconds is None else float(args.ema_time_constant_seconds)
+    )
     filter_kwargs = {
         "ema_alpha": TRACKING_CONFIG.orientation_ema_alpha,
         "switch_margin": TRACKING_CONFIG.orientation_switch_margin,
@@ -301,12 +321,12 @@ def main() -> int:
         "strong_switch_confidence": TRACKING_CONFIG.orientation_strong_switch_confidence,
         "strong_switch_margin": TRACKING_CONFIG.orientation_strong_switch_margin,
         "switch_confirmation_seconds": (
-            TRACKING_CONFIG.orientation_switch_confirmation_seconds
-            if TRACKING_CONFIG.orientation_switch_confirmation_seconds > 0.0 else None
+            switch_confirmation_seconds
+            if switch_confirmation_seconds > 0.0 else None
         ),
         "ema_time_constant_seconds": (
-            TRACKING_CONFIG.orientation_ema_time_constant_seconds
-            if TRACKING_CONFIG.orientation_ema_time_constant_seconds > 0.0 else None
+            ema_time_constant_seconds
+            if ema_time_constant_seconds > 0.0 else None
         ),
     }
     baseline_replay = _replay(records, args.baseline_fps, None)
