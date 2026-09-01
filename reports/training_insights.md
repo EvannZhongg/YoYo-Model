@@ -44,7 +44,9 @@
 
 **结论**：在 replay 检测训练中将 5 个 reviewed not-visible hard negatives 各重复 5 次，会消除连续集误检但显著损害召回，不能作为当前生产权重。
 
-**证据**：固定 `imgsz=1024`、`conf=0.15`、`IoU=0.7` 的 9 个连续序列评估中，当前 replay+soup 为 `TP/FN/FP=778/27/9`、Presence F1 `0.9774`；重加权候选为 `718/87/0`、Presence F1 `0.9429`，邬聪聪组 F1 从 `0.9444` 降至 `0.7445`。候选 native test mAP50-95 为 `0.5583`（召回 `0.8024`），与连续集回退一致。
+**证据**：固定 `imgsz=1024`、`conf=0.15`、`IoU=0.7` 的 9 个连续序列评估中，当前 replay+soup 为 `TP/FN/FP=778/27/9`、Presence F1 `0.9774`；重加权候选为 `718/87/0`、Presence F1 `0.9429`，邬聪聪组 F1 从 `0.9444` 降至 `0.7445`。将采样降为每个 hard negative 1 次并缩短至 6 epoch 后仍为 `698/107/1`、Presence F1 `0.9282`。候选 native test mAP50-95 为 `0.5583`（召回 `0.8024`），与连续集回退一致。
+
+将 5 倍候选与生产权重做参数插值可恢复大部分召回：`alpha=0.05/0.10` 均为 `TP/FN/FP=777/28/8`、Presence F1 `0.97736`，平均 IoU 分别为 `0.80355/0.80806`；但主 F1 仍低于生产，邬聪聪组 F1 为 `0.94382`，不具备晋升资格。
 
 **适用范围**：YOLO11s、`detection_replay_20260830_r2_hn_reweight` manifest、5 个训练来源 hard negatives、12 epoch 微调及当前 `1Ayoyo_consecutive` 评估协议。
 
