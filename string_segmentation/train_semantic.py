@@ -158,6 +158,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=SEMANTIC_STRING_CONFIG.early_stopping_min_epochs,
     )
+    parser.add_argument(
+        "--threshold-sweep-count",
+        type=int,
+        default=35,
+        help="Number of validation thresholds scanned per epoch; 35 preserves the production protocol.",
+    )
+    parser.add_argument(
+        "--threshold-values",
+        default="",
+        help="Optional comma-separated validation thresholds; overrides --threshold-sweep-count.",
+    )
     parser.add_argument("--exist-ok", action="store_true")
     return parser.parse_args()
 
@@ -186,6 +197,18 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("negative sample weight must be positive")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
         raise ValueError("early-stopping patience must be non-negative and minimum epochs must be positive")
+    if args.threshold_sweep_count < 1:
+        raise ValueError("threshold-sweep-count must be positive")
+    threshold_values_arg = str(args.threshold_values).strip()
+    if threshold_values_arg:
+        try:
+            threshold_values = [float(value.strip()) for value in threshold_values_arg.split(",") if value.strip()]
+        except ValueError as error:
+            raise ValueError("threshold-values must be comma-separated numbers") from error
+        if not threshold_values or any(value < 0.0 or value > 1.0 for value in threshold_values):
+            raise ValueError("threshold-values must contain numbers in [0, 1]")
+    else:
+        threshold_values = np.linspace(0.15, 0.995, int(args.threshold_sweep_count)).tolist()
     if args.input_width % 16 or args.input_height % 16:
         raise ValueError("Semantic input width and height must be divisible by 16")
     dataset_dir = Path(args.dataset_dir)
@@ -343,7 +366,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             batch_count += 1
         scheduler.step()
         validation_samples = collect_probabilities(model, val_loader, device)
-        threshold, validation_metrics, threshold_sweep = select_threshold(validation_samples)
+        threshold, validation_metrics, threshold_sweep = select_threshold(
+            validation_samples,
+            thresholds=threshold_values,
+        )
         key = balanced_validation_key(validation_metrics)
         improved = not best_metrics or validation_is_better(validation_metrics, best_metrics)
         row = {
@@ -435,6 +461,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "backbone_lr_multiplier": float(args.backbone_lr_multiplier),
             "early_stopping_patience": int(args.early_stopping_patience),
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
+            "threshold_sweep_count": int(args.threshold_sweep_count),
+            "threshold_values": [float(value) for value in threshold_values],
             **model_config,
         },
         "training": {

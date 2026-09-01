@@ -46,8 +46,16 @@ class SemanticStringTests(unittest.TestCase):
         self.assertEqual(args.backbone_lr_multiplier, 0.05)
         self.assertEqual(args.hard_negative_weight, 0.2)
         self.assertEqual(args.negative_sample_weight, 4.0)
+        self.assertEqual(args.threshold_sweep_count, 35)
+        self.assertEqual(args.threshold_values, "")
         self.assertEqual(args.epochs, 12)
         self.assertEqual(args.seed, 20260830)
+
+    def test_cli_accepts_threshold_value_override(self):
+        with patch("sys.argv", ["train_semantic.py", "--threshold-values", "0.85, 0.92,0.97"]):
+            args = parse_args()
+
+        self.assertEqual(args.threshold_values, "0.85, 0.92,0.97")
 
     def test_evaluation_image_reader_supports_unicode_paths(self):
         with tempfile.TemporaryDirectory() as directory:

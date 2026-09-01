@@ -72,3 +72,10 @@
 (negative sample weight ∈ {1, 4})`，每格使用独立 foundation 初始化或明确标注 lineage，
 并以连续集 pooled centerline F1@8 为主指标，同时检查最弱来源组、Presence F1、最长缺失
 段/恢复延迟和 FPS。只有在该消融显示稳定收益且通过独立 test/连续集护栏后，才考虑新 Loss。
+
+**筛选记录（非晋升证据）**：在同一 foundation、`960x544`、batch 8、冻结 backbone
+两 epoch 的快速筛选中，关闭 hard-negative 的 `(0,1)` 与 `(0,4)` 两格 val
+centerline F1@8 分别为 `0.6229` 和 `0.6246`；启用 `0.2` 的 `(0.2,1)` 与
+`(0.2,4)` 在工作阈值 `0.85/0.92/0.97` 下均无正预测（F1=0）。该结果只说明
+hard-negative 在短训练和冻结阶段会强烈压低响应，不能外推到完整 12 epoch 或生产阈值。
+对应 run manifest 保存在 `runs/experiments/semantic_ablation_*_screen_r*`。
