@@ -446,7 +446,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 validation_metrics,
                 manifest_hash,
             )
-        else:
+        elif validation_performed:
             epochs_without_improvement += 1
         if (
             validation_performed
