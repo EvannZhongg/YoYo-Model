@@ -29,3 +29,13 @@
 **适用范围**：YOLO11s、reviewed backup-yoyo 两帧/来源组、`imgsz=1024`，当前 `1Ayoyo_consecutive` 9 组回放。
 
 **后续建议**：保留当前 replay+soup；优先补齐真实视频 hard-negative 标注和可复现 manifest，再重新训练单模型并以 FP 护栏评估。
+
+## FPN 解码器容量消融
+
+**结论**：在当前 reviewed 绳线数据上，将 MobileNetV3-FPN 解码器由 32 通道增至 48 通道没有改善连续帧中心线质量；验证集提升不能直接代表连续集收益。
+
+**证据**：相同 `f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964` manifest、输入尺寸、损失和 12 epoch 训练下，48 通道候选验证集 centerline F1@8 为 `0.7541`，但 `1Ayoyo_consecutive` 10 组/927 帧 pooled F1@8 为 `0.7519`，低于当前生产 `0.7662`；Presence F1 为 `0.9902`，FP/FN 各 `9`，不足以抵消几何指标回退。
+
+**适用范围**：当前 632 张训练图、MobileNetV3-FPN、`960x544` 输入和现有颜色/亮脊/时序评估协议；不推断更大数据规模或不同解码器结构的结果。
+
+**后续建议**：保持当前解码器容量，优先投入真实视频 hard-negative 的人工确认与来源隔离训练；只有在新数据扩大后才重新验证容量变化。
