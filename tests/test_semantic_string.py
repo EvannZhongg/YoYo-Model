@@ -10,7 +10,11 @@ import torch
 
 from string_segmentation.evaluate_semantic import _artifact_suffix, _check_dataset_manifest, _read_image
 from string_segmentation.evaluate_consecutive import _group_artifact_stem
-from string_segmentation.semantic_metrics import balanced_validation_key, metrics_at_threshold
+from string_segmentation.semantic_metrics import (
+    balanced_validation_key,
+    metrics_at_threshold,
+    validation_is_better,
+)
 from string_segmentation.semantic_model import (
     LetterboxMeta,
     ReviewedStringDataset,
@@ -176,12 +180,14 @@ class SemanticStringTests(unittest.TestCase):
     def test_validation_selection_balances_string_quality_and_presence(self):
         reliable = {
             "tolerant": {"f1": 0.55},
+            "centerline": {"f1": 0.70},
             "image_presence": {"f1": 1.0},
             "negative_mean_false_positive_pixels": 0.0,
             "pixel": {"dice": 0.20},
         }
         false_positive_prone = {
             "tolerant": {"f1": 0.65},
+            "centerline": {"f1": 0.60},
             "image_presence": {"f1": 0.50},
             "negative_mean_false_positive_pixels": 1000.0,
             "pixel": {"dice": 0.25},
@@ -224,6 +230,21 @@ class SemanticStringTests(unittest.TestCase):
             "pixel": {"dice": 0.7},
         }
         self.assertGreater(balanced_validation_key(higher_centerline_f1), balanced_validation_key(lower_mask_f1))
+
+    def test_validation_selection_uses_presence_for_near_tied_centerline(self):
+        higher_centerline = {
+            "tolerant": {"f1": 0.80},
+            "centerline": {"f1": 0.801},
+            "image_presence": {"f1": 0.90},
+            "negative_mean_false_positive_pixels": 0.0,
+            "pixel": {"dice": 0.7},
+        }
+        higher_presence = {
+            **higher_centerline,
+            "centerline": {"f1": 0.800},
+            "image_presence": {"f1": 0.97},
+        }
+        self.assertTrue(validation_is_better(higher_presence, higher_centerline))
 
     def test_validation_selection_breaks_balanced_ties_with_negative_pixels(self):
         clean = {

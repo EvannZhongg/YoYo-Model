@@ -18,7 +18,12 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from common.files import sha256_file
 from config import SEMANTIC_STRING_CONFIG
 from string_segmentation.device import resolve_device
-from string_segmentation.semantic_metrics import balanced_validation_key, collect_probabilities, select_threshold
+from string_segmentation.semantic_metrics import (
+    balanced_validation_key,
+    collect_probabilities,
+    select_threshold,
+    validation_is_better,
+)
 from string_segmentation.semantic_model import (
     ReviewedStringDataset,
     build_string_model,
@@ -305,7 +310,6 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
     manifest_hash = sha256_file(dataset_manifest_path)
-    best_key = (-1.0, -1.0, float("-inf"), -1.0, -1.0)
     best_epoch = 0
     best_threshold = 0.5
     best_metrics: dict[str, Any] = {}
@@ -341,7 +345,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         validation_samples = collect_probabilities(model, val_loader, device)
         threshold, validation_metrics, threshold_sweep = select_threshold(validation_samples)
         key = balanced_validation_key(validation_metrics)
-        improved = key > best_key
+        improved = not best_metrics or validation_is_better(validation_metrics, best_metrics)
         row = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
@@ -362,7 +366,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
         print(
             f"epoch={epoch}/{args.epochs} loss={row['train_loss']:.4f} "
-            f"threshold={threshold:.2f} val_balanced_f1={key[0]:.4f} "
+            f"threshold={threshold:.2f} val_primary_centerline_f1={key[0]:.4f} "
             f"val_centerline_f1_at_8={validation_metrics['centerline']['f1']:.4f} "
             f"val_tol_f1_at_3={validation_metrics['tolerant']['f1']:.4f} "
             f"val_presence_f1={validation_metrics['image_presence']['f1']:.4f} "
@@ -380,7 +384,6 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         )
         completed_epochs = epoch
         if improved:
-            best_key = key
             best_epoch = epoch
             best_threshold = threshold
             best_metrics = validation_metrics
@@ -441,7 +444,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         },
         "selection": {
             "split": "val",
-            "metric": "harmonic_centerline_f1_at_8_source_px_presence_then_presence_then_negative_fp_then_centerline_then_pixel_dice",
+            "metric": "centerline_f1_at_8_source_px_tolerance_0p005_then_presence_then_negative_fp_then_tolerant_f1_then_pixel_dice",
             "best_epoch": best_epoch,
             "threshold": best_threshold,
             "metrics": best_metrics,
@@ -468,7 +471,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
                 else "ineligible_source_overlap_or_unversioned_parent"
             ),
             "rule": (
-                "Promote only after semantic evaluation on the untouched test split."
+                "Promote best.pt only after untouched-test evaluation and a same-protocol comparison against the current production model."
                 if initialization["lineage"]["promotion_eligible"]
                 else "Do not promote: warm-start lineage does not preserve independent evaluation sources."
             ),

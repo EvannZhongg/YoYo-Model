@@ -72,7 +72,9 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 
 训练阶段的 checkpoint 与阈值选择统一使用
 `pooled_centerline_f1_at_8_source_px`：由 mask 骨架化后映射到源图像坐标，采用与连续集相同的
-中心线采样和最近距离计算。上表的 Pixel Dice 与 Tolerant F1@3 继续作为静态语义诊断指标。
+中心线采样和最近距离计算，并以 Centerline F1@8 为首要排序指标；两者差值不超过 `0.005`
+时以 Presence F1 决胜。上表的 Pixel Dice 与
+Tolerant F1@3 继续作为静态语义诊断指标。
 
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
@@ -84,8 +86,7 @@ Chamfer 为 `14.4312 px`，HD95 为 `60.9098 px`。相对单主路径抽取的 F
 最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group 为 `池高宇-fef6c7bcb0`
 （F1@8 `0.612640`）。评估器默认门槛与追踪器配置统一为 `0.70`。
 
-晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏；
-Presence F1、最长缺失段/恢复延迟和 FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
+晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏。最长缺失段/恢复延迟和FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
 Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；单一阈值必须先在 val 校准后
 冻结，不能用 test 重新选阈值。负图平均误检像素、平均组件数、长度比仅作诊断，不能单独
 决定晋升。`max_components=8`、`min_component_pixels=8`、`max_polyline_points=64`、

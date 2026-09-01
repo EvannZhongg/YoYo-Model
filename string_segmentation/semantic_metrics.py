@@ -13,6 +13,9 @@ from string_segmentation.semantic_model import letterbox, semantic_mask_observat
 from video_tracking.sequence_metrics import centerline_pair_metrics
 
 
+CENTERLINE_F1_TOLERANCE = 0.005
+
+
 def remove_small_components(mask: np.ndarray, min_pixels: int) -> np.ndarray:
     binary = (mask > 0).astype(np.uint8)
     if min_pixels <= 1 or not np.any(binary):
@@ -216,17 +219,26 @@ def metrics_at_threshold(
 
 
 def balanced_validation_key(metrics: dict[str, Any]) -> tuple[float, float, float, float, float]:
+    """Return the validation ranking key with centerline F1 as the primary metric."""
     tolerant_f1 = float(metrics["tolerant"]["f1"])
-    primary_f1 = float(metrics.get("centerline", {}).get("f1", tolerant_f1))
     presence_f1 = float(metrics["image_presence"]["f1"])
-    balanced_f1 = (
-        2.0 * primary_f1 * presence_f1 / (primary_f1 + presence_f1)
-        if primary_f1 + presence_f1 > 0.0
-        else 0.0
-    )
     negative_false_positives = float(metrics["negative_mean_false_positive_pixels"])
     pixel_dice = float(metrics["pixel"]["dice"])
-    return balanced_f1, presence_f1, -negative_false_positives, primary_f1, pixel_dice
+    primary_f1 = float(metrics.get("centerline", {}).get("f1", tolerant_f1))
+    return primary_f1, presence_f1, -negative_false_positives, tolerant_f1, pixel_dice
+
+
+def validation_is_better(candidate: dict[str, Any], incumbent: dict[str, Any]) -> bool:
+    """Compare validation results with a centerline-F1 tie tolerance."""
+    candidate_key = balanced_validation_key(candidate)
+    incumbent_key = balanced_validation_key(incumbent)
+    candidate_centerline = candidate_key[0]
+    incumbent_centerline = incumbent_key[0]
+    if candidate_centerline - incumbent_centerline > CENTERLINE_F1_TOLERANCE:
+        return True
+    if incumbent_centerline - candidate_centerline > CENTERLINE_F1_TOLERANCE:
+        return False
+    return candidate_key[1:] > incumbent_key[1:]
 
 
 def select_threshold(
@@ -243,11 +255,17 @@ def select_threshold(
         metrics_at_threshold(samples, value, tolerance_px, min_component_pixels)
         for value in values
     ]
-    best = max(
-        results,
-        key=lambda item: (
-            *balanced_validation_key(item),
-            -abs(item["threshold"] - 0.5),
-        ),
-    )
+    max_centerline = max(balanced_validation_key(item)[0] for item in results)
+    eligible = [
+        item
+        for item in results
+        if max_centerline - balanced_validation_key(item)[0] <= CENTERLINE_F1_TOLERANCE
+    ]
+    best = eligible[0]
+    for item in eligible[1:]:
+        if validation_is_better(item, best) or (
+            not validation_is_better(best, item)
+            and abs(item["threshold"] - 0.5) < abs(best["threshold"] - 0.5)
+        ):
+            best = item
     return float(best["threshold"]), best, results
