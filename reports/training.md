@@ -54,7 +54,9 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 
 ## 绳线分割模型
 
-当前模型使用 MobileNetV3-Large 编码器和轻量 FPN，训练目标为 Focal + Dice，
+当前模型使用 MobileNetV3-Large 编码器和轻量 FPN。训练损失由 Focal 与 Dice
+组成，并对 reviewed 空 mask 样本额外加入 `0.2 × hard-negative` 项；训练采样器
+对空 mask 样本使用 `negative sampling ×4`（仅影响 train loader，不改变 val/test）。
 不对标注 mask 做膨胀；推理仍只有一次语义前向，不增加推理头。
 
 当前权重 SHA-256：

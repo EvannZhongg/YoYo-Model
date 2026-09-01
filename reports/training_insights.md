@@ -51,3 +51,24 @@
 **适用范围**：YOLO11s、`detection_replay_20260830_r2_hn_reweight` manifest、5 个训练来源 hard negatives、12 epoch 微调及当前 `1Ayoyo_consecutive` 评估协议。
 
 **后续建议**：保留 replay+soup 作为默认；hard negative 应扩大来源和数量，并采用较低采样权重后在独立连续集重新验证。
+
+## 语义训练 hard-negative 与负样本采样消融优先级
+
+**结论**：当前语义生产训练口径不是单纯的“Focal + Dice”，而是额外包含
+`0.2 × hard-negative` 与空 mask `negative sampling ×4`。下一阶段应先固定模型结构、
+输入、增强、seed 和数据 manifest，对这两个训练约束做独立及组合消融，再考虑继续增加
+新的 Loss 项。
+
+**证据**：生产 run `semantic_ablation_nomorph_foundation_r1` 的 manifest 记录
+`hard_negative_weight=0.2`、`negative_sample_weight=4.0`；同一代码路径中的历史
+`semantic_nomorph_hn005_ft_r1` 已显示将 hard-negative 权重降至 `0.05` 会改变最佳
+阈值和验证行为，但该 run 为 warm-start，不能作为独立晋升证据。现有训练入口已将两
+参数写入 `run_manifest.json`，可直接复用以保证消融可追溯。
+
+**适用范围**：当前 632/136/136 reviewed semantic split、MobileNetV3-FPN、
+`960x544` 输入和现有阈值/连续集评估协议；历史 warm-start 结果仅作方向提示。
+
+**后续建议**：优先运行四格配置 `(hard-negative weight ∈ {0, 0.2}) ×
+(negative sample weight ∈ {1, 4})`，每格使用独立 foundation 初始化或明确标注 lineage，
+并以连续集 pooled centerline F1@8 为主指标，同时检查最弱来源组、Presence F1、最长缺失
+段/恢复延迟和 FPS。只有在该消融显示稳定收益且通过独立 test/连续集护栏后，才考虑新 Loss。
