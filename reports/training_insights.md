@@ -153,3 +153,23 @@ epoch 的方向，在当前连续集上对随机 seed 敏感，尚无稳定晋�
 **后续建议**：保留固定 `0.2` hard-negative 生产配置；若继续探索 warm-start，应先
 增加独立 seed 和训练步数，再以连续集 pooled centerline F1@8 及 Presence/缺失段护栏
 共同判断。
+
+## 同初始化的 hard-negative 长程对照
+
+**结论**：在当前生产权重 warm-start、低学习率和 12 个 epoch 的条件下，移除
+hard-negative 没有显示出不同的最终 basin；两种设置的端到端差异低于当前数据波动。
+
+**证据**：固定 seed `20260902`、同一生产初始化、batch 2、`lr=1e-5`、
+`negative sampling ×4` 和同一完整连续集协议，`hard-negative=0.0` 的 pooled
+centerline F1@8 为 `0.782017`，`hard-negative=0.2` 为 `0.781829`，差值仅 `0.000188`。
+两者 Presence F1 均为 `0.991209`，最长缺失/恢复均为 `4/4`，最弱来源组分别为
+`0.625142` 和 `0.625423`；Chamfer 分别为 `14.0352/14.0369 px`，HD95 分别为
+`60.3637/60.3906 px`。独立 test centerline F1@8 分别为 `0.764793` 和 `0.764385`，
+Presence F1 均为 `0.980392`。
+
+**适用范围**：当前 632/136/136 reviewed split、MobileNetV3-FPN、`960x544` 输入、
+生产权重 warm-start、seed `20260902`、batch 2、`lr=1e-5`、12 epoch；不外推到
+foundation 从头训练、不同学习率或更大 hard-negative 数据。
+
+**后续建议**：不能据此删除 hard-negative；若要确认其长期必要性，应在多个 seed、
+从头训练和更大真实 hard-negative 集上复验，并继续以连续集主指标和安全护栏共同判定。
