@@ -88,7 +88,8 @@ MobileNetV3-FPN 权重一致：
 
 验证阈值默认每个 epoch 扫描 35 个点；消融筛选可用
 `--threshold-values 0.85,0.92,0.97` 或 `--threshold-sweep-count` 降低扫描开销，
-最终候选仍应使用默认 35 点协议复核。
+并用 `--validation-every N` 仅按周期验证（最终 epoch 始终验证）；最终候选仍应使用
+默认 35 点、每 epoch 验证的完整协议复核。
 
 ROI 方向模型使用（默认四分类画面朝向视图）：
 
