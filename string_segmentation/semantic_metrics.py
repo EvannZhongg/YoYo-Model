@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import torch
 
-from string_segmentation.semantic_model import letterbox, semantic_mask_observation
+from string_segmentation.semantic_model import hysteresis_mask, letterbox, semantic_mask_observation
 from video_tracking.sequence_metrics import centerline_pair_metrics
 
 
@@ -58,6 +58,7 @@ def _centerline_pair_from_masks(
     target: np.ndarray,
     probability: np.ndarray,
     threshold: float,
+    low_threshold: float | None,
     source_shape: tuple[int, int],
     min_component_pixels: int,
 ) -> dict[str, Any]:
@@ -73,7 +74,9 @@ def _centerline_pair_from_masks(
         "max_polyline_points": 64,
     }
     target_geometry = semantic_mask_observation(target.astype(np.float32), meta, 0.5, **common_kwargs)
-    prediction_geometry = semantic_mask_observation(probability, meta, threshold, **common_kwargs)
+    prediction_geometry = semantic_mask_observation(
+        probability, meta, threshold, low_threshold=low_threshold, **common_kwargs
+    )
     return centerline_pair_metrics(
         (target_geometry or {}).get("polylines") or [],
         (prediction_geometry or {}).get("polylines") or [],
@@ -87,6 +90,7 @@ def metrics_at_threshold(
     threshold: float,
     tolerance_px: int = 3,
     min_component_pixels: int = 8,
+    low_threshold: float | None = None,
 ) -> dict[str, Any]:
     true_positive = false_positive = false_negative = 0
     tolerant_prediction_match = tolerant_target_match = 0
@@ -100,7 +104,8 @@ def metrics_at_threshold(
     image_rows = []
     for sample in samples:
         target = (sample["target"] > 0).astype(np.uint8)
-        prediction = remove_small_components(sample["probability"] >= threshold, min_component_pixels)
+        prediction_mask = hysteresis_mask(sample["probability"], threshold, low_threshold)
+        prediction = remove_small_components(prediction_mask, min_component_pixels)
         tp = int(np.logical_and(prediction, target).sum())
         fp = int(np.logical_and(prediction, np.logical_not(target)).sum())
         fn = int(np.logical_and(np.logical_not(prediction), target).sum())
@@ -132,6 +137,7 @@ def metrics_at_threshold(
             target,
             sample["probability"],
             threshold,
+            low_threshold,
             tuple(sample.get("source_shape", prediction.shape)),
             min_component_pixels,
         )

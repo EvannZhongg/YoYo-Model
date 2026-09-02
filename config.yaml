@@ -62,6 +62,9 @@ tracking:
   enable_string_model: true
   # Semantic checkpoints use max(checkpoint validation threshold, this floor).
   string_confidence: 0.40
+  # Optional hysteresis low threshold for semantic masks; null preserves the
+  # single-threshold baseline. Weak pixels can only grow from high seeds.
+  string_low_threshold: null
   string_inference_scale: 1.0
   # Reacquire the multi-segment centerline on every frame.
   string_inference_fps: 0.0

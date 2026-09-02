@@ -662,6 +662,29 @@ def _skeleton_cover_paths(
     return paths
 
 
+def hysteresis_mask(
+    probability: np.ndarray,
+    high_threshold: float,
+    low_threshold: float | None = None,
+) -> np.ndarray:
+    """Threshold probabilities, optionally growing weak pixels from high seeds."""
+    high = float(high_threshold)
+    if low_threshold is None:
+        return (np.asarray(probability) >= high).astype(np.uint8)
+    low = float(low_threshold)
+    if not 0.0 <= low <= high <= 1.0:
+        raise ValueError("low_threshold must be in [0, threshold]")
+    values = np.asarray(probability)
+    low_mask = (values >= low).astype(np.uint8)
+    seeds = (values >= high).astype(np.uint8)
+    if not np.any(seeds):
+        return np.zeros_like(low_mask)
+    _, labels = cv2.connectedComponents(low_mask, connectivity=8)
+    seed_labels = np.unique(labels[seeds > 0])
+    seed_labels = seed_labels[seed_labels > 0]
+    return np.isin(labels, seed_labels).astype(np.uint8)
+
+
 def semantic_mask_observation(
     probability: np.ndarray,
     meta: LetterboxMeta,
@@ -672,9 +695,11 @@ def semantic_mask_observation(
     max_components: int = 8,
     max_polyline_points: int = 64,
     hand_points: list[list[float]] | None = None,
+    low_threshold: float | None = None,
 ) -> dict[str, Any] | None:
     """Turn a low-resolution semantic mask into review-only string geometry."""
-    binary = (probability >= float(threshold)).astype(np.uint8)
+    high = float(threshold)
+    binary = hysteresis_mask(probability, high, low_threshold)
     if not np.any(binary):
         return None
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
@@ -841,7 +866,8 @@ def semantic_mask_observation(
         "confidence": round(float(primary["mean_probability"]), 4),
         "method": "semantic_segmentation",
         "needs_review": True,
-        "probability_threshold": round(float(threshold), 4),
+        "probability_threshold": round(high, 4),
+        "low_probability_threshold": round(float(low_threshold), 4) if low_threshold is not None else None,
         "mask_area_target_px": int(sum(item["area"] for item in selected)),
         "component_count": len(selected),
         "polyline_count": len(selected_polylines),

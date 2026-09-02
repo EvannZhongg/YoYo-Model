@@ -383,6 +383,29 @@ class SemanticStringTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["points"]), 2)
         self.assertGreaterEqual(len(result["polygon"]), 3)
 
+    def test_semantic_mask_hysteresis_grows_only_from_high_seed(self):
+        probability = np.zeros((32, 64), dtype=np.float32)
+        probability[15:18, 8:24] = 0.95  # seed-connected string
+        probability[15:18, 24:40] = 0.45  # weak continuation
+        probability[4:7, 44:58] = 0.45  # weak component without a seed
+        meta = LetterboxMeta(64, 32, 64, 32, 64, 32, 0, 0, 1.0)
+        result = semantic_mask_observation(
+            probability, meta, threshold=0.9, low_threshold=0.4,
+            min_component_pixels=1,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result["low_probability_threshold"], 0.4)
+        # The selected geometry includes the weak continuation but excludes
+        # the disconnected weak-only component.
+        self.assertGreater(result["mask_area_target_px"], 16 * 3)
+        self.assertLess(result["mask_area_target_px"], 40 * 3)
+
+    def test_semantic_mask_hysteresis_rejects_invalid_threshold_order(self):
+        probability = np.zeros((8, 8), dtype=np.float32)
+        meta = LetterboxMeta(8, 8, 8, 8, 8, 8, 0, 0, 1.0)
+        with self.assertRaises(ValueError):
+            semantic_mask_observation(probability, meta, threshold=0.5, low_threshold=0.6)
+
     def test_semantic_mask_polyline_point_limit_is_configurable(self):
         probability = np.zeros((64, 256), dtype=np.float32)
         probability[30:33, 8:248] = 0.9

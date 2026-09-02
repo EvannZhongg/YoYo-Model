@@ -20,6 +20,7 @@ from string_segmentation.device import resolve_device
 from string_segmentation.semantic_metrics import collect_probabilities, metrics_at_threshold, remove_small_components
 from string_segmentation.semantic_model import (
     ReviewedStringDataset,
+    hysteresis_mask,
     letterbox,
     load_checkpoint,
 )
@@ -49,6 +50,7 @@ def _artifact_suffix(
     dataset_matches_checkpoint: bool,
     current_manifest_hash: str,
     threshold_override: float | None,
+    low_threshold: float | None = None,
 ) -> str:
     parts: list[str] = []
     if not dataset_matches_checkpoint:
@@ -56,6 +58,9 @@ def _artifact_suffix(
     if threshold_override is not None:
         threshold_token = f"{float(threshold_override):.4f}".rstrip("0").rstrip(".").replace(".", "p")
         parts.append(f"threshold_{threshold_token}")
+    if low_threshold is not None:
+        low_token = f"{float(low_threshold):.4f}".rstrip("0").rstrip(".").replace(".", "p")
+        parts.append(f"low_{low_token}")
     return f"_{'_'.join(parts)}" if parts else ""
 
 
@@ -78,7 +83,12 @@ def _read_image(path: str | Path) -> np.ndarray | None:
     return cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 
 
-def _prediction_sheet(samples: list[dict[str, Any]], threshold: float, output: Path) -> Path:
+def _prediction_sheet(
+    samples: list[dict[str, Any]],
+    threshold: float,
+    output: Path,
+    low_threshold: float | None = None,
+) -> Path:
     cell_width, image_height, text_height = 480, 272, 58
     columns = 2
     rows = max(1, (len(samples) + columns - 1) // columns)
@@ -90,7 +100,9 @@ def _prediction_sheet(samples: list[dict[str, Any]], threshold: float, output: P
         target_height, target_width = sample["target"].shape
         image, _, _ = letterbox(image, target_width, target_height)
         target = (sample["target"] > 0).astype(np.uint8)
-        prediction = remove_small_components(sample["probability"] >= threshold, 8)
+        prediction = remove_small_components(
+            hysteresis_mask(sample["probability"], threshold, low_threshold), 8
+        )
         overlay = image.copy()
         overlay[target > 0] = (40, 210, 40)
         prediction_only = np.logical_and(prediction > 0, target == 0)
@@ -126,6 +138,7 @@ def evaluate(
     allow_dataset_mismatch: bool = False,
     output_dir: str | Path | None = None,
     min_component_pixels: int = 8,
+    low_threshold: float | None = None,
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
@@ -150,6 +163,7 @@ def evaluate(
         threshold,
         tolerance_px=3,
         min_component_pixels=max(1, int(min_component_pixels)),
+        low_threshold=low_threshold,
     )
     manifest_path = dataset_dir / "manifest.json"
     current_manifest_hash = sha256_file(manifest_path)
@@ -163,9 +177,9 @@ def evaluate(
         warnings.warn(mismatch_warning, RuntimeWarning, stacklevel=2)
     run_dir = Path(output_dir) if output_dir is not None else weights.parent.parent
     run_dir.mkdir(parents=True, exist_ok=True)
-    suffix = _artifact_suffix(dataset_matches_checkpoint, current_manifest_hash, threshold_override)
+    suffix = _artifact_suffix(dataset_matches_checkpoint, current_manifest_hash, threshold_override, low_threshold)
     sheet_path = run_dir / f"{split}_semantic_predictions{suffix}.jpg"
-    _prediction_sheet(samples, threshold, sheet_path)
+    _prediction_sheet(samples, threshold, sheet_path, low_threshold)
     result = {
         "schema_version": "1.0",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -174,6 +188,7 @@ def evaluate(
         "weights": str(weights.resolve()),
         "weights_sha256": sha256_file(weights),
         "min_component_pixels": int(min_component_pixels),
+        "low_threshold": low_threshold,
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
         "dataset_manifest_sha256": current_manifest_hash,
@@ -202,6 +217,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=["train", "val", "test"], default="test")
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--low-threshold", type=float, default=None)
     parser.add_argument(
         "--allow-dataset-mismatch",
         action="store_true",
@@ -223,6 +239,7 @@ def main() -> int:
         args.allow_dataset_mismatch,
         args.output_dir or None,
         args.min_component_pixels,
+        args.low_threshold,
     )
     document = json.dumps(result, ensure_ascii=False, indent=2)
     encoding = sys.stdout.encoding or "utf-8"

@@ -80,6 +80,7 @@ def evaluate_consecutive_checkpoint(
     max_polyline_points: int = 64,
     max_components: int = 8,
     min_component_pixels: int = 8,
+    low_threshold: float | None = None,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -129,6 +130,7 @@ def evaluate_consecutive_checkpoint(
                 probability,
                 meta,
                 active_selected_threshold,
+                low_threshold=low_threshold,
                 yoyo=yoyo,
                 yoyo_division=str(annotation.get("yoyo_division") or "1A"),
                 min_component_pixels=max(1, int(min_component_pixels)),
@@ -292,6 +294,7 @@ def evaluate_consecutive_checkpoint(
         "weights_sha256": sha256_file(weights),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "threshold": selected_threshold,
+        "low_threshold": low_threshold,
         "input_size": [input_width, input_height],
         "dataset_dir": str(dataset_dir),
         "color_augment": bool(color_augment),
@@ -320,6 +323,8 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--low-threshold", type=float, default=None,
+                        help="Optional hysteresis low threshold; retain only low-threshold components touching high seeds.")
     parser.add_argument("--group", action="append", default=[])
     parser.add_argument("--color-augment", action="store_true")
     parser.add_argument(
@@ -365,6 +370,7 @@ def main() -> int:
         output_dir=Path(args.output_dir),
         device_name=args.device,
         threshold=args.threshold,
+        low_threshold=args.low_threshold,
         groups=args.group or None,
         color_augment=args.color_augment,
         color_probability_min_mean=args.color_probability_min_mean,

@@ -137,6 +137,11 @@ class TrackingConfig:
     )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
     string_confidence: float = float(_env_or_config("TRACKING_STRING_CONFIDENCE", "tracking.string_confidence", 0.40))
+    string_low_threshold: float | None = (
+        None
+        if _env_or_config("TRACKING_STRING_LOW_THRESHOLD", "tracking.string_low_threshold", None) in (None, "", "null", "None")
+        else float(_env_or_config("TRACKING_STRING_LOW_THRESHOLD", "tracking.string_low_threshold", None))
+    )
     string_inference_scale: float = float(
         _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 1.0)
     )

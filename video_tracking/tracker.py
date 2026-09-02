@@ -342,6 +342,7 @@ def _predict_string_model(
     color_semantic_prefilter: bool = False,
     bright_line_augment: bool = False,
     bright_line_min_mean: float = 0.70,
+    string_low_threshold: float | None = None,
     prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
 ) -> dict[str, Any] | None:
     if model is None:
@@ -366,12 +367,16 @@ def _predict_string_model(
                 raise ValueError("Prepared semantic letterbox has an unexpected size")
             tensor = normalize_image_for_inference(image, model_device)
         threshold = max(float(checkpoint.get("threshold", 0.5)), float(confidence))
+        low_threshold = string_low_threshold
+        if low_threshold is not None:
+            low_threshold = min(float(low_threshold), threshold)
         max_components = 8
         probability = predict_prepared_probability(primary_model, tensor)
         observation = semantic_mask_observation(
             probability,
             meta,
             threshold=threshold,
+            low_threshold=low_threshold,
             yoyo=yoyo,
             min_component_pixels=8,
             hand_points=[
@@ -906,6 +911,7 @@ def track_video(
     string_weights_path: str | Path | None = None,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
     string_confidence: float = TRACKING_CONFIG.string_confidence,
+    string_low_threshold: float | None = TRACKING_CONFIG.string_low_threshold,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
     string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
     string_color_probability_augment: bool = TRACKING_CONFIG.string_color_probability_augment,
@@ -946,6 +952,8 @@ def track_video(
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
         raise ValueError("string_inference_fps must be non-negative")
+    if string_low_threshold is not None and not 0.0 <= float(string_low_threshold) <= 1.0:
+        raise ValueError("string_low_threshold must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_mean) <= 1.0:
         raise ValueError("string_color_probability_min_mean must be between 0 and 1")
     if not 0.0 <= float(string_color_probability_min_fraction) <= 1.0:
@@ -1200,6 +1208,7 @@ def track_video(
                 string_color_semantic_prefilter,
                 string_bright_line_augment,
                 string_bright_line_min_mean,
+                string_low_threshold,
                 (
                     semantic_preprocess_future.result()
                     if semantic_preprocess_future is not None
@@ -1252,6 +1261,7 @@ def track_video(
                 string_color_semantic_prefilter,
                 string_bright_line_augment,
                 string_bright_line_min_mean,
+                string_low_threshold,
             )
             string_inference_frames += 1
             string = estimate_string(
@@ -1544,6 +1554,7 @@ def track_video(
             "string_model_enabled": bool(enable_string_model),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
             "string_confidence": string_confidence,
+            "string_low_threshold": string_low_threshold,
             "string_inference_scale": float(string_inference_scale),
             "string_inference_fps": float(string_inference_fps),
             "string_inference_interval_frames": int(string_inference_interval),
@@ -1684,6 +1695,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
     parser.add_argument("--no-string-model", action="store_true")
     parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
+    parser.add_argument("--string-low-threshold", type=float, default=TRACKING_CONFIG.string_low_threshold)
     parser.add_argument(
         "--string-inference-scale",
         type=float,
@@ -1811,6 +1823,7 @@ def main() -> int:
         string_weights_path=args.string_weights,
         enable_string_model=not args.no_string_model,
         string_confidence=args.string_conf,
+        string_low_threshold=args.string_low_threshold,
         string_inference_scale=args.string_inference_scale,
         string_inference_fps=args.string_inference_fps,
         string_color_probability_augment=not args.no_string_color_probability_augment,
