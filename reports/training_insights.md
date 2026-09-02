@@ -63,3 +63,13 @@
 综合来看，`0.2 × hard-negative` 与 `negative sampling ×4` 仍是当前生产配置；本轮没有证据支持直接删除 hard-negative，也没有必要继续堆叠新的 Loss。该结论只适用于当前 632/136/136 reviewed split、输入尺寸和训练日程，不外推到从头训练、不同学习率或更大真实 hard-negative 数据。后续若要重新判断，应在多个 seed、从头训练和扩充真实 hard-negative 来源后，继续以连续集 pooled centerline F1@8、最弱来源组、Presence 及缺失段护栏共同评估。
 
 可复现实验位于 `runs/experiments/semantic_ablation_hn*_neg*_fullscreen_r1`、`runs/experiments/semantic_warmprod_hn0_seed20260902_full12_r1` 和 `runs/experiments/semantic_warmprod_hn02_seed20260902_full12_r1`。
+
+## 逐帧光流与几何后处理消融
+
+**结论**：将 LK 光流从仅在观测掉线时调用改为已有轨迹的逐帧检查是安全的，但在当前 4K 快速运动片段上没有带来可测的 pooled 几何收益；密集流、简单 EMA 和降低组件上限均不适合作为默认恢复策略。
+
+**证据**：同一 `semantic_ablation_nomorph_foundation_r1` 权重、`0.9204` 阈值和 10 组/927 帧连续集回放下，逐帧 LK pooled centerline F1@8 约 `0.7629`，Presence F1 `0.9918`，最长缺失段 `4` 帧，平均 Chamfer/HD95 为 `14.44/60.95 px`。仅将 FB 门槛由 `4` 放宽到 `8 px` 后 F1 为 `0.7628`，传播帧仍为 `4`。Farneback fallback 将最长缺失段降至 `1` 帧，但 F1 降至 `0.7593`、Chamfer/HD95 变为 `14.77/62.12 px`，完整回放耗时增加数倍；`max_components=4` 和 `0.8/0.2` EMA 也分别显著损害召回和几何质量。
+
+**适用范围**：当前 MobileNetV3-FPN 语义绳模型、`960x544` 输入映射到 4K 源帧、`1Ayoyo_consecutive` 10 组评估及现有前后向一致门控；不外推到更高帧率、不同相机运动或显式视频训练模型。
+
+**后续建议**：保留逐帧 LK 作为 review-only 时序检查和短缺口恢复；若要继续提升快速运动场景，应优先训练带相邻帧/运动增强的时序语义模型，避免放宽 FB 门控或叠加高成本密集流。
