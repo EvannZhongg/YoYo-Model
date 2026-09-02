@@ -592,11 +592,15 @@ def estimate_string(
 
     observed = _annotate_observation(observation) if observation is not None else None
     propagated = None
-    # Fresh model/color geometry is authoritative. Optical flow is only useful
-    # when the current frame has no observation to carry across the gap.
-    if observed is None and previous_string and previous_string.get("points"):
+    # Run flow on every frame with an existing track. Fresh model/color geometry
+    # remains authoritative, while flow supplies temporal diagnostics and can
+    # restore secondary components that a frame-local observation dropped.
+    if previous_string and previous_string.get("points"):
         previous_age = int(previous_string.get("propagation_age_frames", 0))
         if previous_age < max(0, int(max_propagation_frames)):
+            if observed is not None:
+                observed = dict(observed)
+                observed["flow_temporal_attempted"] = True
             gray = current_gray if current_gray is not None else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             flow_previous_gray = previous_gray
             if flow_previous_gray is None and previous_frame is not None:
@@ -612,6 +616,28 @@ def estimate_string(
             )
             if propagated is not None:
                 propagated = _annotate_observation(propagated, previous_age + 1)
+                propagated["flow_temporal_attempted"] = True
+                if observed is not None:
+                    observed["flow_temporal_checked"] = True
+                    observed["flow_reference_method"] = propagated.get("method")
+                    observed["flow_reference_age_frames"] = int(propagated.get("propagation_age_frames", 0))
+                    observed["flow_reference_forward_backward_error"] = propagated.get(
+                        "flow_forward_backward_error"
+                    )
+                    observed_points = observed.get("points")
+                    propagated_points = propagated.get("points")
+                    observed_polylines = list(observed.get("polylines") or ([observed_points] if observed_points else []))
+                    propagated_polylines = propagated.get("polylines")
+                    flow_polylines = list(propagated_polylines or ([propagated_points] if propagated_points else []))
+                    # Keep the detector's primary component, but retain flow
+                    # components beyond its current output for continuity.
+                    if len(flow_polylines) > len(observed_polylines):
+                        recovered_count = len(flow_polylines) - len(observed_polylines)
+                        observed["polylines"] = [*observed_polylines, *flow_polylines[len(observed_polylines):]]
+                        observed["component_count"] = len(observed["polylines"])
+                        observed["polyline_count"] = len(observed["polylines"])
+                        observed["flow_recovered_component_count"] = recovered_count
+                        observed["needs_review"] = True
     if observed is None and yoyo is not None and allow_color_fallback:
         color_observation = _color_line_observation(
             frame,

@@ -1059,6 +1059,7 @@ def track_video(
     last_seen_edge_clipped = False
     missing_streak = 0
     previous_frame: np.ndarray | None = None
+    previous_gray: np.ndarray | None = None
     previous_string: dict[str, Any] | None = None
     selected_track_id: int | None = None
     selected_track_bbox: list[float] | None = None
@@ -1177,6 +1178,11 @@ def track_video(
         if center and wrists:
             distance_to_hand = min(math.hypot(item["x"] - center[0], item["y"] - center[1]) for item in wrists)
         model_string = None
+        current_gray = (
+            cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if previous_string is not None
+            else None
+        )
         if run_scheduled_string_inference:
             model_string = _predict_string_model(
                 string_model,
@@ -1210,7 +1216,7 @@ def track_video(
             frame,
             yoyo,
             wrists,
-            None,
+            previous_gray,
             previous_string,
             yoyo_division,
             observation=model_string,
@@ -1220,6 +1226,7 @@ def track_video(
             # evidence. Do not replace it with a weaker HSV/Hough proposal.
             allow_color_fallback=string_model is None,
             allow_unanchored_semantic=allow_unanchored_semantic,
+            current_gray=current_gray,
             previous_frame=previous_frame,
         )
         reacquired_string = _should_reacquire_string(
@@ -1251,7 +1258,7 @@ def track_video(
                 frame,
                 yoyo,
                 wrists,
-                None,
+                previous_gray,
                 previous_string,
                 yoyo_division,
                 observation=model_string,
@@ -1259,6 +1266,7 @@ def track_video(
                 max_forward_backward_error=string_flow_fb_max_error,
                 allow_color_fallback=False,
                 allow_unanchored_semantic=allow_unanchored_semantic,
+                current_gray=current_gray,
                 previous_frame=previous_frame,
             )
         scheduled_orientation_inference = bool(
@@ -1444,6 +1452,7 @@ def track_video(
             else None
         )
         previous_frame = frame if previous_string is not None else None
+        previous_gray = current_gray if previous_string is not None else None
         frame_index += 1
         processed_frames += 1
     if semantic_preprocess_executor is not None:
@@ -1469,6 +1478,18 @@ def track_video(
         if record.get("string") and record["string"].get("component_selection")
     )
     string_geometry_counts = {
+        "flow_temporal_attempted_frames": sum(
+            int(bool((record.get("string") or {}).get("flow_temporal_attempted")))
+            for record in records
+        ),
+        "flow_temporal_checked_frames": sum(
+            int(bool((record.get("string") or {}).get("flow_temporal_checked")))
+            for record in records
+        ),
+        "flow_recovered_component_frames": sum(
+            int((record.get("string") or {}).get("flow_recovered_component_count", 0) > 0)
+            for record in records
+        ),
         "component_selection_counts": dict(sorted(component_selection_counts.items())),
         "hand_supported_observation_frames": sum(
             int((record.get("string") or {}).get("hand_supported_component_count", 0) > 0)
@@ -1579,7 +1600,7 @@ def track_video(
             "review_index": str(run_dir / "tracking_review_index.json") if review_sheet_path else "",
         },
         "limitations": [
-            "String observations are review-only; fresh model/color geometry is checked against forward/backward optical flow without being deformed, and flow-only propagation is capped by string_max_propagation_frames.",
+            "String observations are review-only; forward/backward optical flow is checked every frame and can restore dropped secondary components, while flow-only persistence is capped by string_max_propagation_frames.",
             "Division metadata is recorded for provenance and does not impose attachment-specific geometric filtering.",
             "string_without_yoyo marks frames where a visible string estimate persists while the yoyo is out of frame or occluded; these frames require manual review.",
             "not_visible_or_occluded does not distinguish occlusion from an off-camera yoyo without manual review.",

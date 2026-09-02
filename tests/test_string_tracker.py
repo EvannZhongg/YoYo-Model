@@ -232,7 +232,16 @@ class StringTrackerTemporalTests(unittest.TestCase):
         }
         with (
             patch("video_tracking.string_tracker.cv2.cvtColor") as convert,
-            patch("video_tracking.string_tracker._propagate_string_geometry") as propagate,
+            patch(
+                "video_tracking.string_tracker._propagate_string_geometry",
+                return_value={
+                    "points": [[20.0, 20.0], [80.0, 60.0]],
+                    "polylines": [[[20.0, 20.0], [80.0, 60.0]]],
+                    "method": "lucas_kanade_optical_flow",
+                    "propagation_age_frames": 1,
+                    "flow_forward_backward_error": 0.5,
+                },
+            ) as propagate,
         ):
             result = estimate_string(
                 frame,
@@ -247,7 +256,8 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         convert.assert_not_called()
-        propagate.assert_not_called()
+        propagate.assert_called_once()
+        self.assertTrue(result["flow_temporal_checked"])
 
     def test_estimate_string_defers_gray_conversion_until_flow_gap(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -870,6 +880,46 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(result["propagation_age_frames"], 0)
         self.assertNotIn("temporal_consistent", result)
         self.assertEqual(result["points"], [[41, 90], [151, 90]])
+
+    def test_flow_runs_with_fresh_observation_and_recovers_missing_component(self):
+        frame = np.zeros((120, 180, 3), dtype=np.uint8)
+        previous_string = {
+            "points": [[20.0, 40.0], [100.0, 40.0]],
+            "polylines": [
+                [[20.0, 40.0], [100.0, 40.0]],
+                [[30.0, 80.0], [110.0, 80.0]],
+            ],
+            "propagation_age_frames": 0,
+        }
+        with patch(
+            "video_tracking.string_tracker._propagate_string_geometry",
+            return_value={
+                "points": [[22.0, 40.0], [102.0, 40.0]],
+                "polylines": [
+                    [[22.0, 40.0], [102.0, 40.0]],
+                    [[32.0, 80.0], [112.0, 80.0]],
+                ],
+                "method": "lucas_kanade_optical_flow",
+                "flow_forward_backward_error": 0.4,
+            },
+        ):
+            result = estimate_string(
+                frame,
+                None,
+                [],
+                np.zeros((120, 180), dtype=np.uint8),
+                previous_string,
+                observation={
+                    "points": [[22.0, 40.0], [102.0, 40.0]],
+                    "polylines": [[[22.0, 40.0], [102.0, 40.0]]],
+                    "method": "semantic_segmentation",
+                },
+                current_gray=np.zeros((120, 180), dtype=np.uint8),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["polylines"]), 2)
+        self.assertEqual(result["flow_recovered_component_count"], 1)
 
     def test_string_can_persist_without_yoyo_as_review_case(self):
         previous, current = self._shifted_frames()
