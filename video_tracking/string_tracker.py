@@ -173,6 +173,97 @@ def _saturated_line_mask(
     return result
 
 
+def _morphological_skeleton(mask: np.ndarray) -> np.ndarray:
+    """Return a one-pixel skeleton without an optional image-processing package."""
+    working = (mask > 0).astype(np.uint8) * 255
+    skeleton = np.zeros_like(working)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    for _ in range(64):
+        if not cv2.countNonZero(working):
+            break
+        eroded = cv2.erode(working, kernel)
+        opened = cv2.dilate(eroded, kernel)
+        skeleton = cv2.bitwise_or(skeleton, cv2.subtract(working, opened))
+        working = eroded
+    return skeleton
+
+
+def _curve_ridge_path(mask: np.ndarray, min_length: int = 16) -> list[list[float]] | None:
+    """Extract the longest ordered curved ridge from a binary line mask."""
+    if cv2.countNonZero(mask) > 20000:
+        return None
+    skeleton = _morphological_skeleton(mask)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(skeleton, 8)
+    best_path: list[tuple[int, int]] | None = None
+    best_length = 0.0
+    for label in range(1, count):
+        component_area = int(stats[label, cv2.CC_STAT_AREA])
+        if component_area < int(min_length) or component_area > 5000:
+            continue
+        ys, xs = np.where(labels == label)
+        coords = list(zip(xs.tolist(), ys.tolist()))
+        if len(coords) < 2:
+            continue
+        index = {point: idx for idx, point in enumerate(coords)}
+        neighbors: list[list[int]] = [[] for _ in coords]
+        for idx, (x, y) in enumerate(coords):
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    neighbor = index.get((x + dx, y + dy))
+                    if neighbor is not None:
+                        neighbors[idx].append(neighbor)
+        endpoints = [idx for idx, values in enumerate(neighbors) if len(values) <= 1]
+        if len(endpoints) < 2:
+            extrema = {
+                min(range(len(coords)), key=lambda idx: coords[idx][0]),
+                max(range(len(coords)), key=lambda idx: coords[idx][0]),
+                min(range(len(coords)), key=lambda idx: coords[idx][1]),
+                max(range(len(coords)), key=lambda idx: coords[idx][1]),
+            }
+            endpoints = list(extrema)
+            if len(endpoints) < 2:
+                continue
+        # A diameter over endpoint pairs gives an ordered path through bends.
+        for start in endpoints:
+            queue = [start]
+            parent = {start: -1}
+            for current in queue:
+                for neighbor in neighbors[current]:
+                    if neighbor not in parent:
+                        parent[neighbor] = current
+                        queue.append(neighbor)
+            for end in endpoints:
+                if end not in parent:
+                    continue
+                path_indices = []
+                current = end
+                while current >= 0:
+                    path_indices.append(current)
+                    current = parent[current]
+                path_indices.reverse()
+                if len(path_indices) < min_length:
+                    continue
+                path = [coords[idx] for idx in path_indices]
+                length = float(
+                    sum(
+                        math.hypot(float(a[0] - b[0]), float(a[1] - b[1]))
+                        for a, b in zip(path, path[1:])
+                    )
+                )
+                if length > best_length:
+                    best_length = length
+                    best_path = path
+    if best_path is None:
+        return None
+    stride = max(1, int(round(len(best_path) / 64.0)))
+    sampled = best_path[::stride]
+    if sampled[-1] != best_path[-1]:
+        sampled.append(best_path[-1])
+    return [[float(x), float(y)] for x, y in sampled]
+
+
 def _color_line_observation(
     frame: np.ndarray,
     yoyo: dict[str, Any],
@@ -242,7 +333,38 @@ def _color_line_observation(
         maxLineGap=max(8, int(diag * 0.02)),
     )
     if lines is None:
-        return None
+        curve = _curve_ridge_path(mask)
+        if curve is None or len(curve) < 2:
+            return None
+        curve = [[point[0] + rx1, point[1] + ry1] for point in curve]
+        distances = [math.hypot(point[0] - center[0], point[1] - center[1]) for point in curve]
+        near_index = int(np.argmin(distances))
+        near_distance = float(distances[near_index])
+        if require_yoyo_proximity and near_distance > max(30.0, 2.5 * scale):
+            return None
+        ordered = list(reversed(curve)) if near_index == 0 else curve
+        length = float(
+            sum(
+                math.hypot(a[0] - b[0], a[1] - b[1])
+                for a, b in zip(ordered, ordered[1:])
+            )
+        )
+        edge_distance = min(
+            min(point[0] for point in ordered),
+            min(point[1] for point in ordered),
+            width - max(point[0] for point in ordered),
+            height - max(point[1] for point in ordered),
+        )
+        spatially_ambiguous = bool(mark_far_ambiguous and near_distance > max(120.0, 6.0 * scale))
+        return {
+            "points": ordered,
+            "confidence": round(float(min(0.68, max(0.18, 0.18 + length / max(1.0, diag)))), 4),
+            "method": "curve_ridge_observation",
+            "needs_review": True,
+            "distance_to_yoyo_px": round(near_distance, 2),
+            "distance_to_frame_edge_px": round(float(edge_distance), 2),
+            "spatially_ambiguous": spatially_ambiguous,
+        }
     reference_pair = (
         _resample_polyline(reference_points, 2)
         if reference_points and len(reference_points) >= 2

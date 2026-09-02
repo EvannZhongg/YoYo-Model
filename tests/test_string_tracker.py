@@ -11,6 +11,7 @@ import numpy as np
 
 from video_tracking.string_tracker import (
     _color_line_observation,
+    _curve_ridge_path,
     _resample_polyline,
     _saturated_line_mask,
     estimate_string,
@@ -125,6 +126,26 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(resample.call_count, 1)
+
+    def test_curve_ridge_path_orders_a_bent_line(self):
+        mask = np.zeros((120, 160), dtype=np.uint8)
+        points = np.asarray([[20, 90], [50, 70], [80, 45], [120, 30]], dtype=np.int32)
+        cv2.polylines(mask, [points], False, 255, 5)
+        path = _curve_ridge_path(mask)
+        self.assertIsNotNone(path)
+        self.assertGreater(len(path), 16)
+        self.assertGreater(path[-1][0], path[0][0])
+
+    def test_color_observation_uses_curve_ridge_when_hough_fails(self):
+        frame = np.zeros((160, 220, 3), dtype=np.uint8)
+        curve = np.asarray([[45, 130], [75, 105], [110, 85], [150, 65], [185, 55]], dtype=np.int32)
+        cv2.polylines(frame, [curve], False, (0, 255, 0), 4)
+        yoyo = {"center": [45.0, 130.0], "bbox": [35.0, 120.0, 55.0, 140.0]}
+        with patch("video_tracking.string_tracker.cv2.HoughLinesP", return_value=None):
+            result = _color_line_observation(frame, yoyo, require_yoyo_proximity=True)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["method"], "curve_ridge_observation")
+        self.assertGreater(len(result["points"]), 2)
 
     def test_color_observation_prefilter_requires_semantic_support(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)

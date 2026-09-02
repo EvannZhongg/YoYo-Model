@@ -71,6 +71,7 @@ tracking:
   string_color_probability_augment: true
   # Search low-saturation local bright ridges after the saturated-color proposal.
   string_bright_line_augment: true
+  # Hough misses are checked with a lightweight skeleton curve ridge fallback.
   # Bright ridges are less color-specific, so use a strict semantic mean gate.
   string_bright_line_min_mean: 0.70
   # Restrict Hough candidates to a dilated p>=0.10 semantic neighborhood.

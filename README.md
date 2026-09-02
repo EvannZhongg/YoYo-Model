@@ -144,6 +144,7 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 逐帧结果保留球体、绳线、姿态、bad case 和 `trick_orientation`。
 绳线已有轨迹时，逐帧运行前后向一致光流；语义观测仍优先，光流可补回被当前帧分割漏掉的次级绳段，纯光流延续受 `tracking.string_max_propagation_frames` 限制。
+颜色增强在 Hough 无直线结果时额外尝试骨架曲线 ridge 路径，用于弯曲绳线候选。
 
 追踪审核和模型索引只保留运行所需的路径及参数元数据；训练/评估阶段用于数据集隔离的
 manifest 校验仍然启用。需要生成发布归档哈希时，可运行模型索引的
