@@ -78,7 +78,7 @@ def evaluate_consecutive_checkpoint(
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     unanchored_semantic_grace_frames: int = 12,
     max_polyline_points: int = 64,
-    max_components: int = 8,
+    max_components: int = TRACKING_CONFIG.string_max_components,
     min_component_pixels: int = 8,
     low_threshold: float | None = None,
 ) -> dict[str, Any]:
@@ -361,7 +361,7 @@ def main() -> int:
     )
     parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
     parser.add_argument("--max-polyline-points", type=int, default=64)
-    parser.add_argument("--max-components", type=int, default=8)
+    parser.add_argument("--max-components", type=int, default=TRACKING_CONFIG.string_max_components)
     parser.add_argument("--min-component-pixels", type=int, default=8)
     args = parser.parse_args()
     result = evaluate_consecutive_checkpoint(

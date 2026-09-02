@@ -193,6 +193,9 @@ class TrackingConfig:
             0.50,
         )
     )
+    string_max_components: int = int(
+        _env_or_config("TRACKING_STRING_MAX_COMPONENTS", "tracking.string_max_components", 32)
+    )
     string_max_propagation_frames: int = int(
         _env_or_config("TRACKING_STRING_MAX_PROPAGATION_FRAMES", "tracking.string_max_propagation_frames", 12)
     )

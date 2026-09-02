@@ -253,7 +253,7 @@ def _augment_semantic_color_observation(
     semantic_prefilter: bool = False,
     include_bright_lines: bool = False,
     bright_line_min_mean: float | None = None,
-    max_components: int = 8,
+    max_components: int = TRACKING_CONFIG.string_max_components,
 ) -> dict[str, Any] | None:
     """Add a color line only when the semantic map independently supports it."""
     if observation is None or yoyo is None:
@@ -344,6 +344,7 @@ def _predict_string_model(
     bright_line_min_mean: float = 0.70,
     string_low_threshold: float | None = None,
     prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
+    max_components: int = TRACKING_CONFIG.string_max_components,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -370,7 +371,7 @@ def _predict_string_model(
         low_threshold = string_low_threshold
         if low_threshold is not None:
             low_threshold = min(float(low_threshold), threshold)
-        max_components = 8
+        max_components = max(1, int(max_components))
         probability = predict_prepared_probability(primary_model, tensor)
         observation = semantic_mask_observation(
             probability,
@@ -920,6 +921,7 @@ def track_video(
     string_color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     string_color_probability_min_mean: float = TRACKING_CONFIG.string_color_probability_min_mean,
     string_color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
+    string_max_components: int = TRACKING_CONFIG.string_max_components,
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     yoyo_division: str = TRACKING_CONFIG.yoyo_division,
@@ -948,6 +950,7 @@ def track_video(
 ) -> dict[str, Any]:
     if str(yoyo_division) not in {"1A", "2A", "3A", "4A", "5A"}:
         raise ValueError(f"Unsupported yoyo division: {yoyo_division}")
+    string_max_components = max(1, int(string_max_components))
     if not 0.5 <= float(string_inference_scale) <= 2.0:
         raise ValueError("string_inference_scale must be between 0.5 and 2.0")
     if float(string_inference_fps) < 0.0:
@@ -1214,6 +1217,7 @@ def track_video(
                     if semantic_preprocess_future is not None
                     else None
                 ),
+                max_components=max(1, int(string_max_components)),
             )
             string_inference_frames += 1
         allow_unanchored_semantic = bool(
@@ -1262,6 +1266,7 @@ def track_video(
                 string_bright_line_augment,
                 string_bright_line_min_mean,
                 string_low_threshold,
+                max_components=max(1, int(string_max_components)),
             )
             string_inference_frames += 1
             string = estimate_string(
@@ -1564,6 +1569,7 @@ def track_video(
             "string_color_semantic_prefilter": bool(string_color_semantic_prefilter),
             "string_color_probability_min_mean": float(string_color_probability_min_mean),
             "string_color_probability_min_fraction": float(string_color_probability_min_fraction),
+            "string_max_components": int(string_max_components),
             "string_max_propagation_frames": int(string_max_propagation_frames),
             "string_flow_fb_max_error": float(string_flow_fb_max_error),
             "string_unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
@@ -1743,6 +1749,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.string_color_probability_min_fraction,
     )
     parser.add_argument("--string-max-propagation-frames", type=int, default=TRACKING_CONFIG.string_max_propagation_frames)
+    parser.add_argument("--string-max-components", type=int, default=TRACKING_CONFIG.string_max_components)
     parser.add_argument("--string-flow-fb-max-error", type=float, default=TRACKING_CONFIG.string_flow_fb_max_error)
     parser.add_argument(
         "--yoyo-division",
@@ -1832,6 +1839,7 @@ def main() -> int:
         string_color_semantic_prefilter=args.string_color_semantic_prefilter,
         string_color_probability_min_mean=args.string_color_probability_min_mean,
         string_color_probability_min_fraction=args.string_color_probability_min_fraction,
+        string_max_components=args.string_max_components,
         string_max_propagation_frames=args.string_max_propagation_frames,
         string_flow_fb_max_error=args.string_flow_fb_max_error,
         yoyo_division=args.yoyo_division,

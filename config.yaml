@@ -82,6 +82,8 @@ tracking:
   string_color_semantic_prefilter: true
   string_color_probability_min_mean: 0.70
   string_color_probability_min_fraction: 0.50
+  # Maximum semantic string components retained per frame.
+  string_max_components: 32
   # Temporal string tracking is review-only: run forward/backward optical flow
   # every frame while a track exists and cap unanchored persistence.
   string_max_propagation_frames: 12

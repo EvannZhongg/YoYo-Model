@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 
 import numpy as np
@@ -8,6 +9,7 @@ from training_v3.orientation_view import _crop_box
 from video_tracking.rtmpose_backend import WholebodyPrediction, _rtmlib_device, hand_landmarks
 from config import TRACKING_CONFIG
 from video_tracking.tracker import _predict_pose, parse_args
+from string_segmentation.evaluate_consecutive import evaluate_consecutive_checkpoint
 
 
 class TrainingV3Tests(unittest.TestCase):
@@ -18,6 +20,17 @@ class TrainingV3Tests(unittest.TestCase):
         self.assertFalse(parse_args(["input.mp4", "--no-pose"]).pose)
         self.assertTrue(TRACKING_CONFIG.string_color_semantic_prefilter)
         self.assertTrue(parse_args(["input.mp4"]).string_color_semantic_prefilter)
+        self.assertEqual(TRACKING_CONFIG.string_max_components, 32)
+        self.assertEqual(parse_args(["input.mp4"]).string_max_components, 32)
+        self.assertEqual(
+            parse_args(["input.mp4", "--string-max-components", "5"]).string_max_components,
+            5,
+        )
+        self.assertEqual(
+            inspect.signature(evaluate_consecutive_checkpoint)
+            .parameters["max_components"].default,
+            TRACKING_CONFIG.string_max_components,
+        )
         self.assertFalse(
             parse_args(["input.mp4", "--no-string-color-semantic-prefilter"])
             .string_color_semantic_prefilter

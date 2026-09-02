@@ -80,25 +80,24 @@ Tolerant F1@3 继续作为静态语义诊断指标。
 
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
 `2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
-`0.9204`、颜色/亮脊增强、语义预筛、颜色候选概率均值门槛 `0.70` 和时序协议）上，pooled centerline F1@8 为
-`0.766228`（precision `0.880844`、recall `0.678006`），按 pair frame 加权的
-Chamfer 为 `14.4312 px`，HD95 为 `60.9098 px`。相对单主路径抽取的 F1@8
-`0.564291` 和 recall `0.414447`，覆盖式骨架抽取保留同一语义连通域中的主要分支，
-同时维持接近的 precision。pooled Presence F1 为 `0.991772`，零预测帧为 `18`；
-最长缺失段和最大恢复延迟均为 `4` 帧。最弱 group 为 `池高宇-fef6c7bcb0`
-（F1@8 `0.612640`）。评估器默认门槛与追踪器配置统一为 `0.70`。
+`0.9204`、颜色/亮脊增强、语义预筛、颜色候选概率均值门槛 `0.70` 和时序协议）上，
+将运行时组件上限从 `8` 提升到 `32` 后，pooled centerline F1@8 为 `0.807238`
+（相同权重、上限 `8` 为 `0.766228`），Presence F1 保持 `0.991772`；按 pair frame
+加权的几何 Chamfer/HD95 为 `12.7498/54.2854 px`，最长缺失段和最大恢复延迟仍为
+`4` 帧。最弱 group 为 `池高宇-fef6c7bcb0`（三段中的最低 F1@8 `0.615901`，高于
+上限 `8` 的 `0.612640`）。评估器默认门槛与追踪器配置统一为 `0.70`。
 
 晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏。最长缺失段/恢复延迟和FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
 Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；单一阈值必须先在 val 校准后
 冻结，不能用 test 重新选阈值。负图平均误检像素、平均组件数、长度比仅作诊断，不能单独
-决定晋升。`max_components=8`、`min_component_pixels=8`、`max_polyline_points=64`、
+决定晋升。`max_components=32`、`min_component_pixels=8`、`max_polyline_points=64`、
 传播上限 `12` 和前后向误差 `4.0 px` 是固定运行参数，候选比较时保持不变。
 标注中的 `string_visibility` 仅用于连续帧
 评估时区分有绳、无绳和未知帧；应保留它以避免把无绳负样本混入几何指标，但不把该字段
 本身作为模型质量或晋升排名指标。
 
 同机邬聪聪视频 300 帧端到端复核（检测、语义、方向和异步写盘配置一致）吞吐为
-`15.7206 -> 15.2890 FPS`，下降约 `2.7%`，无额外推理组件。
+`15.2890 -> 14.6545 FPS`，下降约 `4.1%`，无额外推理组件。
 
 复现证据：
 
@@ -106,7 +105,8 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 - `tmp/semantic_skeleton_cover_test_t092/test_semantic_metrics_threshold_0p9204.json`
 - `tmp/semantic_skeleton_cover_val_t092/val_semantic_metrics_threshold_0p9204.json`
 - `tmp/semantic_skeleton_cover_optimized/summary.json`
-- `tmp/fps_skeleton_cover_optimized/邬聪聪_20260831T174144Z_2f6fbd4e/run.json`
+- `tmp/production_comp32_full/summary.json`
+- `tmp/fps_comp32/邬聪聪_20260902T183010Z_bd9f5c2a/run.json`
 
 ## 绳线追踪流程
 
@@ -159,9 +159,9 @@ Macro Recall 为 `0.864272`。
   --color-probability-min-mean 0.70 `
   --bright-line-augment --bright-line-min-mean 0.70 `
   --temporal --max-propagation-frames 12 --max-forward-backward-error 4.0 `
-  --max-polyline-points 64 --max-components 8 --min-component-pixels 8 --device cuda
+  --max-polyline-points 64 --max-components 32 --min-component-pixels 8 --device cuda
 
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-最近一次完整验证为 `164 passed`；`compileall` 和 `git diff --check` 均通过。
+最近一次完整验证为 `175 tests, OK`；`compileall` 和 `git diff --check` 均通过。

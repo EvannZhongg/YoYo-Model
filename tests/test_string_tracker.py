@@ -433,6 +433,7 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         self.assertEqual(prepare.call_args.args[1:3], (1440, 816))
         self.assertEqual(geometry.call_args.kwargs["min_component_pixels"], 8)
+        self.assertEqual(geometry.call_args.kwargs["max_components"], 32)
 
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
