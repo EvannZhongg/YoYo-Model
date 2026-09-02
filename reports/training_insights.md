@@ -1,5 +1,25 @@
 # 训练经验
 
+## Centerline heatmap + direction field
+
+**结论**：三通道中心线 heatmap + direction field 在与生产模型相同的 `960×544` 输入下明显优于低分辨率训练，但当前连续集 pooled F1@8 仍略低于生产基线，且最弱来源组存在明显几何偏移，暂不晋升。
+
+**证据**：MobileNetV3-FPN、ImageNet backbone、真实 mask skeleton target、12 epoch，固定 manifest SHA-256 `0a2dbe850a4dd2ce0a8e21602046a83a92c33378ff0bd5f86dddcb49a0f46eea`。验证 proxy centerline F1@8 为 `0.9286`；严格静态 test 最佳 F1@8 为 `0.7604`（阈值 `0.3`）。`1Ayoyo_consecutive` 全量 927 帧、阈值 `0.2` 的 pooled F1@8 为 `0.7633`，precision/recall `0.8387/0.7003`，Presence F1 `0.9929`，最长缺失/恢复 `1/1` 帧，FPS `14.70`，Chamfer/HD95 `27.33/99.64 px`。生产 pooled F1@8 为 `0.7662`；最弱来源组 `池高宇-fef6c7bcb0` 为 `0.4099`，因此不满足弱场景护栏。
+
+**适用范围**：当前 661/142/143 reviewed split、MobileNetV3-FPN、`960×544` 输入、Gaussian heatmap sigma 1.5、context radius 6、skeleton-cover 解码和连续集 927 帧协议；不外推到视频联合训练或扩大来源后的数据分布。
+
+**后续建议**：保留三通道输出和高分辨率训练缓存，下一轮优先针对弱来源组增加真实视频 hard-negative/运动增强，或引入直接源坐标 polyline loss；在连续集 pooled F1@8 和最弱来源组同时超过生产护栏前，不接入默认追踪器。复现产物：`runs/experiments/centerline_v4_r8_skeleton_960/run_manifest.json`、`test_centerline_metrics.json`、`consecutive_metrics.json`。
+
+## 更高分辨率中心线训练
+
+**结论**：将输入从 `960×544` 提升到 `1280×720` 在相同 MobileNetV3-FPN、损失和 12 epoch 协议下带来小幅连续集几何收益，但推理吞吐下降约 21%，弱来源组仍明显落后生产水平，暂不晋升。
+
+**证据**：固定 manifest `0a2dbe850a4dd2ce0a8e21602046a83a92c33378ff0bd5f86dddcb49a0f46eea`，兼容 warm-start。1280×720、阈值 `0.2` 在 927 帧连续集上的 pooled F1@8 为 `0.7777`（precision/recall `0.8598/0.7099`），较 960×544 skeleton 候选 `0.7633` 提升 `0.0144`；最弱来源组 `池高宇-fef6c7bcb0` 为 `0.4730`，Presence F1 `0.9940`，最长缺失/恢复 `0/0`，Chamfer/HD95 `24.58/108.28 px`。FPS 为 `11.61`，低于 960×544 的 `14.70`。独立静态 test 最佳 F1@8 为 `0.8267`（阈值 `0.1`）。
+
+**适用范围**：当前 reviewed split、MobileNetV3-FPN、skeleton-cover 解码及 927 帧连续集协议；高分辨率显存和运行时成本会随设备变化，不外推到其他模型或输入比例。
+
+**后续建议**：若部署吞吐门槛可放宽，可继续围绕 1280×720 针对弱来源做数据增强或 polyline loss；否则优先保留 960×544 生产路径并优化弱场景几何误差。
+
 ## 双阈值连通生长在静态与连续集上的分歧
 
 **结论**：在固定高阈值 `0.9204` 下，Canny 式低阈值连通生长可改善独立静态 test 的中心线召回，但在包含时序融合与颜色候选的连续集上未提升 pooled centerline F1@8，因此不能仅凭静态指标晋升。
