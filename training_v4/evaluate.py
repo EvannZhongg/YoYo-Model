@@ -38,7 +38,7 @@ def decode_centerline(heat: np.ndarray, direction: np.ndarray, threshold: float)
 
 
 @torch.inference_mode()
-def evaluate(weights: str | Path, dataset_dir: str | Path, split: str = "test", device_name: str = "cuda", thresholds: list[float] | None = None, max_samples: int | None = None, decoder: str = "component") -> dict[str, Any]:
+def evaluate(weights: str | Path, dataset_dir: str | Path, split: str = "test", device_name: str = "cuda", thresholds: list[float] | None = None, max_samples: int | None = None) -> dict[str, Any]:
     weights, dataset_dir = Path(weights).resolve(), Path(dataset_dir).resolve(); device = resolve_device(device_name); model, checkpoint = load_model(weights, device); cfg = checkpoint["model_config"]; width, height = int(cfg["input_width"]), int(cfg["input_height"])
     image_root, label_root = dataset_dir / "images" / split, dataset_dir / "labels" / split
     pairs = [(p, label_root / p.relative_to(image_root).with_suffix(".txt")) for p in sorted(image_root.rglob("*")) if p.is_file() and (label_root / p.relative_to(image_root).with_suffix(".txt")).exists()]
@@ -53,7 +53,7 @@ def evaluate(weights: str | Path, dataset_dir: str | Path, split: str = "test", 
         tensor = normalize_image(boxed).unsqueeze(0).to(device); output = model(tensor); heat = torch.sigmoid(output[:, 0]).cpu().numpy()[0]; direction = torch.tanh(output[:, 1:]).cpu().numpy()[0]
         target_skel = _skeletonize(mask); target_paths = [restore_coordinates(path, meta) for path in _skeleton_cover_paths(target_skel, 8, 256)]
         for threshold in thresholds:
-            decoded = decode_flux_centerline(heat, direction, float(threshold)) if decoder == "flux" else decode_centerline(heat, direction, float(threshold))
+            decoded = decode_centerline(heat, direction, float(threshold))
             pred_skel = _skeletonize(decoded); pred_paths = [restore_coordinates(path, meta) for path in _skeleton_cover_paths(pred_skel, 8, 256)]
             metrics = centerline_pair_metrics(target_paths, pred_paths, tolerance_px=(8.0,), spacing_px=2.0); tol = metrics["tolerances"]["8"]
             slot = aggregate[str(threshold)]; slot["target_samples"] += metrics["target_samples"]; slot["prediction_samples"] += metrics["prediction_samples"]; slot["target_hits"] += tol["target_hits"]; slot["prediction_hits"] += tol["prediction_hits"]
@@ -61,7 +61,7 @@ def evaluate(weights: str | Path, dataset_dir: str | Path, split: str = "test", 
     summary = {}
     for threshold, slot in aggregate.items():
         precision = slot["prediction_hits"] / max(1, slot["prediction_samples"]); recall = slot["target_hits"] / max(1, slot["target_samples"]); summary[threshold] = {"metric": "pooled_centerline_f1_at_8_source_px", "precision": precision, "recall": recall, "f1": 2 * precision * recall / max(1e-9, precision + recall), **slot}
-    return {"schema_version": "yoyo_training_v4_eval_v1", "task": "centerline_heatmap_direction", "decoder": decoder, "weights": str(weights), "weights_sha256": sha256_file(weights), "dataset_dir": str(dataset_dir), "split": split, "dataset_manifest_sha256": sha256_file(dataset_dir / "manifest.json"), "summary": summary, "samples": len(pairs), "rows": rows}
+    return {"schema_version": "yoyo_training_v4_eval_v1", "task": "centerline_heatmap_direction", "decoder": "component", "weights": str(weights), "weights_sha256": sha256_file(weights), "dataset_dir": str(dataset_dir), "split": split, "dataset_manifest_sha256": sha256_file(dataset_dir / "manifest.json"), "summary": summary, "samples": len(pairs), "rows": rows}
 
 
 def main():
