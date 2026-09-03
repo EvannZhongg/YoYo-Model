@@ -15,6 +15,7 @@ from string_segmentation.semantic_metrics import (
     metrics_at_threshold,
     validation_is_better,
 )
+from config import TRACKING_CONFIG
 from string_segmentation.semantic_model import (
     LetterboxMeta,
     ReviewedStringDataset,
@@ -232,6 +233,7 @@ class SemanticStringTests(unittest.TestCase):
         )
         self.assertEqual(metrics["centerline"]["metric"], "pooled_centerline_f1_at_8_source_px")
         self.assertEqual(metrics["centerline"]["f1"], 1.0)
+        self.assertEqual(metrics["max_components"], TRACKING_CONFIG.string_max_components)
 
     def test_validation_selection_prefers_centerline_over_mask_f1(self):
         lower_mask_f1 = {

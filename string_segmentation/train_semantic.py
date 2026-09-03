@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from common.files import sha256_file
-from config import SEMANTIC_STRING_CONFIG
+from config import SEMANTIC_STRING_CONFIG, TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_metrics import (
     balanced_validation_key,
@@ -400,6 +400,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             threshold, validation_metrics, threshold_sweep = select_threshold(
                 validation_samples,
                 thresholds=threshold_values,
+                max_components=TRACKING_CONFIG.string_max_components,
             )
             key = balanced_validation_key(validation_metrics)
             improved = not best_metrics or validation_is_better(validation_metrics, best_metrics)
@@ -510,6 +511,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "early_stopping_min_epochs": int(args.early_stopping_min_epochs),
             "threshold_sweep_count": int(args.threshold_sweep_count),
             "threshold_values": [float(value) for value in threshold_values],
+            "max_components": int(TRACKING_CONFIG.string_max_components),
             "validation_every": int(args.validation_every),
             **model_config,
         },

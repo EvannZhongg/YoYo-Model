@@ -15,7 +15,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from common.files import sha256_file
-from config import SEMANTIC_STRING_CONFIG
+from config import SEMANTIC_STRING_CONFIG, TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_metrics import collect_probabilities, metrics_at_threshold, remove_small_components
 from string_segmentation.semantic_model import (
@@ -139,6 +139,7 @@ def evaluate(
     output_dir: str | Path | None = None,
     min_component_pixels: int = 8,
     low_threshold: float | None = None,
+    max_components: int = TRACKING_CONFIG.string_max_components,
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
@@ -164,6 +165,7 @@ def evaluate(
         tolerance_px=3,
         min_component_pixels=max(1, int(min_component_pixels)),
         low_threshold=low_threshold,
+        max_components=max(1, int(max_components)),
     )
     manifest_path = dataset_dir / "manifest.json"
     current_manifest_hash = sha256_file(manifest_path)
@@ -188,6 +190,7 @@ def evaluate(
         "weights": str(weights.resolve()),
         "weights_sha256": sha256_file(weights),
         "min_component_pixels": int(min_component_pixels),
+        "max_components": max(1, int(max_components)),
         "low_threshold": low_threshold,
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
@@ -225,6 +228,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--min-component-pixels", type=int, default=8)
+    parser.add_argument("--max-components", type=int, default=TRACKING_CONFIG.string_max_components)
     return parser.parse_args()
 
 
@@ -240,6 +244,7 @@ def main() -> int:
         args.output_dir or None,
         args.min_component_pixels,
         args.low_threshold,
+        args.max_components,
     )
     document = json.dumps(result, ensure_ascii=False, indent=2)
     encoding = sys.stdout.encoding or "utf-8"

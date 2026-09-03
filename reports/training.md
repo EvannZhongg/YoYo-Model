@@ -10,9 +10,10 @@
 | 方向识别 | 悠悠球 ROI 三分类模型；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 5 FPS 稳态、25 FPS 突发，EMA 与滞回 |
 | 姿态审核 | RTMPose-m WholeBody（可选） | 默认关闭，不参与主输出 |
 
-Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训练数据身份由
-`datasets/1Ayoyo_dataset/string_segmentation/manifest.json` 固定，SHA-256 为
-`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`。
+Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。生产语义模型的训练
+数据身份由其 checkpoint 和 `run_manifest.json` 固定，manifest SHA-256 为
+`f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`；当前工作区训练视图
+已扩展，评估时需按下文区分 native test 与跨 manifest test。
 
 ## 悠悠球检测模型
 
@@ -65,12 +66,23 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 `f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`，验证选择的
 冻结阈值为 `0.9204`。
 
-| split | 样本数 | Pixel Dice | Tolerant F1@3 | Presence F1 | 负图平均误检像素 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| test | 136 | 0.694979 | 0.927502 | 0.976562 | 33.500 |
+固定验证阈值 `0.9204` 后，静态评估与运行时统一使用 `max_components=32`、
+`min_component_pixels=8` 和 `max_polyline_points=64`。生产 checkpoint 在保存的训练
+manifest（SHA-256 `f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`）
+上的结果为：
 
-固定验证阈值 `0.9204` 后，覆盖式骨架中心线在 val/test 上的 centerline F1@8 分别为
-`0.739734` 和 `0.767794`；test precision/recall 为 `0.784026/0.752220`。
+| split | 样本数 | centerline P / R / F1@8 | Presence F1 | Pixel Dice / Tolerant F1@3 | 负图平均误检像素 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| val | 136 | 0.850034 / 0.779066 / 0.813005 | 0.987952 | 0.651010 / 0.894302 | 1.909 |
+| test | 136 | 0.860528 / 0.800567 / 0.829465 | 0.976562 | 0.694979 / 0.927502 | 33.500 |
+
+这两项静态结果由同一 SHA-256 为
+`5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4` 的权重复评得到。
+当前工作区 `datasets/1Ayoyo_dataset/string_segmentation/manifest.json` 已更新为新的
+扩展视图（SHA-256 `0a2dbe850a4dd2ce0a8e21602046a83a92c33378ff0bd5f86dddcb49a0f46eea`），
+不能作为该 checkpoint 的 native test；复现静态结果时
+应使用 `annotations/lineage/backups/yoyo-dataset-1Ayoyo-before-20260902-EZONE1A-r4/`
+中的保存视图，或显式记录为跨 manifest 评估。
 
 训练阶段的 checkpoint 与阈值选择统一使用
 `pooled_centerline_f1_at_8_source_px`：由 mask 骨架化后映射到源图像坐标，采用与连续集相同的
@@ -79,13 +91,21 @@ Workbench 和 CLI 都从 `config.yaml`、`config.py` 读取以上默认值。训
 Tolerant F1@3 继续作为静态语义诊断指标。
 
 在最新 `1Ayoyo_consecutive`（manifest SHA-256
-`2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个 group（固定 reviewed yoyo 框、阈值
-`0.9204`、颜色/亮脊增强、语义预筛、颜色候选概率均值门槛 `0.70` 和时序协议）上，
-将运行时组件上限从 `8` 提升到 `32` 后，pooled centerline F1@8 为 `0.807238`
-（相同权重、上限 `8` 为 `0.766228`），Presence F1 保持 `0.991772`；按 pair frame
-加权的几何 Chamfer/HD95 为 `12.7498/54.2854 px`，最长缺失段和最大恢复延迟仍为
-`4` 帧。最弱 group 为 `池高宇-fef6c7bcb0`（三段中的最低 F1@8 `0.615901`，高于
-上限 `8` 的 `0.612640`）。评估器默认门槛与追踪器配置统一为 `0.70`。
+`2065E8C684DF3594CA1010AD4B95D3245F6B592A7E5A2670038DE07D66B56AF7`）的 927 帧、10 个
+group 上，最终生产后处理配置为阈值 `0.9204`、颜色/亮脊增强、语义预筛、颜色候选
+概率均值门槛 `0.70`、组件上限 `32`、最小组件 `8`、最多折线点 `64`、光流传播上限
+`12` 和前后向误差 `4 px`。固定 reviewed yoyo 框后的 pooled 结果为：
+
+| 配置 | centerline F1@8 | Presence F1 | Chamfer / HD95 (px) | 最长缺失 / 最大恢复 (帧) | 平均预测组件 / 目标组件 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 最终生产 `max_components=32` | 0.807238 | 0.991772 | 12.7498 / 54.2854 | 4 / 4 | 15.82 / 2.67 |
+| 对照 `max_components=8` | 0.766228 | 0.991772 | 14.4312 / 60.9098 | 4 / 4 | - / - |
+
+最终生产配置的最弱来源组为 `池高宇-fef6c7bcb0`，F1@8 为 `0.615901`；10 组中平均
+每帧输出 `15.82` 个预测组件（标注平均 `2.67` 个），组件上限未改变 Presence F1，
+但显著提高了多段中心线召回。语义 checkpoint 的验证阈值为 `0.9204`；追踪器的
+`string_confidence=0.40` 仅作为下限，因此当前生产实际阈值仍为 `0.9204`。`0.70` 是
+颜色/亮脊候选的概率均值门槛。
 
 晋升判定以连续集 pooled centerline F1@8 为主指标，同时报告最弱来源组并设置回退护栏。最长缺失段/恢复延迟和FPS 作为安全与部署门槛，Chamfer/HD95 作为几何诊断。
 Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；单一阈值必须先在 val 校准后
@@ -102,8 +122,8 @@ Pixel Dice 会随标注线宽和缓冲规则变化，不作为主排名指标；
 复现证据：
 
 - `runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
-- `tmp/semantic_skeleton_cover_test_t092/test_semantic_metrics_threshold_0p9204.json`
-- `tmp/semantic_skeleton_cover_val_t092/val_semantic_metrics_threshold_0p9204.json`
+- `tmp/semantic_production_aligned/test_semantic_metrics.json`
+- `tmp/semantic_production_aligned/val_semantic_metrics.json`
 - `tmp/semantic_skeleton_cover_optimized/summary.json`
 - `tmp/production_comp32_full/summary.json`
 - `tmp/fps_comp32/邬聪聪_20260902T183010Z_bd9f5c2a/run.json`
@@ -131,10 +151,12 @@ Lucas-Kanade 前后向光流，传播上限为 12 帧，前后向误差上限为
 当前默认权重为：
 权重 SHA-256：`f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
 
-在 65 张独立 test 上，Top-1 为 `0.9231`，Macro Recall 为 `0.8732`；三类 recall
-分别为 `0.8462`、`0.9552`、`0.8182`。连续集使用概率 EMA `alpha=0.5`、切换 margin
-`0.05`、连续 4 次确认和强切换置信度 `0.9`。856 帧离线回放 Accuracy 为 `0.903037`，
-Macro Recall 为 `0.864272`。
+在原训练 manifest 的 65 张 native test 上，Top-1 为 `0.9231`，Macro Recall 为
+`0.8818`；三类 recall 分别为 `0.8000`、`0.9565`、`0.8889`。在后续 91 张扩展 test
+上的显式跨 manifest 复评中，Top-1 为 `0.9231`，Macro Recall 为 `0.8732`，三类 recall
+分别为 `0.8462`、`0.9552`、`0.8182`；该结果用于同一扩展集上的模型比较，不替代 native
+test。连续集使用概率 EMA `alpha=0.5`、切换 margin `0.05`、连续 4 次确认和强切换
+置信度 `0.9`。856 帧离线回放 Accuracy 为 `0.903037`，Macro Recall 为 `0.864272`。
 
 ## 推理性能与验证
 
@@ -158,9 +180,9 @@ eager 路径。RTX 4070 Laptop / PyTorch 2.11 的同输入微基准为 `6.918 ->
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.evaluate_semantic `
   --weights runs\experiments\semantic_ablation_nomorph_foundation_r1\weights\best.pt `
-  --dataset-dir datasets\1Ayoyo_dataset\string_segmentation `
+  --dataset-dir annotations\lineage\backups\yoyo-dataset-1Ayoyo-before-20260902-EZONE1A-r4\string_segmentation `
   --split test --threshold 0.9204 `
-  --min-component-pixels 8 --device cuda `
+  --max-components 32 --min-component-pixels 8 --device cuda `
   --output-dir tmp\semantic_production_latest
 
 .\.venv\Scripts\python.exe -m string_segmentation.evaluate_consecutive `

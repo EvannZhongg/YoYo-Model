@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import torch
 
+from config import TRACKING_CONFIG
 from string_segmentation.semantic_model import hysteresis_mask, letterbox, semantic_mask_observation
 from video_tracking.sequence_metrics import centerline_pair_metrics
 
@@ -61,6 +62,7 @@ def _centerline_pair_from_masks(
     low_threshold: float | None,
     source_shape: tuple[int, int],
     min_component_pixels: int,
+    max_components: int,
 ) -> dict[str, Any]:
     source_height, source_width = source_shape
     _, _, meta = letterbox(
@@ -70,7 +72,7 @@ def _centerline_pair_from_masks(
     )
     common_kwargs = {
         "min_component_pixels": max(1, int(min_component_pixels)),
-        "max_components": 8,
+        "max_components": max(1, int(max_components)),
         "max_polyline_points": 64,
     }
     target_geometry = semantic_mask_observation(target.astype(np.float32), meta, 0.5, **common_kwargs)
@@ -91,6 +93,7 @@ def metrics_at_threshold(
     tolerance_px: int = 3,
     min_component_pixels: int = 8,
     low_threshold: float | None = None,
+    max_components: int = TRACKING_CONFIG.string_max_components,
 ) -> dict[str, Any]:
     true_positive = false_positive = false_negative = 0
     tolerant_prediction_match = tolerant_target_match = 0
@@ -140,6 +143,7 @@ def metrics_at_threshold(
             low_threshold,
             tuple(sample.get("source_shape", prediction.shape)),
             min_component_pixels,
+            max_components,
         )
         centerline_tolerance = centerline["tolerances"]["8"]
         centerline_target_samples += int(centerline["target_samples"])
@@ -218,6 +222,7 @@ def metrics_at_threshold(
             3,
         ),
         "sample_count": len(image_rows),
+        "max_components": max(1, int(max_components)),
         "positive_images": image_tp + image_fn,
         "negative_images": image_fp + image_tn,
         "images": image_rows,
@@ -252,13 +257,20 @@ def select_threshold(
     thresholds: Iterable[float] | None = None,
     tolerance_px: int = 3,
     min_component_pixels: int = 8,
+    max_components: int = TRACKING_CONFIG.string_max_components,
 ) -> tuple[float, dict[str, Any], list[dict[str, Any]]]:
     # Thin-string models often need a high operating threshold: the negative
     # class is visually dominated by dark fabric and stage graphics, so a
     # lower threshold can produce large false-positive components.
     values = list(thresholds or np.linspace(0.15, 0.995, 35).tolist())
     results = [
-        metrics_at_threshold(samples, value, tolerance_px, min_component_pixels)
+        metrics_at_threshold(
+            samples,
+            value,
+            tolerance_px,
+            min_component_pixels,
+            max_components=max_components,
+        )
         for value in values
     ]
     max_centerline = max(balanced_validation_key(item)[0] for item in results)
