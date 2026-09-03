@@ -21,11 +21,6 @@ from video_tracking.orientation_four import decode as decode_four_class
 from video_tracking.orientation_three import decode as decode_three_class
 
 
-# Backward-compatible names used by tracking and evaluation callers.
-ORIENTATION_CLASSES = TRICK_ORIENTATION_CLASSES
-ORIENTATION_CLASS_ORDER = TRICK_ORIENTATION_CLASS_ORDER
-
-
 @dataclass
 class OrientationTemporalFilter:
     """Causal EMA and hysteresis for sparse orientation observations."""
@@ -62,16 +57,16 @@ class OrientationTemporalFilter:
 
     def update(self, prediction: dict[str, Any], timestamp_s: float | None = None) -> dict[str, Any]:
         raw_probabilities = prediction.get("probabilities") or {}
-        if set(raw_probabilities) != ORIENTATION_CLASSES:
+        if set(raw_probabilities) != TRICK_ORIENTATION_CLASSES:
             raise ValueError(f"orientation probabilities have incompatible classes: {raw_probabilities}")
-        probabilities = {name: float(raw_probabilities[name]) for name in ORIENTATION_CLASS_ORDER}
+        probabilities = {name: float(raw_probabilities[name]) for name in TRICK_ORIENTATION_CLASS_ORDER}
         if not all(math.isfinite(value) and value >= 0.0 for value in probabilities.values()):
             raise ValueError("orientation probabilities must be finite and non-negative")
         total = sum(probabilities.values())
         if total <= 0.0:
             raise ValueError("orientation probabilities must have positive mass")
         probabilities = {name: value / total for name, value in probabilities.items()}
-        raw_label = max(ORIENTATION_CLASS_ORDER, key=probabilities.__getitem__)
+        raw_label = max(TRICK_ORIENTATION_CLASS_ORDER, key=probabilities.__getitem__)
 
         timestamp = None if timestamp_s is None else float(timestamp_s)
         if timestamp is not None and not math.isfinite(timestamp):
@@ -89,9 +84,9 @@ class OrientationTemporalFilter:
                 alpha = float(self.ema_alpha)
             self._ema = {
                 name: (1.0 - alpha) * self._ema[name] + alpha * probabilities[name]
-                for name in ORIENTATION_CLASS_ORDER
+                for name in TRICK_ORIENTATION_CLASS_ORDER
             }
-            candidate = max(ORIENTATION_CLASS_ORDER, key=self._ema.__getitem__)
+            candidate = max(TRICK_ORIENTATION_CLASS_ORDER, key=self._ema.__getitem__)
             if candidate == self._label:
                 self._pending_label = None
                 self._pending_count = 0
@@ -132,12 +127,12 @@ class OrientationTemporalFilter:
             "label": label,
             "confidence": round(float(self._ema[label]), 6),
             "probabilities": {
-                name: round(float(self._ema[name]), 6) for name in ORIENTATION_CLASS_ORDER
+                name: round(float(self._ema[name]), 6) for name in TRICK_ORIENTATION_CLASS_ORDER
             },
             "raw_label": raw_label,
             "raw_confidence": round(float(probabilities[raw_label]), 6),
             "raw_probabilities": {
-                name: round(float(probabilities[name]), 6) for name in ORIENTATION_CLASS_ORDER
+                name: round(float(probabilities[name]), 6) for name in TRICK_ORIENTATION_CLASS_ORDER
             },
             "temporal_filter": {
                 "status": status,
@@ -302,7 +297,7 @@ def predict_orientation(
     return {
         "label": label,
         "confidence": round(confidence, 6),
-        "probabilities": {name: round(coarse_probabilities[name], 6) for name in ORIENTATION_CLASS_ORDER},
+        "probabilities": {name: round(coarse_probabilities[name], 6) for name in TRICK_ORIENTATION_CLASS_ORDER},
         "presentation_label": presentation_label,
         "presentation_confidence": round(top1_confidence, 6),
         "presentation_probabilities": (

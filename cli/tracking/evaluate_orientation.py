@@ -17,12 +17,12 @@ from common.files import sha256_file
 from common.orientation import (
     PRESENTATION_ORIENTATION_CLASS_ORDER,
     PRESENTATION_TO_TRICK,
+    TRICK_ORIENTATION_CLASS_ORDER,
     to_trick_probabilities,
     validate_orientation_names,
 )
 from config import BASE_DIR, TRACKING_CONFIG
 from video_tracking.orientation import (
-    ORIENTATION_CLASS_ORDER,
     OrientationTemporalFilter,
     orientation_observation_is_unstable,
     orientation_crop_box,
@@ -231,7 +231,7 @@ def _metrics(records: list[dict[str, Any]], predictions: dict[str, str]) -> dict
             class_correct[expected] += int(expected == actual)
     recalls = {
         name: round(class_correct[name] / targets[name], 6) if targets[name] else None
-        for name in ORIENTATION_CLASS_ORDER
+        for name in TRICK_ORIENTATION_CLASS_ORDER
     }
     valid_recalls = [value for value in recalls.values() if value is not None]
     return {

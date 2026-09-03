@@ -18,13 +18,11 @@ from common.files import sha256_file
 from common.orientation import (
     PRESENTATION_ORIENTATION_CLASS_ORDER,
     PRESENTATION_TO_TRICK,
-    TRICK_ORIENTATION_CLASS_ORDER,
 )
 from config import BASE_DIR
 
 
 PRESENTATION_ORIENTATIONS = PRESENTATION_ORIENTATION_CLASS_ORDER
-COARSE_ORIENTATIONS = TRICK_ORIENTATION_CLASS_ORDER
 
 
 def _yoyo_bbox(annotation: dict[str, Any]) -> tuple[float, float, float, float] | None:
@@ -78,7 +76,7 @@ def _build_orientation_view(
     output_name: str = "orientation_roi",
     class_order: tuple[str, ...] = PRESENTATION_ORIENTATIONS,
 ) -> dict[str, Any]:
-    coarse_classes = class_order == COARSE_ORIENTATIONS
+    coarse_classes = class_order != PRESENTATION_ORIENTATIONS
     dataset_dir = dataset_dir.resolve()
     parent_path = dataset_dir / "manifest.json"
     parent = json.loads(parent_path.read_text(encoding="utf-8"))
@@ -239,64 +237,20 @@ def _build_orientation_view(
     return manifest
 
 
-def build_three_class_orientation_view(
-    dataset_dir: Path,
-    clear: bool = False,
-    include_backup_yoyos_train: bool = False,
-    output_name: str = "orientation_roi",
-) -> dict[str, Any]:
-    """Build the coarse trick-orientation (three-class) view."""
-    return _build_orientation_view(
-        dataset_dir,
-        clear,
-        include_backup_yoyos_train,
-        output_name,
-        TRICK_ORIENTATION_CLASS_ORDER,
-    )
-
-
-def build_four_class_orientation_view(
-    dataset_dir: Path,
-    clear: bool = False,
-    include_backup_yoyos_train: bool = False,
-    output_name: str = "orientation_roi",
-) -> dict[str, Any]:
-    """Build the presentation-orientation (four-class) view."""
-    return _build_orientation_view(
-        dataset_dir,
-        clear,
-        include_backup_yoyos_train,
-        output_name,
-        PRESENTATION_ORIENTATION_CLASS_ORDER,
-    )
-
-
-def build_orientation_view(
-    dataset_dir: Path,
-    clear: bool = False,
-    include_backup_yoyos_train: bool = False,
-    output_name: str = "orientation_roi",
-    coarse_classes: bool = False,
-) -> dict[str, Any]:
-    """Compatibility entry point; defaults to the four-class view."""
-    builder = build_three_class_orientation_view if coarse_classes else build_four_class_orientation_view
-    return builder(dataset_dir, clear, include_backup_yoyos_train, output_name)
-
-
 def main() -> int:
+    from training_v3.orientation_four import build_orientation_view
+
     parser = argparse.ArgumentParser(description="Build the trick-region orientation classification view.")
     parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
     parser.add_argument("--clear", action="store_true")
     parser.add_argument("--include-backup-yoyos-train", action="store_true")
     parser.add_argument("--output-name", default="orientation_roi")
-    parser.add_argument("--coarse-classes", action="store_true")
     args = parser.parse_args()
     manifest = build_orientation_view(
         Path(args.dataset_dir),
         args.clear,
         args.include_backup_yoyos_train,
         args.output_name,
-        args.coarse_classes,
     )
     print(json.dumps({"view_id": manifest["view_id"], "counts": manifest["counts"], "train_balance": manifest["train_balance"], "data": manifest["data"]}, ensure_ascii=False, indent=2))
     return 0

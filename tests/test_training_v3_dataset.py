@@ -13,7 +13,7 @@ from training_v3.evaluate import (
     _json_value,
 )
 from training_v3.prepare_dataset import ANNOTATION_SCHEMA_VERSION, SOURCE_POLICY, build_training_dataset, discover_annotation_sources
-from training_v3.orientation_view import build_orientation_view
+from training_v3.orientation_four import build_orientation_view
 
 
 def _annotation(group: str, orientation: str, image_name: str, image_sha256: str) -> dict:
