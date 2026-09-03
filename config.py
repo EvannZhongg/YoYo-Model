@@ -145,6 +145,10 @@ class TrackingConfig:
     string_inference_scale: float = float(
         _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 1.0)
     )
+    string_cuda_graph: bool = _as_bool(
+        _env_or_config("TRACKING_STRING_CUDA_GRAPH", "tracking.string_cuda_graph", True),
+        True,
+    )
     string_inference_fps: float = float(
         _env_or_config("TRACKING_STRING_INFERENCE_FPS", "tracking.string_inference_fps", 0.0)
     )

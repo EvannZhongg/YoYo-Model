@@ -66,6 +66,8 @@ tracking:
   # single-threshold baseline. Weak pixels can only grow from high seeds.
   string_low_threshold: null
   string_inference_scale: 1.0
+  # Capture the fixed-size CUDA semantic forward for lower launch overhead.
+  string_cuda_graph: true
   # Reacquire the multi-segment centerline on every frame.
   string_inference_fps: 0.0
   # Add a color/Hough centerline only when the semantic probability map also

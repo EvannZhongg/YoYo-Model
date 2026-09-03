@@ -141,6 +141,16 @@ Macro Recall 为 `0.864272`。
 当前语义模型使用单次 MobileNetV3-FPN 前向。
 关闭可选 RTMPose 后，主追踪输出不变，审核 pipeline 速度更高。
 
+为降低固定 `960x544` CUDA 前向的 kernel launch 开销，默认 CUDA 语义模型现在捕获
+CUDA Graph（`tracking.string_cuda_graph=true`）；CPU、非 CUDA 或捕获失败时自动使用
+eager 路径。RTX 4070 Laptop / PyTorch 2.11 的同输入微基准为 `6.918 -> 6.543 ms`
+（约 `5.4%`），概率图逐位一致；不同输入复核的最大绝对差仍为 `0`。同一邬聪聪
+300 帧端到端配对复测的逐帧 JSONL SHA-256 完全一致，eager/Graph FPS 为
+`10.6918/10.8914` 与 `10.9713/10.8439`，平均基本持平（约 `+0.3%`），因此未改变
+连续集质量或部署门槛。复现实验记录在 `tmp/semantic_runtime_benchmark.json`、
+`tmp/semantic_compile_benchmark.json`、`tmp/fps_graph_formal` 和
+`tmp/fps_graph_formal2`。
+
 统一验证命令：
 
 ```powershell

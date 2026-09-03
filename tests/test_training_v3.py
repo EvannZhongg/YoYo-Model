@@ -22,6 +22,9 @@ class TrainingV3Tests(unittest.TestCase):
         self.assertTrue(parse_args(["input.mp4"]).string_color_semantic_prefilter)
         self.assertEqual(TRACKING_CONFIG.string_max_components, 32)
         self.assertEqual(parse_args(["input.mp4"]).string_max_components, 32)
+        self.assertTrue(TRACKING_CONFIG.string_cuda_graph)
+        self.assertTrue(parse_args(["input.mp4"]).string_cuda_graph)
+        self.assertFalse(parse_args(["input.mp4", "--no-string-cuda-graph"]).string_cuda_graph)
         self.assertEqual(
             parse_args(["input.mp4", "--string-max-components", "5"]).string_max_components,
             5,

@@ -143,6 +143,8 @@ def _load_string_model(
     weights_path: str | Path | None,
     enabled: bool,
     device: str = "",
+    inference_scale: float = 1.0,
+    enable_cuda_graph: bool = True,
 ):
     if not enabled:
         return None, "disabled"
@@ -162,12 +164,37 @@ def _load_string_model(
             requested_device or ("cuda" if torch.cuda.is_available() else "cpu")
         )
         model, checkpoint = load_semantic_checkpoint(path, semantic_device)
+        cuda_graph = False
+        if semantic_device.type == "cuda" and enable_cuda_graph:
+            try:
+                import torch
+
+                input_width, input_height, _ = _semantic_inference_parameters(
+                    checkpoint["model_config"], float(inference_scale)
+                )
+                model.requires_grad_(False)
+                sample = torch.zeros(
+                    1,
+                    3,
+                    input_height,
+                    input_width,
+                    device=semantic_device,
+                )
+                model = torch.cuda.make_graphed_callables(
+                    model,
+                    (sample,),
+                    num_warmup_iters=10,
+                )
+                cuda_graph = True
+            except Exception as exc:
+                logger.warning("Semantic CUDA graph unavailable; using eager inference: %s", exc)
         return {
             "kind": "semantic",
             "model": model,
             "checkpoint": checkpoint,
             "device": semantic_device,
             "path": str(path),
+            "cuda_graph": cuda_graph,
         }, f"semantic:{path}"
     except Exception as exc:
         logger.warning("Semantic string weights unavailable (%s): %s", path, exc)
@@ -914,6 +941,7 @@ def track_video(
     string_confidence: float = TRACKING_CONFIG.string_confidence,
     string_low_threshold: float | None = TRACKING_CONFIG.string_low_threshold,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
+    string_cuda_graph: bool = TRACKING_CONFIG.string_cuda_graph,
     string_inference_fps: float = TRACKING_CONFIG.string_inference_fps,
     string_color_probability_augment: bool = TRACKING_CONFIG.string_color_probability_augment,
     string_bright_line_augment: bool = TRACKING_CONFIG.string_bright_line_augment,
@@ -992,6 +1020,8 @@ def track_video(
         string_weights_path,
         enable_string_model,
         device,
+        string_inference_scale,
+        string_cuda_graph,
     )
     resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
@@ -1557,6 +1587,10 @@ def track_video(
             "pose_weights": str(pose_model.pose_path) if pose_model is not None else str(pose_weights_path or ""),
             "pose_detector": str(pose_model.detector_path) if pose_model is not None else str(pose_detector_path or ""),
             "string_model_enabled": bool(enable_string_model),
+            "string_cuda_graph": bool(
+                isinstance(string_model, dict) and string_model.get("cuda_graph", False)
+            ),
+            "string_cuda_graph_requested": bool(string_cuda_graph),
             "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
             "string_confidence": string_confidence,
             "string_low_threshold": string_low_threshold,
@@ -1709,6 +1743,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Semantic input scale in [0.5, 2.0]; 2.0 preserves more thin-string pixels at higher cost.",
     )
     parser.add_argument(
+        "--string-cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=TRACKING_CONFIG.string_cuda_graph,
+        help="Capture the fixed-size CUDA semantic forward to reduce launch overhead.",
+    )
+    parser.add_argument(
         "--string-inference-fps",
         type=float,
         default=TRACKING_CONFIG.string_inference_fps,
@@ -1832,6 +1872,7 @@ def main() -> int:
         string_confidence=args.string_conf,
         string_low_threshold=args.string_low_threshold,
         string_inference_scale=args.string_inference_scale,
+        string_cuda_graph=args.string_cuda_graph,
         string_inference_fps=args.string_inference_fps,
         string_color_probability_augment=not args.no_string_color_probability_augment,
         string_bright_line_augment=args.string_bright_line_augment,
