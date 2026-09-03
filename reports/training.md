@@ -148,8 +148,10 @@ eager 路径。RTX 4070 Laptop / PyTorch 2.11 的同输入微基准为 `6.918 ->
 300 帧端到端配对复测的逐帧 JSONL SHA-256 完全一致，eager/Graph FPS 为
 `10.6918/10.8914` 与 `10.9713/10.8439`，平均基本持平（约 `+0.3%`），因此未改变
 连续集质量或部署门槛。复现实验记录在 `tmp/semantic_runtime_benchmark.json`、
-`tmp/semantic_compile_benchmark.json`、`tmp/fps_graph_formal` 和
-`tmp/fps_graph_formal2`。
+`tmp/semantic_compile_benchmark.json`、`tmp/semantic_graph_full/summary.json`、
+`tmp/fps_graph_formal` 和 `tmp/fps_graph_formal2`。CUDA Graph 连续集 927 帧复核与
+生产摘要逐组一致：pooled centerline F1@8 `0.807238`、Presence F1 `0.991772`、
+最弱来源组 `0.615901`，最长缺失段/最大恢复延迟均为 `4` 帧。
 
 统一验证命令：
 
