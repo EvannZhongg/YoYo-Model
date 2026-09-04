@@ -7,7 +7,7 @@
 | 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，`conf=0.15`，`IoU=0.7` |
 | 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.9204` |
 | 绳线追踪 | 语义概率图、颜色/亮脊候选、Lucas-Kanade 光流 | 组件上限 `32`，最多传播 `12` 帧 |
-| 方向识别 | 悠悠球 ROI 三分类；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
+| 方向识别 | 悠悠球 ROI 三分类；`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
 | 姿态审核 | RTMPose-m WholeBody | 按需启用 |
 
 Workbench 和 CLI 从 `config.yaml`、`config.py` 读取默认权重。当前绳线模型的训练
@@ -15,7 +15,7 @@ manifest SHA-256 为
 `f79c9805dae3c91df2ad49eb61f96db31a3236291e505c0925e3aad31f307964`；检测权重 SHA-256
 为 `2d5a0e45b9da1aa88609c79015ce7b651e86fb8206d9ae6463f0fa72cf4a0e00`，绳线权重
 SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`，方向
-权重 SHA-256 为 `f00e3766c05d9ae7dc3fe13a9cd45faf3507aab4c9a9acfa6df73b155ff7cd91`。
+权重 SHA-256 为 `56767a96d3d2687b991f161c1318896f9543ca2044eb7f1688e6fd5447bbaf99`。
 
 ## 性能对比
 
@@ -57,10 +57,12 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 
 ### 方向识别
 
-当前模型在原训练 manifest 的 65 张 native test 上 Top-1 为 `0.9231`，Macro Recall
-为 `0.8818`；在 91 张扩展 test 上 Top-1 为 `0.9231`，Macro Recall 为 `0.8732`。
-三类模型输出为 `horizontal`、`normal`、`not_applicable`。连续集离线回放 Accuracy
-为 `0.903037`，Macro Recall 为 `0.864272`。
+当前模型在 `yoyo_unified_5673a7faf873` manifest 的 152 张 native test 上 Top-1 为
+`0.940789`，Macro Recall 为 `0.956780`，三类召回分别为
+`horizontal=0.933333`、`normal=0.937008`、`not_applicable=1.000000`。在
+`1Ayoyo_consecutive` 927 帧回放中，稳态/突发时序 Accuracy 为 `0.960086`、Macro
+Recall 为 `0.863079`，预测切换数为 `10`；同协议旧生产权重为 `0.908306 / 0.859252 / 13`。
+同一 RTX 4070 上 152 张 ROI 配对推理约 `431 FPS`，旧权重约 `456 FPS`，吞吐下降约 `5.5%`。
 
 ## 复现入口
 
@@ -69,7 +71,10 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 - 绳线训练：`runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
 - 绳线静态评估：`tmp/semantic_production_aligned/test_semantic_metrics.json`
 - 绳线连续集评估：`tmp/production_comp32_full/summary.json`
-- 方向评估：`cli/tracking/evaluate_orientation.py`
+- 方向训练：`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/run_manifest.json`
+- 方向 test：`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/test_metrics.json`
+- 方向连续集评估：`runs/experiments/orientation_current5673_foundation_consecutive/metrics.json`
+- 方向评估入口：`cli/tracking/evaluate_orientation.py`
 
 统一测试命令：
 

@@ -95,7 +95,7 @@ tracking:
   # Competition division metadata used for hand-anchor annotation.
   yoyo_division: "1A"
   # Orientation classifier weights; runtime accepts the three- or four-class variant.
-  orientation_weights_path: "runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt"
+  orientation_weights_path: "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt"
   enable_orientation_model: true
   orientation_imgsz: 320
   # Stable cadence is 5 FPS. Ambiguous observations temporarily burst to 25 FPS.
