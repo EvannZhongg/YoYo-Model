@@ -183,3 +183,13 @@
 **适用范围**：当前语义 checkpoint、RTX 4070 Laptop、CUDA Graph、`max_components=32`、`1Ayoyo_consecutive` 10 组/927 帧和扩展 reviewed test；不同 GPU、输入视频尺寸或模型权重需重新测量速度与几何护栏。
 
 **后续建议**：保留 `1.125x` 作为默认部署档，并持续监控误检像素和 Chamfer/HD95；只有在新硬件或新 checkpoint 上重新证明吞吐与几何代价可接受时才考虑更高尺度。
+
+## 新 manifest 候选的召回-安全折中
+
+**结论**：在扩展 reviewed manifest 上训练的 clDice 候选或与现有权重做参数插值，能提高静态 test 和连续集 pooled centerline F1@8，但会引入跨来源 Presence/缺失段回退；将 `1.125x` 下的组件过滤按面积放大、移除 mask closing 或删除亮脊增强，也不能得到更稳健的默认路径。
+
+**证据**：同一 `1Ayoyo_consecutive` 927 帧、`1.125x` 和现有后处理下，`clDice` 候选 soup `alpha=0.25` 的 pooled F1@8 为 `0.831619`，但 Presence F1 `0.990695`、最长缺失 `3` 帧；固定阈值 `0.92` 仍为 Presence `0.989612`、最长缺失 `3`。生产权重的等效面积过滤（`min_component_pixels=10`）为 pooled `0.817964`、最弱组 `0.634876`，低于默认 `0.818297/0.638996`。移除 closing 的完整十组汇总为 `0.822660/0.992358/2`（pooled F1/Presence/最长缺失），几何 Chamfer/HD95 `16.5628/62.3552 px`；删除亮脊增强在关键组均小幅回退。低阈值 `0.70` 的关键组 Presence F1 `0.991720`，但 FP/FN `5/4` 且邬聪聪 Chamfer `51.94 px`。
+
+**适用范围**：当前 `d24d1a0d...` reviewed manifest、生产 MobileNetV3-FPN 权重、`1Ayoyo_consecutive` 10 组/927 帧、`1.125x` 输入及颜色/亮脊/光流协议；不外推到新增真实视频或不同模型校准。
+
+**后续建议**：保留现有权重和 `1.125x` 默认；若要继续优化，优先补充池高宇/邬聪聪等弱来源的真实连续标注或做来源条件校准，不再堆叠这些后处理变体。
