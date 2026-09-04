@@ -293,6 +293,12 @@ class SemanticStringConfig:
     min_mask_width_px: int = int(
         _env_or_config("SEMANTIC_STRING_MIN_MASK_WIDTH_PX", "semantic_string.min_mask_width_px", 1)
     )
+    motion_blur_probability: float = float(
+        _env_or_config("SEMANTIC_STRING_MOTION_BLUR_PROBABILITY", "semantic_string.motion_blur_probability", 0.0)
+    )
+    motion_blur_min_sharpness: float = float(
+        _env_or_config("SEMANTIC_STRING_MOTION_BLUR_MIN_SHARPNESS", "semantic_string.motion_blur_min_sharpness", 37.0)
+    )
     architecture: str = str(
         _env_or_config("SEMANTIC_STRING_ARCHITECTURE", "semantic_string.architecture", "mobilenet_v3_fpn")
     )

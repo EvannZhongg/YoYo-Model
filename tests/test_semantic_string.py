@@ -19,6 +19,8 @@ from config import TRACKING_CONFIG
 from string_segmentation.semantic_model import (
     LetterboxMeta,
     ReviewedStringDataset,
+    apply_directional_motion_blur,
+    labeled_string_sharpness,
     TinyUNet,
     build_string_model,
     focal_dice_loss,
@@ -196,6 +198,40 @@ class SemanticStringTests(unittest.TestCase):
             sample = dataset[0]
             self.assertEqual(tuple(sample["image"].shape), (3, 32, 48))
             self.assertGreater(float(sample["mask"].sum()), 0.0)
+
+            guarded = ReviewedStringDataset(
+                root,
+                "train",
+                48,
+                32,
+                1,
+                True,
+                motion_blur_probability=1.0,
+                motion_blur_min_sharpness=10_000.0,
+            )[0]
+            self.assertFalse(guarded["motion_blur_eligible"])
+            self.assertFalse(guarded["motion_blur_applied"])
+
+    def test_labeled_string_sharpness_distinguishes_local_blur(self):
+        image = np.zeros((48, 64, 3), dtype=np.uint8)
+        mask = np.zeros((48, 64), dtype=np.uint8)
+        cv2.line(mask, (8, 24), (56, 24), 1, 3)
+        image[mask > 0] = 255
+        blurred = cv2.GaussianBlur(image, (11, 11), 3.0)
+
+        self.assertGreater(
+            labeled_string_sharpness(image, mask),
+            labeled_string_sharpness(blurred, mask),
+        )
+
+    def test_directional_motion_blur_preserves_image_shape(self):
+        image = np.zeros((32, 48, 3), dtype=np.uint8)
+        image[:, 24] = 255
+        blurred = apply_directional_motion_blur(image, 5, 0.0)
+
+        self.assertEqual(blurred.shape, image.shape)
+        self.assertEqual(blurred.dtype, image.dtype)
+        self.assertFalse(np.array_equal(blurred, image))
 
     def test_validation_selection_balances_string_quality_and_presence(self):
         reliable = {

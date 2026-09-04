@@ -29,6 +29,8 @@ semantic_string:
   learning_rate: 0.001
   base_channels: 16
   min_mask_width_px: 1
+  motion_blur_probability: 0.0
+  motion_blur_min_sharpness: 37.0
   architecture: "mobilenet_v3_fpn"
   pretrained_backbone: true
   freeze_backbone_epochs: 3

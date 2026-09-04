@@ -146,6 +146,18 @@ def parse_args() -> argparse.Namespace:
         help="Learning-rate multiplier for the pretrained encoder after unfreezing.",
     )
     parser.add_argument("--min-mask-width-px", type=int, default=SEMANTIC_STRING_CONFIG.min_mask_width_px)
+    parser.add_argument(
+        "--motion-blur-probability",
+        type=float,
+        default=SEMANTIC_STRING_CONFIG.motion_blur_probability,
+        help="Apply light directional blur only to sharp reviewed string samples; 0 disables it.",
+    )
+    parser.add_argument(
+        "--motion-blur-min-sharpness",
+        type=float,
+        default=SEMANTIC_STRING_CONFIG.motion_blur_min_sharpness,
+        help="Minimum local Laplacian P75 around the string annotation for blur eligibility.",
+    )
     parser.add_argument("--hard-negative-weight", type=float, default=SEMANTIC_STRING_CONFIG.hard_negative_weight)
     parser.add_argument(
         "--hard-negative-warmup-epochs",
@@ -217,6 +229,10 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("hard-negative warmup epochs must be non-negative")
     if args.negative_sample_weight <= 0:
         raise ValueError("negative sample weight must be positive")
+    if not 0.0 <= args.motion_blur_probability <= 1.0:
+        raise ValueError("motion-blur probability must be in [0, 1]")
+    if args.motion_blur_min_sharpness < 0:
+        raise ValueError("motion-blur minimum sharpness must be non-negative")
     if args.early_stopping_patience < 0 or args.early_stopping_min_epochs < 1:
         raise ValueError("early-stopping patience must be non-negative and minimum epochs must be positive")
     if args.threshold_sweep_count < 1:
@@ -271,6 +287,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         args.input_height,
         args.min_mask_width_px,
         augment=True,
+        motion_blur_probability=args.motion_blur_probability,
+        motion_blur_min_sharpness=args.motion_blur_min_sharpness,
     )
     val_dataset = ReviewedStringDataset(
         dataset_dir,
@@ -363,6 +381,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     epochs_without_improvement = 0
     completed_epochs = 0
     stopped_early = False
+    motion_blur_eligible_total = 0
+    motion_blur_applied_total = 0
 
     for epoch in range(1, args.epochs + 1):
         backbone_frozen = args.architecture == "mobilenet_v3_fpn" and epoch <= args.freeze_backbone_epochs
@@ -371,12 +391,16 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         model.train()
         loss_total = focal_total = dice_total = hard_negative_total = 0.0
         batch_count = 0
+        epoch_motion_blur_eligible = 0
+        epoch_motion_blur_applied = 0
         effective_hard_negative_weight = _scheduled_hard_negative_weight(
             args.hard_negative_weight,
             epoch,
             args.hard_negative_warmup_epochs,
         )
         for batch_data in train_loader:
+            epoch_motion_blur_eligible += int(batch_data["motion_blur_eligible"].sum().item())
+            epoch_motion_blur_applied += int(batch_data["motion_blur_applied"].sum().item())
             images = batch_data["image"].to(device, non_blocking=True)
             masks = batch_data["mask"].to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
@@ -423,6 +447,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "train_dice_loss": dice_total / max(1, batch_count),
             "train_hard_negative": hard_negative_total / max(1, batch_count),
             "hard_negative_weight_effective": effective_hard_negative_weight,
+            "motion_blur_eligible_samples": epoch_motion_blur_eligible,
+            "motion_blur_applied_samples": epoch_motion_blur_applied,
             "is_best": improved,
             "validation_performed": validation_performed,
             "validation": validation_metrics if validation_performed else None,
@@ -455,6 +481,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             manifest_hash,
         )
         completed_epochs = epoch
+        motion_blur_eligible_total += epoch_motion_blur_eligible
+        motion_blur_applied_total += epoch_motion_blur_applied
         if improved:
             best_epoch = epoch
             best_threshold = threshold
@@ -505,6 +533,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "hard_negative_weight": float(args.hard_negative_weight),
             "hard_negative_warmup_epochs": int(args.hard_negative_warmup_epochs),
             "negative_sample_weight": float(args.negative_sample_weight),
+            "motion_blur_probability": float(args.motion_blur_probability),
+            "motion_blur_min_sharpness": float(args.motion_blur_min_sharpness),
             "freeze_backbone_epochs": int(args.freeze_backbone_epochs),
             "backbone_lr_multiplier": float(args.backbone_lr_multiplier),
             "early_stopping_patience": int(args.early_stopping_patience),
@@ -519,6 +549,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "completed_epochs": completed_epochs,
             "stopped_early": stopped_early,
             "stop_reason": "validation_patience_exhausted" if stopped_early else "requested_epochs_completed",
+            "motion_blur_eligible_samples": motion_blur_eligible_total,
+            "motion_blur_applied_samples": motion_blur_applied_total,
         },
         "selection": {
             "split": "val",

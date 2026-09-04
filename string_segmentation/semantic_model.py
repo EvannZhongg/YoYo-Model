@@ -296,6 +296,41 @@ def image_label_pairs(dataset_dir: Path, split: str) -> list[tuple[Path, Path]]:
     return pairs
 
 
+def labeled_string_sharpness(image: np.ndarray, mask: np.ndarray, radius_px: int = 4) -> float:
+    """Measure local edge strength around the reviewed string annotation."""
+    binary = (mask > 0).astype(np.uint8)
+    if not np.any(binary):
+        return 0.0
+    kernel_size = max(1, int(radius_px) * 2 + 1)
+    neighborhood = cv2.dilate(
+        binary,
+        np.ones((kernel_size, kernel_size), dtype=np.uint8),
+        iterations=1,
+    ) > 0
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    response = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+    return float(np.percentile(response[neighborhood], 75))
+
+
+def apply_directional_motion_blur(image: np.ndarray, kernel_size: int, angle_degrees: float) -> np.ndarray:
+    size = max(3, int(kernel_size) | 1)
+    kernel = np.zeros((size, size), dtype=np.float32)
+    center = (size - 1) / 2.0
+    radius = center
+    radians = np.deg2rad(float(angle_degrees))
+    dx = np.cos(radians) * radius
+    dy = np.sin(radians) * radius
+    cv2.line(
+        kernel,
+        (int(round(center - dx)), int(round(center - dy))),
+        (int(round(center + dx)), int(round(center + dy))),
+        1.0,
+        1,
+    )
+    kernel /= max(float(kernel.sum()), 1.0)
+    return np.ascontiguousarray(cv2.filter2D(image, -1, kernel))
+
+
 class ReviewedStringDataset(Dataset):
     def __init__(
         self,
@@ -305,6 +340,8 @@ class ReviewedStringDataset(Dataset):
         input_height: int,
         min_mask_width_px: int = 1,
         augment: bool = False,
+        motion_blur_probability: float = 0.0,
+        motion_blur_min_sharpness: float = 37.0,
     ):
         self.dataset_dir = Path(dataset_dir)
         self.split = split
@@ -312,6 +349,8 @@ class ReviewedStringDataset(Dataset):
         self.input_height = int(input_height)
         self.min_mask_width_px = max(1, int(min_mask_width_px))
         self.augment = bool(augment)
+        self.motion_blur_probability = max(0.0, min(1.0, float(motion_blur_probability)))
+        self.motion_blur_min_sharpness = max(0.0, float(motion_blur_min_sharpness))
         self.pairs = image_label_pairs(self.dataset_dir, split)
         if not self.pairs:
             raise RuntimeError(f"No reviewed semantic samples found for split={split}: {self.dataset_dir}")
@@ -331,6 +370,13 @@ class ReviewedStringDataset(Dataset):
         if self.min_mask_width_px > 1 and np.any(mask):
             kernel = np.ones((self.min_mask_width_px, self.min_mask_width_px), dtype=np.uint8)
             mask = cv2.dilate(mask, kernel, iterations=1)
+        sharpness = 0.0
+        motion_blur_eligible = False
+        motion_blur_applied = False
+        if self.augment and self.motion_blur_probability > 0.0 and np.any(mask):
+            sharpness = labeled_string_sharpness(image, mask)
+            motion_blur_eligible = sharpness >= self.motion_blur_min_sharpness
+            motion_blur_applied = motion_blur_eligible and random.random() < self.motion_blur_probability
         if self.augment and random.random() < 0.5:
             image = np.ascontiguousarray(image[:, ::-1])
             mask = np.ascontiguousarray(mask[:, ::-1])
@@ -338,12 +384,21 @@ class ReviewedStringDataset(Dataset):
             gain = random.uniform(0.88, 1.12)
             bias = random.uniform(-10.0, 10.0)
             image = np.clip(image.astype(np.float32) * gain + bias, 0, 255).astype(np.uint8)
+        if motion_blur_applied:
+            image = apply_directional_motion_blur(
+                image,
+                kernel_size=random.choice((3, 5)),
+                angle_degrees=random.uniform(0.0, 180.0),
+            )
         return {
             "image": normalize_image(image),
             "mask": torch.from_numpy(mask.astype(np.float32)[None, ...]),
             "image_path": str(image_path),
             "label_path": str(label_path),
             "positive": bool(np.any(mask)),
+            "motion_blur_eligible": motion_blur_eligible,
+            "motion_blur_applied": motion_blur_applied,
+            "string_sharpness": sharpness,
         }
 
 
