@@ -24,6 +24,8 @@ class TrainingV3Tests(unittest.TestCase):
         self.assertEqual(parse_args(["input.mp4"]).string_max_components, 32)
         self.assertTrue(TRACKING_CONFIG.string_cuda_graph)
         self.assertTrue(parse_args(["input.mp4"]).string_cuda_graph)
+        self.assertAlmostEqual(TRACKING_CONFIG.string_inference_scale, 1.125)
+        self.assertAlmostEqual(parse_args(["input.mp4"]).string_inference_scale, 1.125)
         self.assertFalse(parse_args(["input.mp4", "--no-string-cuda-graph"]).string_cuda_graph)
         self.assertEqual(
             parse_args(["input.mp4", "--string-max-components", "5"]).string_max_components,

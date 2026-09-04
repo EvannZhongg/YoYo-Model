@@ -81,6 +81,7 @@ def evaluate_consecutive_checkpoint(
     max_components: int = TRACKING_CONFIG.string_max_components,
     min_component_pixels: int = 8,
     low_threshold: float | None = None,
+    inference_scale: float = TRACKING_CONFIG.string_inference_scale,
 ) -> dict[str, Any]:
     weights = weights.resolve()
     dataset_dir = dataset_dir.resolve()
@@ -91,6 +92,11 @@ def evaluate_consecutive_checkpoint(
     config = checkpoint.get("model_config") or {}
     input_width = int(config.get("input_width", 960))
     input_height = int(config.get("input_height", 544))
+    inference_scale = float(inference_scale)
+    if not 0.5 <= inference_scale <= 2.0:
+        raise ValueError("inference_scale must be between 0.5 and 2.0")
+    input_width = max(32, int(round(input_width * inference_scale / 16.0)) * 16)
+    input_height = max(32, int(round(input_height * inference_scale / 16.0)) * 16)
     primary_calibration_threshold = float(
         checkpoint.get("threshold", 0.5) if threshold is None else threshold
     )
@@ -296,6 +302,7 @@ def evaluate_consecutive_checkpoint(
         "threshold": selected_threshold,
         "low_threshold": low_threshold,
         "input_size": [input_width, input_height],
+        "inference_scale": inference_scale,
         "dataset_dir": str(dataset_dir),
         "color_augment": bool(color_augment),
         "color_probability_min_mean": color_probability_min_mean,
@@ -323,6 +330,7 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--inference-scale", type=float, default=TRACKING_CONFIG.string_inference_scale)
     parser.add_argument("--low-threshold", type=float, default=None,
                         help="Optional hysteresis low threshold; retain only low-threshold components touching high seeds.")
     parser.add_argument("--group", action="append", default=[])
@@ -385,6 +393,7 @@ def main() -> int:
         max_polyline_points=args.max_polyline_points,
         max_components=args.max_components,
         min_component_pixels=args.min_component_pixels,
+        inference_scale=args.inference_scale,
     )
     compact = [{
         "source_group": item["source_group"],

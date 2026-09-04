@@ -140,17 +140,23 @@ def evaluate(
     min_component_pixels: int = 8,
     low_threshold: float | None = None,
     max_components: int = TRACKING_CONFIG.string_max_components,
+    inference_scale: float = TRACKING_CONFIG.string_inference_scale,
 ) -> dict[str, Any]:
     weights = Path(weights)
     dataset_dir = Path(dataset_dir)
     device = resolve_device(device_value)
     model, checkpoint = load_checkpoint(weights, device)
     config = checkpoint["model_config"]
+    inference_scale = float(inference_scale)
+    if not 0.5 <= inference_scale <= 2.0:
+        raise ValueError("inference_scale must be between 0.5 and 2.0")
+    input_width = max(32, int(round(int(config["input_width"]) * inference_scale / 16.0)) * 16)
+    input_height = max(32, int(round(int(config["input_height"]) * inference_scale / 16.0)) * 16)
     dataset = ReviewedStringDataset(
         dataset_dir,
         split,
-        int(config["input_width"]),
-        int(config["input_height"]),
+        input_width,
+        input_height,
         int(config.get("min_mask_width_px", 1)),
         augment=False,
     )
@@ -191,6 +197,8 @@ def evaluate(
         "weights_sha256": sha256_file(weights),
         "min_component_pixels": int(min_component_pixels),
         "max_components": max(1, int(max_components)),
+        "inference_scale": inference_scale,
+        "input_size": [input_width, input_height],
         "low_threshold": low_threshold,
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
         "dataset_manifest": str(manifest_path.resolve()),
@@ -220,6 +228,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", choices=["train", "val", "test"], default="test")
     parser.add_argument("--device", default=SEMANTIC_STRING_CONFIG.device)
     parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--inference-scale", type=float, default=TRACKING_CONFIG.string_inference_scale)
     parser.add_argument("--low-threshold", type=float, default=None)
     parser.add_argument(
         "--allow-dataset-mismatch",
@@ -245,6 +254,7 @@ def main() -> int:
         args.min_component_pixels,
         args.low_threshold,
         args.max_components,
+        args.inference_scale,
     )
     document = json.dumps(result, ensure_ascii=False, indent=2)
     encoding = sys.stdout.encoding or "utf-8"

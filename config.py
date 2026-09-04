@@ -143,7 +143,7 @@ class TrackingConfig:
         else float(_env_or_config("TRACKING_STRING_LOW_THRESHOLD", "tracking.string_low_threshold", None))
     )
     string_inference_scale: float = float(
-        _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 1.0)
+        _env_or_config("TRACKING_STRING_INFERENCE_SCALE", "tracking.string_inference_scale", 1.125)
     )
     string_cuda_graph: bool = _as_bool(
         _env_or_config("TRACKING_STRING_CUDA_GRAPH", "tracking.string_cuda_graph", True),

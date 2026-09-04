@@ -5,7 +5,7 @@
 | 模块 | 模型与权重 | 运行参数 |
 | --- | --- | --- |
 | 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，`conf=0.15`，`IoU=0.7` |
-| 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt` | `960x544`，验证阈值 `0.9204` |
+| 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.9204` |
 | 绳线追踪 | 语义概率图、颜色/亮脊候选、Lucas-Kanade 光流 | 组件上限 `32`，最多传播 `12` 帧 |
 | 方向识别 | 悠悠球 ROI 三分类；`runs/candidates/yoyo_unified_2b0cfca8743a_orientation_roi_9cd9d9361ab5_best_yoyo-only-final-warm-freeze10-lr1e4-v1/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
 | 姿态审核 | RTMPose-m WholeBody | 按需启用 |
@@ -50,10 +50,10 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 | 配置 | Centerline F1@8 | Presence F1 | Chamfer / HD95（px） | 最长缺失 / 最大恢复（帧） |
 | --- | ---: | ---: | ---: | ---: |
 | 上一版 `max_components=8` | 0.766228 | 0.991772 | 14.4312 / 60.9098 | 4 / 4 |
-| 当前生产 `max_components=32` | 0.807238 | 0.991772 | 12.7498 / 54.2854 | 4 / 4 |
+| 当前生产 `max_components=32`，`1.125x` 推理 | 0.818297 | 0.994530 | 15.6212 / 57.4703 | 2 / 2 |
 
-当前连续集最弱来源组为 `池高宇-fef6c7bcb0`，Centerline F1@8 为 `0.615901`；300 帧
-端到端吞吐为 `14.6545 FPS`。
+当前连续集最弱来源组为 `池高宇-fef6c7bcb0`，Centerline F1@8 为 `0.638996`；300 帧
+端到端吞吐为约 `11.14 FPS`（两次 `1.125x` 配对均值），相对 `1.0x` 配对均值约下降 `6.7%`。
 
 ### 方向识别
 

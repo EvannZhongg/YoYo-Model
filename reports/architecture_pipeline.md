@@ -9,7 +9,7 @@ flowchart TD
 
     C --> D{存在当前/最近悠悠球<br/>或已有绳线轨迹?}
     D -->|否| E[跳过语义前向]
-    D -->|是| F[单 MobileNetV3-FPN<br/>960x544 / threshold 0.40]
+    D -->|是| F[单 MobileNetV3-FPN<br/>960x544 checkpoint -> 1088x608 推理（1.125x） / threshold 0.40]
     F --> G[语义概率与多组件中心线]
     A --> H[语义支持邻域内<br/>饱和色/亮脊 Hough]
     G --> I[沿线概率门控与组件并集]

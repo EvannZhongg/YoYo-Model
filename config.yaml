@@ -65,7 +65,7 @@ tracking:
   # Optional hysteresis low threshold for semantic masks; null preserves the
   # single-threshold baseline. Weak pixels can only grow from high seeds.
   string_low_threshold: null
-  string_inference_scale: 1.0
+  string_inference_scale: 1.125
   # Capture the fixed-size CUDA semantic forward for lower launch overhead.
   string_cuda_graph: true
   # Reacquire the multi-segment centerline on every frame.
