@@ -178,6 +178,52 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["frame_count"], 2)
         self.assertEqual(result["frame_range"], {"start": 1, "end": 2})
 
+    def test_merged_predictions_distinguish_groups_with_the_same_frame_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "consecutive"
+            labels = dataset / "canonical" / "labels"
+            groups = []
+            predictions = []
+            for group, x in (("video-a", 10), ("video-b", 100)):
+                group_labels = labels / group
+                group_labels.mkdir(parents=True)
+                label = {
+                    "source_group": group,
+                    "frame_index": 0,
+                    "active_yoyo": {
+                        "visibility": "visible",
+                        "bbox_review_status": "reviewed",
+                        "bbox_pixel": [x, 10, x + 10, 20],
+                    },
+                    "string_visibility": "not_visible",
+                    "string_review_status": "reviewed",
+                    "string_polylines_pixel": [],
+                }
+                (group_labels / "frame-000.json").write_text(json.dumps(label), encoding="utf-8")
+                groups.append({
+                    "group_id": f"{group}--run-0-0",
+                    "source_group": group,
+                    "frames": [{"sample_key": f"{group}/frame-000.json", "frame_index": 0}],
+                })
+                predictions.append({
+                    "source_group": group,
+                    "frame_index": 0,
+                    "yoyo": {"bbox": [x, 10, x + 10, 20]},
+                })
+            (dataset / "consecutive_groups.json").write_text(
+                json.dumps({"schema_version": "yoyo_consecutive_groups_v1", "groups": groups}),
+                encoding="utf-8",
+            )
+            predictions_path = root / "merged.jsonl"
+            predictions_path.write_text(
+                "\n".join(json.dumps(item) for item in predictions) + "\n",
+                encoding="utf-8",
+            )
+            result = evaluate_sequence(dataset, predictions_path)
+        self.assertEqual(result["yoyo"]["presence"]["tp"], 2)
+        self.assertEqual(result["yoyo"]["localization"]["mean_iou"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

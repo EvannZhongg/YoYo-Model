@@ -601,6 +601,7 @@ def evaluate_sequence(
         if not dataset_frames:
             raise ValueError("No frames remain after applying the frame range")
     predictions: dict[int, dict[str, Any]] = {}
+    grouped_predictions: dict[tuple[str, int], dict[str, Any]] = {}
     method_counts: Counter[str] = Counter()
     try:
         lines = predictions_path.read_text(encoding="utf-8").splitlines()
@@ -614,16 +615,27 @@ def evaluate_sequence(
             frame_index = int(record["frame_index"])
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Invalid tracking record at line {line_number}") from exc
-        predictions[frame_index] = record
-        string = record.get("string") or {}
-        method = str(string.get("method") or "none")
-        method_counts[method] += 1
+        prediction_group = str(record.get("source_group") or record.get("group_id") or "")
+        source_group = str(record.get("source_group") or "")
+        group_id_value = str(record.get("group_id") or "")
+        if source_group:
+            grouped_predictions[(source_group, frame_index)] = record
+        if group_id_value:
+            grouped_predictions[(group_id_value, frame_index)] = record
+        if not prediction_group:
+            predictions[frame_index] = record
+        method_counts[str((record.get("string") or {}).get("method") or "none")] += 1
 
     rows: list[dict[str, Any]] = []
     for item in dataset_frames:
         annotation = item["annotation"]
         yoyo_known, target_bbox, string_known, target_lines = _known_targets(annotation)
-        prediction = predictions.get(item["frame_index"]) or {}
+        prediction = (
+            grouped_predictions.get((item["source_group"], item["frame_index"]))
+            or grouped_predictions.get((item["group_id"], item["frame_index"]))
+            or predictions.get(item["frame_index"])
+            or {}
+        )
         predicted_yoyo = _valid_bbox((prediction.get("yoyo") or {}).get("bbox"))
         predicted_lines = _prediction_polylines(prediction.get("string"))
         row: dict[str, Any] = {

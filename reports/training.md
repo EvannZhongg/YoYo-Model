@@ -21,19 +21,25 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 
 ### 悠悠球检测
 
-| 指标 | 上一版 | 当前生产 |
-| --- | ---: | ---: |
-| Precision | 0.976794 | 0.957737 |
-| Recall | 0.898990 | 0.924984 |
-| mAP50 | 0.968342 | 0.981065 |
-| mAP50-95 | 0.589861 | 0.606387 |
-| 连续集 Presence F1 | 0.978056 | 0.977387 |
-| 连续集 Mean IoU | 0.799332 | 0.800496 |
-| 连续集中心误差（px） | 16.2794 | 17.2435 |
-| 邬聪聪来源组 F1 | 0.933333 | 0.944444 |
-| 完整 pipeline FPS | 9.292 | 8.652 |
+| 指标 | 当前生产 |
+| --- | ---: |
+| Precision | 0.926192 |
+| Recall | 0.804196 |
+| mAP50 | 0.906085 |
+| mAP50-95 | 0.597246 |
+| 连续集 Presence P / R / F1 | 0.987310 / 0.966460 / 0.976773 |
+| 连续集 Mean / Median IoU | 0.805805 / 0.847140 |
+| 连续集 IoU@0.50 命中率 | 0.955013 |
+| 连续集中心误差（px） | 16.5646 |
+| 最弱有效来源组 F1 | 0.928571 |
+| 最长缺失段（帧） | 6 |
+| 检测回放 FPS | 8.0608 |
 
-连续集评估使用 `1Ayoyo_consecutive`、固定 reviewed yoyo 框、`conf=0.15` 和 `IoU=0.7`。
+静态结果为当前 `60b34d7d7db3...` manifest 的 152 张 test 显式跨 manifest 复评；checkpoint
+未使用该 test 来源。连续集使用 `1Ayoyo_consecutive` 10 组、927 帧，其中排除 107 帧未知
+yoyo 标注；按 `(source_group, frame_index)` 对齐预测，`conf=0.15`、`IoU=0.7`，关闭姿态、
+绳模型和方向模型。最弱有效来源组为 `namdongxun-72f4a04fb5`；FPS 为 10 段共 927 帧
+除以累计追踪墙钟时间。
 
 ### 绳线分割与追踪
 
@@ -67,7 +73,9 @@ Recall 为 `0.863079`，预测切换数为 `10`；同协议旧生产权重为 `0
 ## 复现入口
 
 - 检测运行：`runs/experiments/yoyo_detection_replay_20260830_detection_best_replay48x2/run_manifest.json`
-- 检测 test：`runs/experiments/det_replay_soup_a25/test_metrics.json`
+- 检测 test：`runs/experiments/det_replay_soup_a25/test_metrics_external_60b34d7d7db3.json`
+- 检测连续集评估：`tmp/det_production_consecutive_grouped_metrics.json`
+- 连续集评估入口：`cli/tracking/evaluate_sequence.py`
 - 绳线训练：`runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
 - 绳线静态评估：`tmp/semantic_production_aligned/test_semantic_metrics.json`
 - 绳线连续集评估：`tmp/production_comp32_full/summary.json`
