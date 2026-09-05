@@ -1,4 +1,4 @@
-from string_tracking.train import main
+from yoyo_detection.evaluate import main
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from common.files import sha256_file
 from config import BASE_DIR
-from training_v3.train import _initialization_lineage, _json_value, _weights_for
+from training_v3.run_manifest import initialization_lineage as build_initialization_lineage, json_value, resolve_weights
 
 
 def train_orientation(
@@ -35,14 +35,16 @@ def train_orientation(
     parent_path = Path(view["parent_manifest"])
     if sha256_file(parent_path) != view["parent_manifest_sha256"]:
         raise RuntimeError("Canonical dataset manifest changed after ROI view creation")
-    weights = _weights_for(
-        "orientation",
-        BASE_DIR / "models",
-        auto_download=True,
-        override=initial_weights,
-    )
+    if initial_weights:
+        weights = resolve_weights(initial_weights, "yolo11n-cls.pt", BASE_DIR / "models")
+    else:
+        from yolo_training.download_model import download_model
+        try:
+            weights = resolve_weights("", "yolo11n-cls.pt", BASE_DIR / "models")
+        except FileNotFoundError:
+            weights = download_model("yolo11n-cls.pt", BASE_DIR / "models").resolve()
     lineage_manifest = {"split_policy": {"source_groups": view["source_groups"]}}
-    initialization_lineage = _initialization_lineage(weights, lineage_manifest)
+    initialization_lineage = build_initialization_lineage(weights, lineage_manifest["split_policy"]["source_groups"])
     from ultralytics import YOLO
     import torch
     import ultralytics
@@ -96,7 +98,7 @@ def train_orientation(
         "initial_weights_sha256": sha256_file(weights),
         "initialization_lineage": initialization_lineage,
         "parameters": kwargs,
-        "metrics": _json_value(getattr(results, "results_dict", {})),
+        "metrics": json_value(getattr(results, "results_dict", {})),
         "environment": {
             "python": sys.version,
             "platform": platform.platform(),

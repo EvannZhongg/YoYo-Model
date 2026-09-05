@@ -1,4 +1,4 @@
-from string_tracking.train import main
+from string_tracking.evaluate import main
 
 
 if __name__ == "__main__":

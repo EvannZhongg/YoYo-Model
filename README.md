@@ -48,30 +48,32 @@ RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放
 
 ## 主训练流程
 
-统一训练入口位于 `training_v3/`，命令行入口集中在 `cli/`：
+三类模型使用彼此独立的训练入口；数据集物化仍由 `training_v3` 负责：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train `
   --dataset-dir datasets/1Ayoyo_dataset `
-  --project-dir runs/v2v3 `
-  --task detection `
+  --project-dir runs/detection `
   --epochs 100 `
   --device 0 `
   --auto-download
 ```
 
-可用任务：
+检测、绳线识别和方向模型分别使用：
 
-- `detection`
-- `string_segmentation`
-- `orientation`
-- `all`
+```powershell
+.\.venv\Scripts\python.exe -m cli.training.train_detection --dataset-dir datasets/1Ayoyo_dataset
+.\.venv\Scripts\python.exe -m cli.training.train_string --dataset-dir datasets/1Ayoyo_dataset/string_segmentation
+.\.venv\Scripts\python.exe -m cli.training.train_orientation --view-manifest datasets/1Ayoyo_dataset/orientation_roi/manifest.json
+```
+
+每条路径独立产生自己的 `run_manifest.json` 和 checkpoint，不再通过单一多任务命令生成 suite。
 
 语义绳模型使用统一数据集的 `string_segmentation` view。默认训练协议与当前
 MobileNetV3-FPN 权重一致：
 
 ```powershell
-.\.venv\Scripts\python.exe -m cli.training.train_semantic `
+.\.venv\Scripts\python.exe -m cli.training.train_string `
   --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
   --project runs/v2v3 `
   --name yoyo_v2v3_semantic_string `
@@ -109,11 +111,11 @@ ROI 方向模型使用（默认四分类画面朝向视图）：
 `training_v3.orientation_four.build_orientation_view`；两者共用 ROI 裁剪和
 manifest 生成流程。当前默认部署权重本身是三分类模型。
 
-Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbench_train_v2v3`，评估使用 `workbench_evaluate_v2v3`。
+Gradio 的训练页签按所选路径调用对应入口，评估器根据 run manifest 的 task 选择同一路径的 evaluator。
 
 ## 模型评估
 
-只评估带 `run_manifest.json` 的统一训练运行：
+只评估带 `run_manifest.json` 的独立训练运行：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.evaluate runs/v2v3/<run-name> --device 0
@@ -127,6 +129,14 @@ Gradio 的 `Unified Training` 页签调用同一套入口：训练使用 `workbe
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.tracking.track_video path\to\input.mp4
+```
+
+也可以分别运行三条推理路径，输出按 `frame_index`/`timestamp_s` 对齐的 JSONL：
+
+```powershell
+.\.venv\Scripts\python.exe -m cli.tracking.track_detection path\to\input.mp4
+.\.venv\Scripts\python.exe -m cli.tracking.track_string path\to\input.mp4
+.\.venv\Scripts\python.exe -m cli.tracking.track_orientation path\to\input.mp4
 ```
 
 默认追踪配置在 `config.yaml` 的 `tracking` 区块。RTMPose 不参与当前悠悠球检测、

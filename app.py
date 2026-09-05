@@ -189,7 +189,7 @@ def create_demo():
                 with gr.Row():
                     training_task = gr.Dropdown(
                         label="Training Task",
-                        choices=["detection", "semantic_string", "orientation_roi", "orientation", "string_segmentation", "all"],
+                        choices=["detection", "string_tracking", "orientation"],
                         value="detection",
                     )
                     training_epochs = gr.Number(label="Epochs", value=80, precision=0)

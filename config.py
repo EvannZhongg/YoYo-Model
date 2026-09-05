@@ -328,7 +328,40 @@ class SemanticStringConfig:
     device: str = str(_env_or_config("SEMANTIC_STRING_DEVICE", "semantic_string.device", "cuda"))
 
 
+@dataclass(frozen=True)
+class DetectionConfig:
+    """Configuration owned by the yoyo detection path."""
+
+    weights_path: Path = _as_path(_env_or_config("DETECTION_WEIGHTS_PATH", "detection.weights_path", "runs/experiments/det_replay_soup_a25/weights/best.pt"))
+    confidence: float = float(_env_or_config("DETECTION_CONFIDENCE", "detection.confidence", 0.15))
+    iou: float = float(_env_or_config("DETECTION_IOU", "detection.iou", 0.7))
+    imgsz: int = int(_env_or_config("DETECTION_IMGSZ", "detection.imgsz", 1024))
+    device: str = str(_env_or_config("DETECTION_DEVICE", "detection.device", ""))
+
+
+@dataclass(frozen=True)
+class StringTrackingConfig:
+    """Configuration owned by the string recognition/tracking path."""
+
+    weights_path: Path = _as_path(_env_or_config("STRING_TRACKING_WEIGHTS_PATH", "string_tracking.weights_path", "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"))
+    confidence: float = float(_env_or_config("STRING_TRACKING_CONFIDENCE", "string_tracking.confidence", 0.40))
+    imgsz: int = int(_env_or_config("STRING_TRACKING_IMGSZ", "string_tracking.imgsz", 544))
+    device: str = str(_env_or_config("STRING_TRACKING_DEVICE", "string_tracking.device", ""))
+
+
+@dataclass(frozen=True)
+class OrientationConfig:
+    """Configuration owned by the yoyo orientation path."""
+
+    weights_path: Path = _as_path(_env_or_config("ORIENTATION_WEIGHTS_PATH", "orientation.weights_path", "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt"))
+    imgsz: int = int(_env_or_config("ORIENTATION_IMGSZ", "orientation.imgsz", 320))
+    device: str = str(_env_or_config("ORIENTATION_DEVICE", "orientation.device", ""))
+
+
 DATASET_CONFIG = DatasetConfig()
 YOLO_CONFIG = YOLOConfig()
 TRACKING_CONFIG = TrackingConfig()
 SEMANTIC_STRING_CONFIG = SemanticStringConfig()
+DETECTION_CONFIG = DetectionConfig()
+STRING_TRACKING_CONFIG = StringTrackingConfig()
+ORIENTATION_CONFIG = OrientationConfig()

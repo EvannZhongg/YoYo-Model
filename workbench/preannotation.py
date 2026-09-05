@@ -16,14 +16,16 @@ from typing import Any
 import cv2
 
 from common.files import atomic_write_text
-from config import TRACKING_CONFIG
+from config import DETECTION_CONFIG, ORIENTATION_CONFIG, STRING_TRACKING_CONFIG, TRACKING_CONFIG
 from video_tracking.orientation import load_orientation_model, predict_orientation
-from video_tracking.tracker import (
-    _extract_detections,
-    _load_string_model,
-    _predict_string_model,
-)
+from yoyo_detection.inference import load_detector
+from string_tracking.inference import load_runtime_string_model, predict_runtime_string_model
 from workbench import dataset_annotation as base
+
+# Public path-specific APIs; aliases keep the draft builder's injectable seam
+# stable for Workbench integrations.
+_load_string_model = load_runtime_string_model
+_predict_string_model = predict_runtime_string_model
 
 
 def _now() -> str:
@@ -91,7 +93,7 @@ def _draft_document(
                 orientation_model,
                 image,
                 detection,
-                TRACKING_CONFIG.orientation_imgsz,
+                ORIENTATION_CONFIG.imgsz,
                 device,
                 direct_inference=True,
             )
@@ -125,8 +127,8 @@ def _draft_document(
             string_model,
             image,
             active_detection,
-            TRACKING_CONFIG.string_confidence,
-            TRACKING_CONFIG.imgsz,
+            STRING_TRACKING_CONFIG.confidence,
+            STRING_TRACKING_CONFIG.imgsz,
             device,
             TRACKING_CONFIG.yoyo_division,
             TRACKING_CONFIG.string_inference_scale,
@@ -214,12 +216,10 @@ def preannotate_dataset(dataset_path: str | Path, device: str | None = None) -> 
     backup = _backup_path(dataset)
     shutil.copytree(dataset, backup)
     runtime_device = str(device if device is not None else TRACKING_CONFIG.device)
-    from ultralytics import YOLO
-
-    detector = YOLO(str(TRACKING_CONFIG.weights_path))
-    class_names = {int(key): str(value) for key, value in dict(getattr(detector, "names", {}) or {}).items()}
-    string_model, string_status = _load_string_model(TRACKING_CONFIG.string_weights_path, True, runtime_device)
-    orientation_model, orientation_status = load_orientation_model(TRACKING_CONFIG.orientation_weights_path, True)
+    detector = load_detector(DETECTION_CONFIG.weights_path, runtime_device)
+    class_names = detector.class_names
+    string_model, string_status = _load_string_model(STRING_TRACKING_CONFIG.weights_path, True, runtime_device)
+    orientation_model, orientation_status = load_orientation_model(ORIENTATION_CONFIG.weights_path, True)
     processed = 0
     failures: list[dict[str, str]] = []
     for label_path in labels:
@@ -229,18 +229,12 @@ def preannotate_dataset(dataset_path: str | Path, device: str | None = None) -> 
             image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
             if image is None:
                 raise ValueError(f"could not read image: {image_path}")
-            kwargs: dict[str, Any] = {
-                "source": image,
-                "conf": TRACKING_CONFIG.confidence,
-                "iou": TRACKING_CONFIG.iou,
-                "imgsz": TRACKING_CONFIG.imgsz,
-                "augment": False,
-                "verbose": False,
-            }
-            if runtime_device:
-                kwargs["device"] = runtime_device
-            raw = detector.predict(**kwargs)[0]
-            detections = _extract_detections(raw, class_names)
+            detections = detector.predict(
+                image,
+                confidence=DETECTION_CONFIG.confidence,
+                iou=DETECTION_CONFIG.iou,
+                imgsz=DETECTION_CONFIG.imgsz,
+            )
             draft = _draft_document(document, image, detections, string_model, orientation_model, runtime_device)
             draft["image_size"] = [int(image.shape[1]), int(image.shape[0])]
             atomic_write_text(label_path, json.dumps(draft, ensure_ascii=False, indent=2) + "\n")
@@ -261,7 +255,7 @@ def preannotate_dataset(dataset_path: str | Path, device: str | None = None) -> 
         "failure_count": len(failures),
         "failures": failures[:20],
         "models": {
-            "yoyo": str(TRACKING_CONFIG.weights_path),
+            "yoyo": str(DETECTION_CONFIG.weights_path),
             "string": string_status,
             "orientation": orientation_status,
         },

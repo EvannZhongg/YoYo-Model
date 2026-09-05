@@ -1,4 +1,4 @@
-"""Multi-task training pipeline for yoyo detection, strings, and orientation."""
+"""Canonical dataset materialization and shared training metadata utilities."""
 
 from .prepare_dataset import build_training_dataset
 

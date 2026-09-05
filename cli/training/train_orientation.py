@@ -1,4 +1,4 @@
-from training_v3.train_orientation import main
+from yoyo_orientation.train import main
 
 
 if __name__ == "__main__":

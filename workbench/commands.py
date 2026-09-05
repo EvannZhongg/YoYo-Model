@@ -40,19 +40,19 @@ def workbench_train_v2v3(
     epochs: int,
     device: str,
 ) -> str:
-    supported = {"all", "detection", "string_segmentation", "semantic_string", "orientation", "orientation_roi"}
+    supported = {"detection", "string_tracking", "orientation"}
     if task not in supported:
-        return f"Unsupported unified training task: {task}"
+        return f"Unsupported training path: {task}"
 
     dataset_root = Path(dataset_dir)
     manifest_path = dataset_root / "manifest.json"
     if not manifest_path.is_file():
-        return f"Refused: unified dataset manifest is missing: {manifest_path}"
+        return f"Refused: dataset manifest is missing: {manifest_path}"
 
-    if task == "semantic_string":
+    if task == "string_tracking":
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         args = [
-            "-m", "string_segmentation.train_semantic",
+            "-m", "string_tracking.train",
             "--dataset-dir", str(dataset_root / "string_segmentation"),
             "--project", project_dir,
             "--name", f"{manifest['dataset_id']}_semantic_string",
@@ -75,21 +75,19 @@ def workbench_train_v2v3(
         ]
         if SEMANTIC_STRING_CONFIG.pretrained_backbone:
             args.append("--pretrained-backbone")
-    elif task == "orientation_roi":
+    elif task == "orientation":
         args = [
-            "-m", "training_v3.train_orientation",
+            "-m", "yoyo_orientation.train",
             "--view-manifest", str(dataset_root / "orientation_roi" / "manifest.json"),
             "--project-dir", project_dir,
             "--epochs", str(int(epochs)),
         ]
     else:
         args = [
-            "-m", "training_v3.train",
+            "-m", "yoyo_detection.train",
             "--dataset-dir", dataset_dir,
             "--project-dir", project_dir,
-            "--task", task,
             "--epochs", str(int(epochs)),
-            "--auto-download",
         ]
     _append_value(args, "--device", device)
     return _run_workbench_command(args)
@@ -99,6 +97,27 @@ def workbench_evaluate_v2v3(run_dir: str, device: str) -> str:
     manifest_path = Path(run_dir) / "run_manifest.json"
     if not manifest_path.is_file():
         return f"Refused: model run manifest is missing: {manifest_path}"
-    args = ["-m", "training_v3.evaluate", run_dir]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    task = str(manifest.get("task") or "")
+    evaluator = {
+        "detection": "yoyo_detection.evaluate",
+        "orientation": "yoyo_orientation.evaluate",
+        "binary_semantic_segmentation": "string_tracking.evaluate",
+    }.get(task)
+    if evaluator is None:
+        return f"Refused: unsupported run task: {task}"
+    args = ["-m", evaluator, run_dir]
     _append_value(args, "--device", device)
     return _run_workbench_command(args)
+
+
+def workbench_train_detection(dataset_dir: str, project_dir: str, epochs: int, device: str) -> str:
+    return workbench_train_v2v3(dataset_dir, project_dir, "detection", epochs, device)
+
+
+def workbench_train_string(dataset_dir: str, project_dir: str, epochs: int, device: str) -> str:
+    return workbench_train_v2v3(dataset_dir, project_dir, "string_tracking", epochs, device)
+
+
+def workbench_train_orientation(dataset_dir: str, project_dir: str, epochs: int, device: str) -> str:
+    return workbench_train_v2v3(dataset_dir, project_dir, "orientation", epochs, device)

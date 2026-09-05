@@ -16,6 +16,26 @@ yolo:
   # Used by cli.models.download_yolo. Override with --url if Ultralytics changes asset URLs.
   model_url_template: "https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
 
+# Independent model paths.  The tracking block below only contains legacy
+# compositor tuning; each model now owns its checkpoint and core inference size.
+detection:
+  weights_path: "runs/experiments/det_replay_soup_a25/weights/best.pt"
+  confidence: 0.15
+  iou: 0.7
+  imgsz: 1024
+  device: ""
+
+string_tracking:
+  weights_path: "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"
+  confidence: 0.40
+  imgsz: 544
+  device: ""
+
+orientation:
+  weights_path: "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt"
+  imgsz: 320
+  device: ""
+
 semantic_string:
   # Single-class MobileNetV3-FPN model for thin strings.
   dataset_dir: "datasets/1Ayoyo_dataset/string_segmentation"

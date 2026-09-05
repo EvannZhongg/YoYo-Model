@@ -25,7 +25,8 @@ from typing import Any
 import cv2
 import numpy as np
 
-from config import BASE_DIR, TRACKING_CONFIG
+from config import BASE_DIR, DETECTION_CONFIG, ORIENTATION_CONFIG, STRING_TRACKING_CONFIG, TRACKING_CONFIG
+from yoyo_detection.inference import extract_detections as detector_extract_detections
 from string_segmentation.semantic_model import (
     is_semantic_checkpoint,
     letterbox,
@@ -639,28 +640,6 @@ def _predict_pose(
         return [], [], {"status": "error", "error_type": type(exc).__name__}
 
 
-def _extract_detections(result, class_names: dict[int, str]) -> list[dict[str, Any]]:
-    boxes = getattr(result, "boxes", None)
-    if boxes is None or boxes.xyxy is None:
-        return []
-    xyxy = boxes.xyxy.cpu().numpy()
-    confs = boxes.conf.cpu().numpy() if boxes.conf is not None else np.ones(len(xyxy))
-    classes = boxes.cls.cpu().numpy().astype(int) if boxes.cls is not None else np.zeros(len(xyxy), dtype=int)
-    detections = []
-    for bbox, confidence, class_id in zip(xyxy, confs, classes):
-        x1, y1, x2, y2 = [float(value) for value in bbox]
-        detections.append(
-            {
-                "bbox": [x1, y1, x2, y2],
-                "center": [(x1 + x2) / 2.0, (y1 + y2) / 2.0],
-                "confidence": float(confidence),
-                "class_id": int(class_id),
-                "class_name": class_names.get(int(class_id), str(class_id)),
-            }
-        )
-    return detections
-
-
 def _draw_frame(
     frame: np.ndarray,
     detections: list[dict[str, Any]],
@@ -923,12 +902,12 @@ def _orientation_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def track_video(
     source_video_path: str | Path,
-    weights_path: str | Path = TRACKING_CONFIG.weights_path,
+    weights_path: str | Path = DETECTION_CONFIG.weights_path,
     output_dir: str | Path = TRACKING_CONFIG.output_dir,
-    confidence: float = TRACKING_CONFIG.confidence,
-    iou: float = TRACKING_CONFIG.iou,
-    imgsz: int = TRACKING_CONFIG.imgsz,
-    device: str = TRACKING_CONFIG.device,
+    confidence: float = DETECTION_CONFIG.confidence,
+    iou: float = DETECTION_CONFIG.iou,
+    imgsz: int = DETECTION_CONFIG.imgsz,
+    device: str = DETECTION_CONFIG.device,
     trace_length: int = TRACKING_CONFIG.trace_length,
     line_thickness: int = TRACKING_CONFIG.line_thickness,
     text_scale: float = TRACKING_CONFIG.text_scale,
@@ -936,9 +915,9 @@ def track_video(
     pose_weights_path: str | Path | None = None,
     pose_detector_path: str | Path | None = None,
     enable_pose: bool = TRACKING_CONFIG.enable_pose,
-    string_weights_path: str | Path | None = None,
+    string_weights_path: str | Path | None = STRING_TRACKING_CONFIG.weights_path,
     enable_string_model: bool = TRACKING_CONFIG.enable_string_model,
-    string_confidence: float = TRACKING_CONFIG.string_confidence,
+    string_confidence: float = STRING_TRACKING_CONFIG.confidence,
     string_low_threshold: float | None = TRACKING_CONFIG.string_low_threshold,
     string_inference_scale: float = TRACKING_CONFIG.string_inference_scale,
     string_cuda_graph: bool = TRACKING_CONFIG.string_cuda_graph,
@@ -953,9 +932,9 @@ def track_video(
     string_max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     string_flow_fb_max_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
     yoyo_division: str = TRACKING_CONFIG.yoyo_division,
-    orientation_weights_path: str | Path | None = None,
+    orientation_weights_path: str | Path | None = ORIENTATION_CONFIG.weights_path,
     enable_orientation_model: bool = TRACKING_CONFIG.enable_orientation_model,
-    orientation_imgsz: int = TRACKING_CONFIG.orientation_imgsz,
+    orientation_imgsz: int = ORIENTATION_CONFIG.imgsz,
     orientation_inference_fps: float = TRACKING_CONFIG.orientation_inference_fps,
     orientation_adaptive_inference: bool = TRACKING_CONFIG.orientation_adaptive_inference,
     orientation_burst_inference_fps: float = TRACKING_CONFIG.orientation_burst_inference_fps,
@@ -1152,7 +1131,7 @@ def track_video(
         if device:
             kwargs["device"] = device
         result = model.predict(**kwargs)[0]
-        detections_raw = _extract_detections(result, class_names)
+        detections_raw = detector_extract_detections(result, class_names)
         ultralytics_detections = sv.Detections.from_ultralytics(result)
         tracked = tracker.update_with_detections(ultralytics_detections)
         _assign_tracker_ids(detections_raw, tracked)
