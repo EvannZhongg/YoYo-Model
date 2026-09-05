@@ -9,7 +9,7 @@ Run every command through the project virtual environment:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r training_v3\requirements-rtmpose.txt
 .\.venv\Scripts\python.exe -m pip install rtmlib==0.0.16 --no-deps
-.\.venv\Scripts\python.exe -m training_v3.download_rtmpose_models
+.\.venv\Scripts\python.exe -m cli.models.download_rtmpose
 .\.venv\Scripts\python.exe -m training_v3.prepare_dataset --source annotations\reviewed_export --output-dir datasets\1Ayoyo_dataset --clear
 .\.venv\Scripts\python.exe -m training_v3.orientation_view --dataset-dir datasets\1Ayoyo_dataset --clear
 ```

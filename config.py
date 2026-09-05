@@ -95,17 +95,7 @@ class YOLOConfig:
 
 @dataclass(frozen=True)
 class TrackingConfig:
-    weights_path: Path = _as_path(
-        _env_or_config(
-            "TRACKING_WEIGHTS_PATH",
-            "tracking.weights_path",
-            "runs/experiments/det_replay_soup_a25/weights/best.pt",
-        )
-    )
     output_dir: Path = _as_path(_env_or_config("TRACKING_OUTPUT_DIR", "tracking.output_dir", "tracked_videos"))
-    confidence: float = float(_env_or_config("TRACKING_CONFIDENCE", "tracking.confidence", 0.15))
-    iou: float = float(_env_or_config("TRACKING_IOU", "tracking.iou", 0.7))
-    imgsz: int = int(_env_or_config("TRACKING_IMGSZ", "tracking.imgsz", 1024))
     device: str = str(_env_or_config("TRACKING_DEVICE", "tracking.device", ""))
     trace_length: int = int(_env_or_config("TRACKING_TRACE_LENGTH", "tracking.trace_length", 30))
     line_thickness: int = int(_env_or_config("TRACKING_LINE_THICKNESS", "tracking.line_thickness", 2))
@@ -128,15 +118,7 @@ class TrackingConfig:
         )
     )
     enable_pose: bool = _as_bool(_env_or_config("TRACKING_ENABLE_POSE", "tracking.enable_pose", False), False)
-    string_weights_path: Path = _as_path(
-        _env_or_config(
-            "TRACKING_STRING_WEIGHTS_PATH",
-            "tracking.string_weights_path",
-            "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt",
-        )
-    )
     enable_string_model: bool = _as_bool(_env_or_config("TRACKING_ENABLE_STRING_MODEL", "tracking.enable_string_model", True), True)
-    string_confidence: float = float(_env_or_config("TRACKING_STRING_CONFIDENCE", "tracking.string_confidence", 0.40))
     string_low_threshold: float | None = (
         None
         if _env_or_config("TRACKING_STRING_LOW_THRESHOLD", "tracking.string_low_threshold", None) in (None, "", "null", "None")
@@ -209,18 +191,10 @@ class TrackingConfig:
     yoyo_division: str = str(
         _env_or_config("TRACKING_YOYO_DIVISION", "tracking.yoyo_division", "1A")
     )
-    orientation_weights_path: Path = _as_path(
-        _env_or_config(
-            "TRACKING_ORIENTATION_WEIGHTS_PATH",
-            "tracking.orientation_weights_path",
-            "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt",
-        )
-    )
     enable_orientation_model: bool = _as_bool(
         _env_or_config("TRACKING_ENABLE_ORIENTATION_MODEL", "tracking.enable_orientation_model", True),
         True,
     )
-    orientation_imgsz: int = int(_env_or_config("TRACKING_ORIENTATION_IMGSZ", "tracking.orientation_imgsz", 320))
     orientation_inference_fps: float = float(
         _env_or_config("TRACKING_ORIENTATION_INFERENCE_FPS", "tracking.orientation_inference_fps", 5.0)
     )

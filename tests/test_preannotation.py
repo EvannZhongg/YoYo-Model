@@ -44,7 +44,7 @@ class PreannotationTests(unittest.TestCase):
         image = np.zeros((100, 200, 3), dtype=np.uint8)
         detections = [{"class_name": "yoyo", "confidence": 0.9, "bbox": [20, 30, 60, 70]}]
         with patch(
-            "workbench.preannotation._predict_string_model",
+            "workbench.preannotation.predict_runtime_string_model",
             return_value={"polylines": [[[5, 10], [15, 20]]]},
         ):
             result = _draft_document(_document(), image, detections, object(), None, "cpu")

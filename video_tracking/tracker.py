@@ -149,7 +149,7 @@ def _load_string_model(
 ):
     if not enabled:
         return None, "disabled"
-    path = Path(weights_path) if weights_path else TRACKING_CONFIG.string_weights_path
+    path = Path(weights_path) if weights_path else STRING_TRACKING_CONFIG.weights_path
     if not path.exists():
         logger.warning("String segmentation model not found: %s", path)
         return None, f"missing: {path}"
@@ -1002,7 +1002,7 @@ def track_video(
         string_inference_scale,
         string_cuda_graph,
     )
-    resolved_orientation_weights = Path(orientation_weights_path or TRACKING_CONFIG.orientation_weights_path)
+    resolved_orientation_weights = Path(orientation_weights_path or ORIENTATION_CONFIG.weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
         resolved_orientation_weights,
         enable_orientation_model,
@@ -1570,7 +1570,7 @@ def track_video(
                 isinstance(string_model, dict) and string_model.get("cuda_graph", False)
             ),
             "string_cuda_graph_requested": bool(string_cuda_graph),
-            "string_weights": str(string_weights_path or TRACKING_CONFIG.string_weights_path),
+            "string_weights": str(string_weights_path or STRING_TRACKING_CONFIG.weights_path),
             "string_confidence": string_confidence,
             "string_low_threshold": string_low_threshold,
             "string_inference_scale": float(string_inference_scale),
@@ -1679,11 +1679,11 @@ def track_video(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Track yoyo objects and export reviewable frame metadata.")
     parser.add_argument("video", help="Input video path.")
-    parser.add_argument("--weights", default=str(TRACKING_CONFIG.weights_path))
+    parser.add_argument("--weights", default=str(DETECTION_CONFIG.weights_path))
     parser.add_argument("--output-dir", default=str(TRACKING_CONFIG.output_dir))
-    parser.add_argument("--conf", type=float, default=TRACKING_CONFIG.confidence)
-    parser.add_argument("--iou", type=float, default=TRACKING_CONFIG.iou)
-    parser.add_argument("--imgsz", type=int, default=TRACKING_CONFIG.imgsz)
+    parser.add_argument("--conf", type=float, default=DETECTION_CONFIG.confidence)
+    parser.add_argument("--iou", type=float, default=DETECTION_CONFIG.iou)
+    parser.add_argument("--imgsz", type=int, default=DETECTION_CONFIG.imgsz)
     parser.add_argument("--device", default=TRACKING_CONFIG.device)
     parser.add_argument(
         "--visualization-max-width",
@@ -1711,9 +1711,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=TRACKING_CONFIG.enable_pose,
         help="Run RTMPose-m WholeBody inference; defaults to tracking.enable_pose.",
     )
-    parser.add_argument("--string-weights", default=str(TRACKING_CONFIG.string_weights_path))
+    parser.add_argument("--string-weights", default=str(STRING_TRACKING_CONFIG.weights_path))
     parser.add_argument("--no-string-model", action="store_true")
-    parser.add_argument("--string-conf", type=float, default=TRACKING_CONFIG.string_confidence)
+    parser.add_argument("--string-conf", type=float, default=STRING_TRACKING_CONFIG.confidence)
     parser.add_argument("--string-low-threshold", type=float, default=TRACKING_CONFIG.string_low_threshold)
     parser.add_argument(
         "--string-inference-scale",
@@ -1775,7 +1775,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["1A", "2A", "3A", "4A", "5A"],
         default=TRACKING_CONFIG.yoyo_division,
     )
-    parser.add_argument("--orientation-weights", default=str(TRACKING_CONFIG.orientation_weights_path))
+    parser.add_argument("--orientation-weights", default=str(ORIENTATION_CONFIG.weights_path))
     parser.add_argument("--no-orientation-model", action="store_true")
     parser.add_argument(
         "--orientation-direct-inference",
@@ -1783,7 +1783,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=True,
         help="Run the fused orientation classifier directly without predictor setup overhead.",
     )
-    parser.add_argument("--orientation-imgsz", type=int, default=TRACKING_CONFIG.orientation_imgsz)
+    parser.add_argument("--orientation-imgsz", type=int, default=ORIENTATION_CONFIG.imgsz)
     parser.add_argument(
         "--orientation-inference-fps",
         type=float,

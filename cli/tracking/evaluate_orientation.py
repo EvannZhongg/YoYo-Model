@@ -21,7 +21,7 @@ from common.orientation import (
     to_trick_probabilities,
     validate_orientation_names,
 )
-from config import BASE_DIR, TRACKING_CONFIG
+from config import BASE_DIR, ORIENTATION_CONFIG, TRACKING_CONFIG
 from video_tracking.orientation import (
     OrientationTemporalFilter,
     orientation_observation_is_unstable,
@@ -272,11 +272,11 @@ def _presentation_metrics(records: list[dict[str, Any]]) -> dict[str, Any] | Non
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate temporal orientation stability on consecutive labels.")
     parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_consecutive"))
-    parser.add_argument("--weights", default=str(TRACKING_CONFIG.orientation_weights_path))
+    parser.add_argument("--weights", default=str(ORIENTATION_CONFIG.weights_path))
     parser.add_argument("--output-dir", default=str(BASE_DIR / "runs" / "experiments" / "orientation_temporal"))
     parser.add_argument("--raw-predictions", default="")
     parser.add_argument("--device", default=TRACKING_CONFIG.device)
-    parser.add_argument("--imgsz", type=int, default=TRACKING_CONFIG.orientation_imgsz)
+    parser.add_argument("--imgsz", type=int, default=ORIENTATION_CONFIG.imgsz)
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--baseline-fps", type=float, default=5.0)
     parser.add_argument("--burst-fps", type=float, default=TRACKING_CONFIG.orientation_burst_inference_fps)

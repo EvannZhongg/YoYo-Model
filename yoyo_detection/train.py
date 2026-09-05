@@ -6,7 +6,7 @@ import argparse
 from pathlib import Path
 
 from config import BASE_DIR
-from training_v3.train import train_task
+from yoyo_detection._training import train_task
 
 
 def train_detection(

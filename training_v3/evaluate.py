@@ -1,4 +1,4 @@
-"""Evaluate one versioned v2/v3 model on the untouched source-group test split."""
+"""Evaluate one versioned model on the untouched source-group test split."""
 
 from __future__ import annotations
 

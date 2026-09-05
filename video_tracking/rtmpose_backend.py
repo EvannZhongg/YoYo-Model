@@ -59,7 +59,7 @@ class RTMPoseWholebody:
             raise FileNotFoundError(
                 "RTMPose model files are missing: "
                 + ", ".join(str(path) for path in missing)
-                + ". Run training_v3/download_rtmpose_models.py inside the project virtual environment."
+                + ". Run cli.models.download_rtmpose inside the project virtual environment."
             )
 
         # Importing torch first makes its bundled CUDA/cuDNN DLLs available to

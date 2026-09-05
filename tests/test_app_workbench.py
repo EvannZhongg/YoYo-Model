@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app import create_demo, run_video_tracking
-from config import SEMANTIC_STRING_CONFIG, TRACKING_CONFIG
+from config import SEMANTIC_STRING_CONFIG, STRING_TRACKING_CONFIG, TRACKING_CONFIG
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
 from workbench.score_annotation import (
     ANCHOR_SOURCES,
@@ -322,7 +322,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         track_video.reset_mock()
         run_video_tracking(
             "input.mp4", "detector.pt", "runs/tracking", 0.25, 0.7, 1280, "cuda",
-            False, "rtmpose.onnx", True, str(TRACKING_CONFIG.string_weights_path), 0.2, 2.0, 10.0,
+            False, "rtmpose.onnx", True, str(STRING_TRACKING_CONFIG.weights_path), 0.2, 2.0, 10.0,
             "1A", True, "orientation.pt", 5.0, 1920,
         )
         default_kwargs = track_video.call_args.kwargs
@@ -344,7 +344,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("No video provided", outputs[-1])
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
-    def test_unified_training_uses_manifest_and_training_v3(self, run_command):
+    def test_orientation_training_uses_independent_entry_point(self, run_command):
         with TemporaryDirectory() as directory:
             dataset = Path(directory) / "dataset"
             dataset.mkdir()
@@ -353,20 +353,20 @@ class UnifiedWorkbenchTests(unittest.TestCase):
 
         self.assertEqual(result, "ok")
         args = run_command.call_args.args[0]
-        self.assertIn("training_v3.train", args)
-        self.assertEqual(args[args.index("--task") + 1], "orientation")
+        self.assertIn("yoyo_orientation.train", args)
+        self.assertEqual(Path(args[args.index("--view-manifest") + 1]).parent.name, "orientation_roi")
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
-    def test_unified_semantic_training_uses_canonical_string_view(self, run_command):
+    def test_string_training_uses_canonical_string_view(self, run_command):
         with TemporaryDirectory() as directory:
             dataset = Path(directory) / "dataset"
             dataset.mkdir()
             (dataset / "manifest.json").write_text('{"dataset_id":"dataset-123"}', encoding="utf-8")
-            result = workbench_train_v2v3(str(dataset), str(Path(directory) / "runs"), "semantic_string", 5, "cpu")
+            result = workbench_train_v2v3(str(dataset), str(Path(directory) / "runs"), "string_tracking", 5, "cpu")
 
         self.assertEqual(result, "ok")
         args = run_command.call_args.args[0]
-        self.assertIn("string_segmentation.train_semantic", args)
+        self.assertIn("string_tracking.train", args)
         self.assertEqual(args[args.index("--name") + 1], "dataset-123_semantic_string")
         self.assertEqual(Path(args[args.index("--dataset-dir") + 1]).name, "string_segmentation")
         self.assertEqual(args[args.index("--architecture") + 1], SEMANTIC_STRING_CONFIG.architecture)
@@ -381,15 +381,15 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         self.assertIn("--pretrained-backbone", args)
 
     @patch("workbench.commands._run_workbench_command", return_value="ok")
-    def test_evaluation_uses_training_v3_evaluator(self, run_command):
+    def test_evaluation_uses_manifest_task_evaluator(self, run_command):
         with TemporaryDirectory() as directory:
             run = Path(directory) / "run"
             run.mkdir()
-            (run / "run_manifest.json").write_text("{}", encoding="utf-8")
+            (run / "run_manifest.json").write_text('{"task":"orientation"}', encoding="utf-8")
             result = workbench_evaluate_v2v3(str(run), "cpu")
 
         self.assertEqual(result, "ok")
-        self.assertEqual(run_command.call_args.args[0][:3], ["-m", "training_v3.evaluate", str(run)])
+        self.assertEqual(run_command.call_args.args[0][:3], ["-m", "yoyo_orientation.evaluate", str(run)])
 
     def test_tracking_gallery_uses_frame_index(self):
         with TemporaryDirectory() as directory:

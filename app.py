@@ -9,7 +9,7 @@ Path(os.environ["GRADIO_TEMP_DIR"]).mkdir(parents=True, exist_ok=True)
 
 import gradio as gr
 
-from config import BASE_DIR, TRACKING_CONFIG
+from config import BASE_DIR, DETECTION_CONFIG, ORIENTATION_CONFIG, STRING_TRACKING_CONFIG, TRACKING_CONFIG
 from video_tracking.frame_review import append_tracking_frame_review, load_tracking_frame_selection
 from video_tracking.tracker import track_video
 from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
@@ -137,7 +137,7 @@ def run_video_tracking(
             yoyo_division=yoyo_division,
             enable_orientation_model=bool(enable_orientation_model),
             orientation_weights_path=orientation_weights_path.strip() or None,
-            orientation_imgsz=TRACKING_CONFIG.orientation_imgsz,
+            orientation_imgsz=ORIENTATION_CONFIG.imgsz,
             orientation_inference_fps=float(orientation_inference_fps),
             export_json=True,
             visualization_max_width=max(0, int(visualization_max_width)),
@@ -221,7 +221,7 @@ def create_demo():
                             height=280,
                         )
                         with gr.Accordion("Advanced settings", open=False):
-                            tracking_weights = gr.Textbox(label="Yoyo Detection Weights", value=str(TRACKING_CONFIG.weights_path))
+                            tracking_weights = gr.Textbox(label="Yoyo Detection Weights", value=str(DETECTION_CONFIG.weights_path))
                             tracking_output_dir = gr.Textbox(label="Output Directory", value=str(TRACKING_CONFIG.output_dir))
                             tracking_preview_width = gr.Number(
                                 label="Tracked Preview Maximum Width (0 = source)",
@@ -230,18 +230,18 @@ def create_demo():
                                 precision=0,
                             )
                             with gr.Row():
-                                tracking_conf = gr.Slider(label="Confidence", minimum=0.01, maximum=0.99, value=TRACKING_CONFIG.confidence, step=0.01)
-                                tracking_iou = gr.Slider(label="IoU", minimum=0.1, maximum=0.95, value=TRACKING_CONFIG.iou, step=0.01)
-                                tracking_imgsz = gr.Number(label="Image Size", value=TRACKING_CONFIG.imgsz, precision=0)
+                                tracking_conf = gr.Slider(label="Confidence", minimum=0.01, maximum=0.99, value=DETECTION_CONFIG.confidence, step=0.01)
+                                tracking_iou = gr.Slider(label="IoU", minimum=0.1, maximum=0.95, value=DETECTION_CONFIG.iou, step=0.01)
+                                tracking_imgsz = gr.Number(label="Image Size", value=DETECTION_CONFIG.imgsz, precision=0)
                                 tracking_device = gr.Textbox(label="Device", value=TRACKING_CONFIG.device)
                             tracking_pose = gr.Checkbox(label="RTMPose body / hand landmarks", value=TRACKING_CONFIG.enable_pose)
                             tracking_pose_weights = gr.Textbox(label="RTMPose Weights", value=str(TRACKING_CONFIG.pose_weights_path))
                             tracking_string_model = gr.Checkbox(label="String segmentation model", value=TRACKING_CONFIG.enable_string_model)
-                            tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(TRACKING_CONFIG.string_weights_path))
+                            tracking_string_weights = gr.Textbox(label="String Segmentation Weights", value=str(STRING_TRACKING_CONFIG.weights_path))
                             with gr.Row():
                                 tracking_string_conf = gr.Slider(
                                     label="String Confidence Floor", minimum=0.01, maximum=0.95,
-                                    value=TRACKING_CONFIG.string_confidence, step=0.01,
+                                    value=STRING_TRACKING_CONFIG.confidence, step=0.01,
                                 )
                                 tracking_string_scale = gr.Slider(
                                     label="Semantic Inference Scale", minimum=0.5, maximum=2.0,
@@ -264,7 +264,7 @@ def create_demo():
                             )
                             tracking_orientation_weights = gr.Textbox(
                                 label="Orientation Weights",
-                                value=str(TRACKING_CONFIG.orientation_weights_path),
+                                value=str(ORIENTATION_CONFIG.weights_path),
                             )
                             tracking_orientation_fps = gr.Number(
                                 label="Orientation Model FPS (0 = every frame)",

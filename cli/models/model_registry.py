@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from common.files import sha256_file
-from config import BASE_DIR, TRACKING_CONFIG
+from config import BASE_DIR, DETECTION_CONFIG, ORIENTATION_CONFIG, STRING_TRACKING_CONFIG
 
 
 def _resolve(value: str | Path | None, base_dir: Path) -> Path | None:
@@ -69,9 +69,9 @@ def build_registry(
     for normal registry refreshes, so it is explicit opt-in.
     """
     runs_dir = (runs_dir or base_dir / "runs").resolve()
-    default_yoyo = TRACKING_CONFIG.weights_path.resolve()
-    default_string = TRACKING_CONFIG.string_weights_path.resolve()
-    default_orientation = TRACKING_CONFIG.orientation_weights_path.resolve()
+    default_yoyo = DETECTION_CONFIG.weights_path.resolve()
+    default_string = STRING_TRACKING_CONFIG.weights_path.resolve()
+    default_orientation = ORIENTATION_CONFIG.weights_path.resolve()
     entries: list[dict[str, Any]] = []
     represented_weights: set[Path] = set()
     metric_names = ("test_metrics_current.json", "test_metrics.json", "test_segmentation_metrics.json", "test_semantic_metrics.json")

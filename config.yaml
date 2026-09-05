@@ -16,8 +16,7 @@ yolo:
   # Used by cli.models.download_yolo. Override with --url if Ultralytics changes asset URLs.
   model_url_template: "https://github.com/ultralytics/assets/releases/download/v8.4.0/{model_name}"
 
-# Independent model paths.  The tracking block below only contains legacy
-# compositor tuning; each model now owns its checkpoint and core inference size.
+# Independent model paths; tracking only contains compositor tuning.
 detection:
   weights_path: "runs/experiments/det_replay_soup_a25/weights/best.pt"
   confidence: 0.15
@@ -63,11 +62,7 @@ semantic_string:
   device: "cuda"
 
 tracking:
-  weights_path: "runs/experiments/det_replay_soup_a25/weights/best.pt"
   output_dir: "tracked_videos"
-  confidence: 0.15
-  iou: 0.7
-  imgsz: 1024
   device: ""
   trace_length: 30
   line_thickness: 2
@@ -79,11 +74,7 @@ tracking:
   pose_detector_path: "models/rtmpose/yolox_m_8xb8-300e_humanart-c2c7a14a.onnx"
   # WholeBody pose is optional review metadata.
   enable_pose: false
-  # High-resolution MobileNetV3-FPN semantic string model.
-  string_weights_path: "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"
   enable_string_model: true
-  # Semantic checkpoints use max(checkpoint validation threshold, this floor).
-  string_confidence: 0.40
   # Optional hysteresis low threshold for semantic masks; null preserves the
   # single-threshold baseline. Weak pixels can only grow from high seeds.
   string_low_threshold: null
@@ -114,10 +105,7 @@ tracking:
   string_flow_fb_max_error: 4.0
   # Competition division metadata used for hand-anchor annotation.
   yoyo_division: "1A"
-  # Orientation classifier weights; runtime accepts the three- or four-class variant.
-  orientation_weights_path: "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt"
   enable_orientation_model: true
-  orientation_imgsz: 320
   # Stable cadence is 5 FPS. Ambiguous observations temporarily burst to 25 FPS.
   orientation_inference_fps: 5.0
   orientation_adaptive_inference: true

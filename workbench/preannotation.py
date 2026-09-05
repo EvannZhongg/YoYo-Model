@@ -22,12 +22,6 @@ from yoyo_detection.inference import load_detector
 from string_tracking.inference import load_runtime_string_model, predict_runtime_string_model
 from workbench import dataset_annotation as base
 
-# Public path-specific APIs; aliases keep the draft builder's injectable seam
-# stable for Workbench integrations.
-_load_string_model = load_runtime_string_model
-_predict_string_model = predict_runtime_string_model
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -123,7 +117,7 @@ def _draft_document(
         )
     string = None
     if string_model is not None:
-        string = _predict_string_model(
+        string = predict_runtime_string_model(
             string_model,
             image,
             active_detection,
@@ -217,8 +211,7 @@ def preannotate_dataset(dataset_path: str | Path, device: str | None = None) -> 
     shutil.copytree(dataset, backup)
     runtime_device = str(device if device is not None else TRACKING_CONFIG.device)
     detector = load_detector(DETECTION_CONFIG.weights_path, runtime_device)
-    class_names = detector.class_names
-    string_model, string_status = _load_string_model(STRING_TRACKING_CONFIG.weights_path, True, runtime_device)
+    string_model, string_status = load_runtime_string_model(STRING_TRACKING_CONFIG.weights_path, True, runtime_device)
     orientation_model, orientation_status = load_orientation_model(ORIENTATION_CONFIG.weights_path, True)
     processed = 0
     failures: list[dict[str, str]] = []

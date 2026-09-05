@@ -1,6 +1,6 @@
 """ROI orientation training entry point."""
 
-from training_v3.train_orientation import main, train_orientation
+from yoyo_orientation._training import main, train_orientation
 
 __all__ = ["main", "train_orientation"]
 

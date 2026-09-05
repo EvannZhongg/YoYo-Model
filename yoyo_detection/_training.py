@@ -1,8 +1,7 @@
-"""Train and version the three models produced by the unified annotation dataset."""
+"""Shared Ultralytics training implementation for the detector path."""
 
 from __future__ import annotations
 
-import argparse
 import json
 import platform
 import sys
@@ -196,94 +195,3 @@ def train_task(
         encoding="utf-8",
     )
     return run_manifest
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train yoyo models from the unified NYPC1A dataset with versioned run manifests.")
-    parser.add_argument("--dataset-dir", default=str(BASE_DIR / "datasets" / "1Ayoyo_dataset"))
-    parser.add_argument("--task", choices=("all", *TASKS), default="all")
-    parser.add_argument("--project-dir", default=str(BASE_DIR / "runs" / "v2v3"))
-    parser.add_argument("--models-dir", default=str(BASE_DIR / "models"))
-    parser.add_argument("--detection-weights", default="", help="Optional pretrained detector checkpoint.")
-    parser.add_argument("--string-weights", default="", help="Optional pretrained segmenter checkpoint.")
-    parser.add_argument("--orientation-weights", default="", help="Optional pretrained classifier checkpoint.")
-    parser.add_argument("--run-tag", default="", help="Short candidate label included in the versioned run name.")
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--detection-imgsz", type=int, default=1280)
-    parser.add_argument("--string-imgsz", type=int, default=1280)
-    parser.add_argument("--orientation-imgsz", type=int, default=320)
-    parser.add_argument("--detection-batch", default="2")
-    parser.add_argument("--string-batch", default="2")
-    parser.add_argument("--orientation-batch", default="16")
-    parser.add_argument("--workers", type=int, default=0)
-    parser.add_argument("--device", default="0")
-    parser.add_argument("--seed", type=int, default=20260726)
-    parser.add_argument("--patience", type=int, default=20)
-    parser.add_argument("--optimizer", default="auto")
-    parser.add_argument("--lr0", type=float, default=None)
-    parser.add_argument("--auto-download", action="store_true")
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    selected = TASKS if args.task == "all" else (args.task,)
-    runs = []
-    for task in selected:
-        task_imgsz = {
-            "detection": args.detection_imgsz,
-            "string_segmentation": args.string_imgsz,
-            "orientation": args.orientation_imgsz,
-        }[task]
-        task_batch = {
-            "detection": args.detection_batch,
-            "string_segmentation": args.string_batch,
-            "orientation": args.orientation_batch,
-        }[task]
-        task_weights = {
-            "detection": args.detection_weights,
-            "string_segmentation": args.string_weights,
-            "orientation": args.orientation_weights,
-        }[task]
-        runs.append(
-            train_task(
-                task=task,
-                dataset_dir=Path(args.dataset_dir),
-                project_dir=Path(args.project_dir),
-                models_dir=Path(args.models_dir),
-                epochs=args.epochs,
-                imgsz=task_imgsz,
-                batch=str(task_batch),
-                workers=args.workers,
-                device=str(args.device),
-                seed=args.seed,
-                auto_download=args.auto_download,
-                initial_weights_override=task_weights or None,
-                run_tag=args.run_tag,
-                patience=args.patience,
-                optimizer=args.optimizer,
-                learning_rate=args.lr0,
-            )
-        )
-    task_suffix = "all" if args.task == "all" else args.task
-    suite_path = Path(args.project_dir) / f"{runs[0]['dataset_id']}_{task_suffix}_suite.json"
-    suite_path.parent.mkdir(parents=True, exist_ok=True)
-    suite_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "yoyo_training_suite_v1",
-                "created_at_utc": datetime.now(timezone.utc).isoformat(),
-                "dataset_id": runs[0]["dataset_id"],
-                "tasks": [{"task": run["task"], "run_manifest": str(Path(run["run_dir"]) / "run_manifest.json")} for run in runs],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    print(json.dumps({"dataset_id": runs[0]["dataset_id"], "runs": [run["run_dir"] for run in runs], "suite": str(suite_path.resolve())}, ensure_ascii=False, indent=2))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

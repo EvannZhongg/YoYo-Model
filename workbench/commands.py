@@ -1,4 +1,4 @@
-"""Command orchestration for the unified v2/v3 training workflow."""
+"""Command orchestration for Workbench training and evaluation."""
 
 from __future__ import annotations
 
