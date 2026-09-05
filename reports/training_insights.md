@@ -235,3 +235,13 @@
 **适用范围**：当前 RT-DLO-abhay ResNet-101 适配、同一训练 manifest 与 checkpoint、RTX 4070 Laptop、`1Ayoyo_consecutive` 10 组/927 帧及邬聪聪 300 帧端到端协议；图求解器结果还受其原始工业缆线掩码假设影响，不外推到其他分辨率或数据域。
 
 **后续建议**：保留 RT-DLO 语义结果作为架构上限和失败证据，不晋升权重或图后处理；后续优先补充弱来源连续标注与模型校准，避免在当前细绳任务上继续堆叠图求解流程。
+
+## RT-DLO ASPP migration and teacher distillation screening
+
+**结论**：将 RT-DLO 的五分支 ASPP 加到 MobileNetV3-FPN 最深层，或用已训练的 RT-DLO ResNet-101 soft logits 蒸馏同一 student，在当前短训练筛选中都没有超过原始 MobileNetV3-FPN；ASPP 还降低了纯模型吞吐，因此两条路线均不进入完整训练或独立 test/连续集评估。
+
+**证据**：固定 manifest `d4f0cc89cdb4e6727b723e609e7b02c35cac8da4c6a2275a89d8a74ee7a62344`、seed `20260830`、ImageNet 初始化、前三轮冻结 backbone、4 epoch 和同一 35 阈值验证协议，原始 MobileNetV3-FPN 的 val centerline F1@8 / Presence F1 为 `0.793190 / 0.978723`；RT-DLO ASPP（`1x1 + rates 6/12/18 + global pooling`，空洞卷积 depthwise-separable）为 `0.783161 / 0.989247`；RT-DLO teacher soft-logit 蒸馏（temperature `2.0`、weight `0.5`）为 `0.778857 / 0.989170`。蒸馏 checkpoint 已验证只含 3.016M student 参数和标准 MobileNetV3-FPN state dict，不含 teacher 参数。RTX 4070 Laptop、`1088x608`、AMP、串行 100 次前向下，ASPP 为 `90.38 FPS`，原始 student 为 `99.04 FPS`，约下降 `8.7%`；ASPP 参数为 3.028M，对照为 3.016M。
+
+**适用范围**：当前 798/151/152 reviewed split、MobileNetV3-FPN 32 通道 decoder、4 epoch 架构筛选预算，以及由同一 train split 训练且与 val/test 来源隔离的 RT-DLO teacher；短训练结果不代表更大数据规模或其他蒸馏权重的理论上限。
+
+**后续建议**：当前不继续增加 ASPP 分支，也不为该 teacher 扩展蒸馏损失；若未来 teacher 在新的独立连续来源上形成更强且更稳定的优势，可先用同 seed 短训练 A/B 重新筛选较低蒸馏权重，再决定是否投入完整训练。
