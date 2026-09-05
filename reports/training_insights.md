@@ -245,3 +245,13 @@
 **适用范围**：当前 798/151/152 reviewed split、MobileNetV3-FPN 32 通道 decoder、4 epoch 架构筛选预算，以及由同一 train split 训练且与 val/test 来源隔离的 RT-DLO teacher；短训练结果不代表更大数据规模或其他蒸馏权重的理论上限。
 
 **后续建议**：当前不继续增加 ASPP 分支，也不为该 teacher 扩展蒸馏损失；若未来 teacher 在新的独立连续来源上形成更强且更稳定的优势，可先用同 seed 短训练 A/B 重新筛选较低蒸馏权重，再决定是否投入完整训练。
+
+## MobileNetV3-FPN e30 full-training screening
+
+**结论**：在当前扩展 reviewed manifest 上从 ImageNet backbone 完整训练 30 epoch 的 MobileNetV3-FPN，静态独立 test 和连续集 pooled 几何指标均优于生产模型，但弱来源与时序可靠性回退，暂不晋升。
+
+**证据**：候选 `runs/experiments/semantic_mobilenetv3_fpn_e30` 与生产模型使用相同 `1088x608` 推理、颜色/亮脊候选、32 组件和时序协议。独立 test（152 张、manifest `d4f0cc89...`）centerline F1@8 / Presence F1 / 负图平均误检像素为 `0.891152 / 0.982578 / 24.0`，生产同 manifest 对照为 `0.877249 / 0.979167 / 60.364`。`1Ayoyo_consecutive` 927 帧 pooled centerline F1@8、Chamfer/HD95 为 `0.841857 / 10.2873 / 42.6542 px`，高于生产 `0.818297 / 15.6212 / 57.4703 px`；但最弱组 F1@8 为 `0.622437`，低于生产 `0.638996`，Presence F1 为 `0.990132` 对 `0.994530`，最长缺失/最大恢复为 `5/5` 对 `2/2`。同一 RTX 4070 Laptop 上 1088x608 纯模型前向为 `90.61 FPS`，生产 `90.35 FPS`，参数量均为 `3,016,369`。
+
+**适用范围**：`d4f0cc89...` reviewed split、seed `20260830`、30 epoch、`960x544` checkpoint 放大到 `1.125x`、当前十组连续集及后处理；连续集弱组和时序护栏仍受该数据规模影响。
+
+**后续建议**：保留该 checkpoint 作为静态/几何上限参考，不替换生产权重；后续优先补充池高宇与邬聪聪等弱来源的连续标注或校准，再以弱组、Presence 和缺失段恢复到生产护栏内为晋升条件。
