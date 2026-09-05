@@ -216,6 +216,16 @@
 
 **后续建议**：新增来源后继续优先从 foundation 做同协议重训，并用 Macro Recall 和逐来源连续集护栏共同判断；少数类 test 扩大前，不把单次结果外推到其他拍摄域。
 
+## DSCNet and Ariadne+ architecture screening
+
+**结论**：在当前绳线语义任务和训练预算下，DSCNet 的动态偏移采样没有带来可测收益，Ariadne+ 的 ResNet-101 虽优于 MobileNetV2，但仍明显低于生产验证指标；两者都不适合作为替换方向。
+
+**证据**：DSCNet 4 epoch 对照中，启用动态 offset 与关闭 offset 的验证 Centerline F1@8 均为 `0`、Presence 均为 `0`，loss 分别为 `1.0019/1.0022`；动态采样推理约 `14.48 FPS`。Ariadne+ 4 epoch 中，ResNet-101 的验证 F1@8 / Presence 为 `0.7169/0.9818`、约 `47.82 FPS`，MobileNetV2 为 `0.6992/0.9817`、约 `155.83 FPS`；当前生产验证为 `0.813005/0.987952`。
+
+**适用范围**：当前 reviewed 训练集、同一输入与评估脚本、4 epoch 筛选预算及 RTX 4070 Laptop；短训练筛选不能代表这些架构在更大数据规模上的理论上限。
+
+**后续建议**：不保留 DSCNet offset 分支或 Ariadne+ backbone 作为生产候选；若未来数据规模显著增加，应先以独立 test 和连续集护栏重新验证，再考虑架构级投入。
+
 ## RT-DLO semantic backbone and graph solver comparison
 
 **结论**：RT-DLO 的 ResNet-101 语义骨干在当前连续集上有小幅 pooled F1@8/几何收益，但参数量、显存和端到端速度代价过大，且最长漏检段明显恶化；官方图求解器接入后进一步失效，不具备替换生产方案的条件。
