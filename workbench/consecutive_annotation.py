@@ -14,7 +14,7 @@ CONSECUTIVE_FILENAME = "consecutive_groups.json"
 CONSECUTIVE_SCHEMA_VERSION = "yoyo_consecutive_groups_v1"
 
 
-def _read_groups(dataset_path: str | Path) -> tuple[Path, dict[str, Any]]:
+def _read_groups(dataset_path: str | Path, *, allow_gaps: bool = False) -> tuple[Path, dict[str, Any]]:
     dataset = base._managed_dataset_path(dataset_path)
     path = dataset / CONSECUTIVE_FILENAME
     try:
@@ -61,7 +61,9 @@ def _read_groups(dataset_path: str | Path) -> tuple[Path, dict[str, Any]]:
             seen_samples.add(normalized_key)
             keys.append(normalized_key)
             indices.append(int(frame["frame_index"]))
-        if indices != list(range(indices[0], indices[-1] + 1)):
+        if (not allow_gaps and indices != list(range(indices[0], indices[-1] + 1))) or (
+            allow_gaps and indices != sorted(set(indices))
+        ):
             raise ValueError(f"frame indices are not consecutive in group: {group_id}")
         if int(group.get("selected_start_frame")) != indices[0]:
             raise ValueError(f"selected_start_frame disagrees with group frames: {group_id}")
@@ -108,8 +110,8 @@ def _group_summary(group: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def open_consecutive_annotation_dataset(dataset_path: str) -> dict[str, Any]:
-    dataset, metadata = _read_groups(dataset_path)
+def open_consecutive_annotation_dataset(dataset_path: str, *, allow_gaps: bool = False) -> dict[str, Any]:
+    dataset, metadata = _read_groups(dataset_path, allow_gaps=allow_gaps)
     opened = base.open_annotation_dataset(str(dataset))
     summaries = {sample["key"]: sample for sample in opened["samples"]}
     ordered_samples: list[dict[str, Any]] = []

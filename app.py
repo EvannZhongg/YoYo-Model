@@ -16,6 +16,7 @@ from workbench.commands import workbench_evaluate_v2v3, workbench_train_v2v3
 from workbench.consecutive_annotation import consecutive_annotation_component_kwargs
 from workbench.dataset_annotation import dataset_annotation_component_kwargs
 from workbench.score_annotation import score_annotation_component_kwargs
+from workbench.temporal_annotation import temporal_annotation_component_kwargs
 from workbench.tracking import tracking_review_gallery as _tracking_review_gallery
 
 
@@ -183,6 +184,9 @@ def create_demo():
 
             with gr.Tab("连续帧标注"):
                 gr.HTML(**consecutive_annotation_component_kwargs())
+
+            with gr.Tab("Temporal 组标注"):
+                gr.HTML(**temporal_annotation_component_kwargs())
 
             with gr.Tab("Unified Training"):
                 training_dataset = gr.Textbox(label="Unified Dataset", value=str(unified_dataset))

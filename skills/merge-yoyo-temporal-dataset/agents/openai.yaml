@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge Yoyo Temporal Dataset"
+  short_description: "Merge confirmed temporal groups safely"
+  default_prompt: "Use $merge-yoyo-temporal-dataset to merge confirmed groups into datasets/1Ayoyo_temporal."

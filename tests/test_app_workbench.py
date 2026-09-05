@@ -33,6 +33,7 @@ class UnifiedWorkbenchTests(unittest.TestCase):
         values = {str(item.get("value", "")) for item in props}
 
         self.assertIn("Unified Dataset", labels)
+        self.assertIn("Temporal 组标注", labels)
         self.assertIn("Run Full Video Tracking", values)
         self.assertTrue(any("悠悠球计分标注" in value for value in values))
 

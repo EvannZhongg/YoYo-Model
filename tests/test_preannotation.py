@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
-from workbench.preannotation import _draft_document
+from workbench.preannotation import _draft_document, _read_image
 
 
 def _document() -> dict:
@@ -40,6 +43,19 @@ def _document() -> dict:
 
 
 class PreannotationTests(unittest.TestCase):
+    def test_read_image_supports_unicode_windows_paths(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "中文目录" / "图像.jpg"
+            path.parent.mkdir()
+            ok, encoded = cv2.imencode(".jpg", np.zeros((8, 12, 3), dtype=np.uint8))
+            self.assertTrue(ok)
+            encoded.tofile(path)
+
+            image = _read_image(path)
+
+        self.assertIsNotNone(image)
+        self.assertEqual(image.shape, (8, 12, 3))
+
     def test_draft_uses_current_fields_and_inferred_path_evidence(self):
         image = np.zeros((100, 200, 3), dtype=np.uint8)
         detections = [{"class_name": "yoyo", "confidence": 0.9, "bbox": [20, 30, 60, 70]}]

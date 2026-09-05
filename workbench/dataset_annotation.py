@@ -178,6 +178,7 @@ def _sample_summary(
         "index": index,
         "key": relative,
         "name": image_path.name,
+        "image_path": str(image_path),
         "group": str(document.get("source_group") or label_path.parent.name),
         "frame_index": document.get("frame_index"),
         "yoyo_visibility": str(active.get("visibility") or ("visible" if bbox else "uncertain")),

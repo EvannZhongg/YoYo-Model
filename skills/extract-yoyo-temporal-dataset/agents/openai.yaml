@@ -1,0 +1,4 @@
+interface:
+  display_name: "Extract Yoyo Temporal Dataset"
+  short_description: "Extract grouped consecutive video frames"
+  default_prompt: "Use $extract-yoyo-temporal-dataset to extract consecutive frame groups for temporal string tracking."

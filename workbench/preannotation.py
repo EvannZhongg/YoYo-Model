@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import numpy as np
 
 from common.files import atomic_write_text
 from config import DETECTION_CONFIG, ORIENTATION_CONFIG, STRING_TRACKING_CONFIG, TRACKING_CONFIG
@@ -63,6 +64,12 @@ def _orientation_fields(prediction: dict[str, Any] | None) -> tuple[str, str]:
 
 def _image_path(label_path: Path, labels_root: Path, images_root: Path, document: dict[str, Any]) -> Path:
     return base._resolve_source_image(label_path, labels_root, images_root, document)
+
+
+def _read_image(path: Path) -> Any:
+    """Read an image through bytes so Unicode Windows paths are supported."""
+    encoded = np.fromfile(path, dtype=np.uint8)
+    return cv2.imdecode(encoded, cv2.IMREAD_COLOR) if encoded.size else None
 
 
 def _draft_document(
@@ -219,7 +226,7 @@ def preannotate_dataset(dataset_path: str | Path, device: str | None = None) -> 
         try:
             document = base._read_document(label_path)
             image_path = _image_path(label_path, labels_root, images_root, document)
-            image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+            image = _read_image(image_path)
             if image is None:
                 raise ValueError(f"could not read image: {image_path}")
             detections = detector.predict(
