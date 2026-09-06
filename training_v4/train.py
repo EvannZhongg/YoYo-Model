@@ -27,8 +27,21 @@ def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Ten
     mask_logits, heat_logits = output[:, :1], output[:, 1:2]
     tangent = torch.tanh(output[:, 2:])
     mask_loss, mask_parts = focal_dice_loss(mask_logits, target[:, :1], hard_negative_weight=0.2)
+    mask_positive = target[:, :1].sum().clamp_min(1.0)
+    mask_negative = target[:, :1].numel() - mask_positive
+    mask_weighted_bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        mask_logits,
+        target[:, :1],
+        pos_weight=(mask_negative / mask_positive).clamp(1.0, 12.0),
+    )
     heat_target = target[:, 1:2]
-    heat_bce = torch.nn.functional.binary_cross_entropy_with_logits(heat_logits, heat_target)
+    heat_positive = heat_target.sum().clamp_min(1.0)
+    heat_negative = heat_target.numel() - heat_positive
+    heat_bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        heat_logits,
+        heat_target,
+        pos_weight=(heat_negative / heat_positive).clamp(1.0, 20.0),
+    )
     heat_prob = torch.sigmoid(heat_logits)
     intersection = (heat_prob * heat_target).sum((1, 2, 3))
     denominator = heat_prob.sum((1, 2, 3)) + heat_target.sum((1, 2, 3))
@@ -39,9 +52,10 @@ def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Ten
     predicted_tangent = tangent / predicted_norm
     cosine = (predicted_tangent * target_tangent).sum(dim=1, keepdim=True).abs()
     tangent_loss = (1.0 - cosine)[valid[:, :1]].mean() if valid.any() else output.new_zeros(())
-    loss = mask_loss + 0.8 * heat_bce + 0.8 * heat_dice + 0.35 * tangent_loss
+    loss = mask_loss + 0.35 * mask_weighted_bce + 0.8 * heat_bce + 0.8 * heat_dice + 0.35 * tangent_loss
     return loss, {
         "mask": float(mask_loss.detach()),
+        "mask_weighted_bce": float(mask_weighted_bce.detach()),
         "heat_bce": float(heat_bce.detach()),
         "heat_dice": float(heat_dice.detach()),
         "tangent": float(tangent_loss.detach()),
