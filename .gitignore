@@ -105,6 +105,7 @@ credentials*.json
 
 # Vendored upstream source; the project uses the package from requirements.txt
 /supervision/
+/StrandSeg-Lite/
 
 # Local task notes and obsolete non-dot Git metadata copies
 /task.md
