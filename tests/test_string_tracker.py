@@ -435,6 +435,48 @@ class StringTrackerTemporalTests(unittest.TestCase):
         self.assertEqual(geometry.call_args.kwargs["min_component_pixels"], 8)
         self.assertEqual(geometry.call_args.kwargs["max_components"], 32)
 
+    def test_semantic_threshold_override_is_forwarded_to_observation(self):
+        model = {
+            "kind": "semantic",
+            "model": object(),
+            "checkpoint": {
+                "threshold": 0.9,
+                "model_config": {"input_width": 960, "input_height": 544},
+            },
+            "device": "cpu",
+        }
+        meta = SimpleNamespace(
+            original_width=32, original_height=32,
+            target_width=32, target_height=32,
+            resized_width=32, resized_height=32,
+            pad_x=0, pad_y=0, scale=1.0,
+        )
+        with (
+            patch(
+                "video_tracking.tracker.prepare_letterboxed_input",
+                return_value=(object(), meta),
+            ),
+            patch(
+                "video_tracking.tracker.predict_prepared_probability",
+                return_value=np.zeros((32, 32), dtype=np.float32),
+            ),
+            patch(
+                "video_tracking.tracker.semantic_mask_observation",
+                return_value=None,
+            ) as geometry,
+        ):
+            _predict_string_model(
+                model,
+                np.zeros((32, 32, 3), dtype=np.uint8),
+                None,
+                0.2,
+                32,
+                "cpu",
+                "1A",
+                threshold_override=0.4,
+            )
+        self.assertEqual(geometry.call_args.kwargs["threshold"], 0.4)
+
     def test_semantic_probability_gate_controls_color_augmentation(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)
         cv2.line(frame, (120, 90), (200, 40), (0, 255, 0), 4)

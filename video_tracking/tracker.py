@@ -392,6 +392,7 @@ def _predict_string_model(
     string_low_threshold: float | None = None,
     prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
     max_components: int = TRACKING_CONFIG.string_max_components,
+    threshold_override: float | None = None,
 ) -> dict[str, Any] | None:
     if model is None:
         return None
@@ -420,7 +421,11 @@ def _predict_string_model(
         from training_v4.evaluate import decode_centerline
         from string_segmentation.semantic_model import _skeleton_cover_paths, _skeletonize, restore_coordinates
 
-        threshold = max(float(checkpoint.get("threshold", 0.25)), float(confidence))
+        threshold = max(
+            float(checkpoint.get("threshold", 0.25))
+            if threshold_override is None else float(threshold_override),
+            float(confidence),
+        )
         decoded = decode_centerline(probability, tangent, threshold)
         paths = [restore_coordinates(path, meta) for path in _skeleton_cover_paths(_skeletonize(decoded), 8, 256) if len(path) >= 2]
         if not paths:
@@ -465,7 +470,11 @@ def _predict_string_model(
             if (meta.target_width, meta.target_height) != (input_width, input_height):
                 raise ValueError("Prepared semantic letterbox has an unexpected size")
             tensor = normalize_image_for_inference(image, model_device)
-        threshold = max(float(checkpoint.get("threshold", 0.5)), float(confidence))
+        threshold = max(
+            float(checkpoint.get("threshold", 0.5))
+            if threshold_override is None else float(threshold_override),
+            float(confidence),
+        )
         low_threshold = string_low_threshold
         if low_threshold is not None:
             low_threshold = min(float(low_threshold), threshold)
