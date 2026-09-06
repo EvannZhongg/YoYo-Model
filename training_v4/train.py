@@ -66,30 +66,35 @@ def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Ten
 @torch.inference_mode()
 def validate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -> dict[str, float]:
     model.eval()
-    true_positive = false_positive = false_negative = 0
+    predictions: list[np.ndarray] = []
+    targets: list[np.ndarray] = []
     tangent_total = tangent_count = 0.0
     for batch in loader:
         output = model(batch["image"].to(device))
-        fused = fuse_geometry(output).cpu().numpy()
-        target = batch["target"][:, 1].numpy()
-        for prediction, expected in zip(fused, target):
-            predicted = prediction >= 0.25
-            target_mask = expected >= 0.15
-            true_positive += int(np.logical_and(predicted, target_mask).sum())
-            false_positive += int(np.logical_and(predicted, ~target_mask).sum())
-            false_negative += int(np.logical_and(~predicted, target_mask).sum())
+        predictions.extend(fuse_geometry(output).cpu().numpy()[:, 0])
+        targets.extend(batch["target"][:, 1].numpy())
         valid = batch["tangent_valid"].to(device) > 0.5
         if valid.any():
             predicted_tangent = torch.nn.functional.normalize(torch.tanh(output[:, 2:]), dim=1)
             target_tangent = batch["target"][:, 2:].to(device)
             tangent_total += float((predicted_tangent * target_tangent).sum(dim=1).abs()[valid[:, 0]].sum())
             tangent_count += float(valid[:, 0].sum())
-    precision = true_positive / max(1, true_positive + false_positive)
-    recall = true_positive / max(1, true_positive + false_negative)
+    best = {"fused_f1": 0.0, "fused_precision": 0.0, "fused_recall": 0.0, "threshold": 0.25}
+    for threshold in np.linspace(0.02, 0.50, 25):
+        true_positive = false_positive = false_negative = 0
+        for prediction, expected in zip(predictions, targets):
+            predicted = prediction >= float(threshold)
+            target_mask = expected >= 0.15
+            true_positive += int(np.logical_and(predicted, target_mask).sum())
+            false_positive += int(np.logical_and(predicted, ~target_mask).sum())
+            false_negative += int(np.logical_and(~predicted, target_mask).sum())
+        precision = true_positive / max(1, true_positive + false_positive)
+        recall = true_positive / max(1, true_positive + false_negative)
+        f1 = 2.0 * precision * recall / max(1e-9, precision + recall)
+        if f1 > best["fused_f1"]:
+            best = {"fused_f1": f1, "fused_precision": precision, "fused_recall": recall, "threshold": float(threshold)}
     return {
-        "fused_precision": precision,
-        "fused_recall": recall,
-        "fused_f1": 2.0 * precision * recall / max(1e-9, precision + recall),
+        **best,
         "tangent_cosine_abs": tangent_total / max(1.0, tangent_count),
     }
 
