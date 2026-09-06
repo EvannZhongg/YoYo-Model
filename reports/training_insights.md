@@ -277,3 +277,23 @@
 **适用范围**：当前 `798/151/152` reviewed split、`960x544` checkpoint、`1.125x` 连续集推理、颜色/亮脊/光流协议和 MobileNetV3-FPN 共享 backbone；不外推到更大连续标注规模或不同来源分布。
 
 **后续建议**：保留 2theta 表示和最小几何融合路径作为后续实验基线，优先补充池高宇等弱来源的连续标注并重新校准阈值；只有在独立 test、连续集 pooled/弱组和吞吐同时满足护栏时才考虑晋升。
+
+## 语义解码器迁移到几何多任务模型
+
+**结论**：将已训练语义 MobileNetV3-FPN 的 encoder/FPN 和 `classifier` 解码器映射到几何模型的 mask head，再进行 12 epoch 几何 warm-start，能稳定提高验证和独立 test 的中心线质量；但 Presence 仍略低于生产护栏，不能仅凭几何 F1 晋升。
+
+**证据**：同一 `d4f0cc89cdb4e6727b723e609e7b02c35cac8da4c6a2275a89d8a74ee7a62344` manifest 下，语义解码器迁移候选 `runs/experiments/centerline_semantic_init_e12` 的验证 fused proxy F1 / 2theta cosine 为 `0.7247 / 0.9140`，高于原 2theta 候选的 `0.7020 / 0.9341`；使用验证选定阈值 `0.04` 的独立 test centerline F1@8 为 `0.7667`，高于原候选 `0.7466`。同一颜色、亮脊、光流和 `1.125x` 连续集协议下，候选 pooled centerline F1@8 为 `0.8072`、最弱来源组 `0.6360`、Presence F1 `0.99345`（`TP/FP/FN=910/8/4`），几何 Chamfer/HD95 均值约 `9.44/40.13 px`；当前生产 pooled F1@8 `0.8183`、最弱组 `0.6390`、Presence F1 `0.9945`。将解码支持阈值收紧到高阈值的 `0.60` 倍可把 pooled F1 提到 `0.8191`，但 Presence 降到 `0.9913`，说明主要回退来自时序存在性而非中心线定位。
+
+**适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN 32 通道、`960x544` checkpoint、`1.125x` 连续集推理和现有候选后处理；不外推到新来源、不同训练日程或更大连续标注规模。
+
+**后续建议**：保留“语义解码器初始化 + 几何监督”的训练策略作为后续基线，但暂不把它写入默认生产路径；下一步优先针对弱来源的连续存在性补充标注或做来源隔离校准，避免继续堆叠解码阈值规则。
+
+## 直接人工 polyline 监督的短训收益不持续
+
+**结论**：将 canonical 标注中的人工 `string_polylines_pixel` 直接栅格化为 heatmap/tangent target，在 4 epoch 筛选中略优于从 polygon mask 骨架化的 target，但 warm-start 到等效 12 epoch 后反而落后；当前标注的 polyline 采样密度和可用性不足以替换现有 mask-skeleton target。
+
+**证据**：同一 manifest、MobileNetV3-FPN、`960x544`、batch 4、seed `20260906` 下，4 epoch direct-polyline 的验证 fused F1 为 `0.4002`，同预算 mask-skeleton 对照为 `0.3652`；从该 checkpoint 再 warm-start 8 epoch 后，验证 fused F1 仅 `0.6796`，低于 2theta mask-skeleton 候选 `0.7020` 和语义解码器迁移候选 `0.7247`。因此短训差异不能作为直接人工中心线监督有效的证据。
+
+**适用范围**：当前 `798/151/152` reviewed split、约 1024/1101 canonical 样本有人工 polyline、现有 polygon mask 与 target 生成流程；不外推到重新审核或更密集的中心线标注。
+
+**后续建议**：删除该实验专用 target 分支，保留 polygon-mask 骨架化作为默认；若未来补齐连续帧中心线标注，应先建立来源隔离的 direct-polyline A/B，再投入完整训练。
