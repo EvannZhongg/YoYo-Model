@@ -90,7 +90,7 @@ def evaluate(weights: str | Path, dataset_dir: str | Path, split: str = "test", 
         precision = slot["prediction_hits"] / max(1, slot["prediction_samples"])
         recall = slot["target_hits"] / max(1, slot["target_samples"])
         summary[key] = {"metric": "pooled_centerline_f1_at_8_source_px", "precision": precision, "recall": recall, "f1": 2 * precision * recall / max(1e-9, precision + recall), **slot}
-    return {"schema_version": "yoyo_training_v4_eval_v3", "task": "mask_centerline_tangent_2theta_fusion", "weights": str(Path(weights).resolve()), "weights_sha256": sha256_file(Path(weights)), "dataset_dir": str(root), "split": split, "summary": summary, "samples": len(rows), "rows": rows}
+    return {"schema_version": "yoyo_training_v4_eval_v3", "task": "mask_centerline_tangent_2theta_fusion", "weights": str(Path(weights).resolve()), "weights_sha256": sha256_file(Path(weights)), "dataset_dir": str(root), "split": split, "dataset_manifest_sha256": sha256_file(root / "manifest.json"), "summary": summary, "samples": len(rows), "rows": rows}
 
 
 def main() -> int:

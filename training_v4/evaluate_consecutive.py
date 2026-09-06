@@ -127,7 +127,9 @@ def main() -> int:
     result = evaluate(args.weights, args.dataset_dir, args.device, args.threshold, args.max_frames)
     output = Path(args.output) if args.output else Path(args.weights).resolve().parent.parent / "consecutive_centerline_fusion_metrics.json"
     output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps({"pooled": result["pooled"], "weakest_source_group": result["weakest_source_group"], "fps": result["fps"]}, ensure_ascii=False, indent=2))
+    document = json.dumps({"pooled": result["pooled"], "weakest_source_group": result["weakest_source_group"], "fps": result["fps"]}, ensure_ascii=False, indent=2)
+    encoding = __import__("sys").stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 
