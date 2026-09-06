@@ -52,7 +52,10 @@ def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Ten
     predicted_tangent = tangent / predicted_norm
     cosine = (predicted_tangent * target_tangent).sum(dim=1, keepdim=True).abs()
     tangent_loss = (1.0 - cosine)[valid[:, :1]].mean() if valid.any() else output.new_zeros(())
-    loss = mask_loss + 0.35 * mask_weighted_bce + 0.8 * heat_bce + 0.8 * heat_dice + 0.35 * tangent_loss
+    # On thin-string masks the unweighted Dice term is nearly one even for a
+    # blank prediction, so it must remain a small regularizer behind balanced
+    # positive-pixel BCE terms.
+    loss = 0.25 * mask_loss + 0.9 * mask_weighted_bce + 1.2 * heat_bce + 0.25 * heat_dice + 0.35 * tangent_loss
     return loss, {
         "mask": float(mask_loss.detach()),
         "mask_weighted_bce": float(mask_weighted_bce.detach()),
@@ -222,7 +225,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> int:
     result = train(parse_args())
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    document = json.dumps(result, ensure_ascii=False, indent=2)
+    encoding = sys.stdout.encoding or "utf-8"
+    print(document.encode(encoding, errors="backslashreplace").decode(encoding))
     return 0
 
 
