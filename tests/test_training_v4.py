@@ -45,3 +45,11 @@ class TrainingV4Tests(unittest.TestCase):
         self.assertTrue(torch.isfinite(loss))
         self.assertIn("tangent", parts)
         self.assertEqual(tuple(fuse_geometry(output).shape), (2, 1, 64, 64))
+
+    def test_double_angle_direction_is_pi_periodic(self):
+        theta = 0.37
+        target = torch.tensor([np.cos(2.0 * theta), np.sin(2.0 * theta)])
+        equivalent = torch.tensor([np.cos(2.0 * (theta + np.pi)), np.sin(2.0 * (theta + np.pi))])
+        perpendicular = torch.tensor([np.cos(2.0 * (theta + np.pi / 2.0)), np.sin(2.0 * (theta + np.pi / 2.0))])
+        self.assertTrue(torch.allclose(target, equivalent, atol=1e-6))
+        self.assertAlmostEqual(float(torch.dot(target, perpendicular)), -1.0, places=6)

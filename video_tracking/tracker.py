@@ -157,7 +157,7 @@ def _load_string_model(
         import torch
 
         raw_checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-        if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("format") == "yoyo_centerline_fusion_v1":
+        if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("format") == "yoyo_centerline_fusion_v2":
             from training_v4.evaluate import load_model as load_geometry_model
 
             requested_device = str(device).strip()

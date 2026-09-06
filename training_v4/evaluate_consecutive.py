@@ -103,7 +103,7 @@ def evaluate(weights: str | Path, dataset_dir: str | Path = "datasets/1Ayoyo_con
     pooled_recall = pooled_target_hits / max(1, pooled_target)
     return {
         "schema_version": "yoyo_training_v4_consecutive_eval_v2",
-        "task": "mask_centerline_tangent_fusion",
+        "task": "mask_centerline_tangent_2theta_fusion",
         "weights": str(Path(weights).resolve()),
         "dataset_dir": str(root),
         "threshold": selected_threshold,

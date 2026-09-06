@@ -95,7 +95,7 @@ MobileNetV3-FPN 权重一致：
 `--hard-negative-warmup-epochs` 可用于训练时序消融，默认 `0` 表示固定权重。
 
 中心线融合候选使用共享 MobileNetV3-FPN，同时输出语义 mask、软中心线
-heatmap 和 tangent field；融合结果直接解码为 polyline：
+heatmap 和双角切线场 `(cos 2theta, sin 2theta)`；融合结果直接解码为 polyline：
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train_centerline `

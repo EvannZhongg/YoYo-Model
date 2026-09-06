@@ -20,7 +20,7 @@ from string_segmentation.semantic_model import focal_dice_loss, load_dataset_man
 from .data import CenterlineDataset
 from .model import build_model
 
-CHECKPOINT_FORMAT = "yoyo_centerline_fusion_v1"
+CHECKPOINT_FORMAT = "yoyo_centerline_fusion_v2"
 
 
 def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Tensor, tangent_valid: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
@@ -50,7 +50,9 @@ def geometry_loss(output: torch.Tensor, target: torch.Tensor, context: torch.Ten
     target_tangent = target[:, 2:]
     predicted_norm = torch.linalg.vector_norm(tangent, dim=1, keepdim=True).clamp_min(1e-6)
     predicted_tangent = tangent / predicted_norm
-    cosine = (predicted_tangent * target_tangent).sum(dim=1, keepdim=True).abs()
+    # Double-angle encoding already identifies theta and theta+pi, so an
+    # absolute cosine would incorrectly make theta and theta+pi/2 equivalent.
+    cosine = (predicted_tangent * target_tangent).sum(dim=1, keepdim=True)
     tangent_loss = (1.0 - cosine)[valid[:, :1]].mean() if valid.any() else output.new_zeros(())
     # On thin-string masks the unweighted Dice term is nearly one even for a
     # blank prediction, so it must remain a small regularizer behind balanced
@@ -98,7 +100,7 @@ def validate(model: torch.nn.Module, loader: DataLoader, device: torch.device) -
             best = {"fused_f1": f1, "fused_precision": precision, "fused_recall": recall, "threshold": float(threshold)}
     return {
         **best,
-        "tangent_cosine_abs": tangent_total / max(1.0, tangent_count),
+        "tangent_cosine_2theta": tangent_total / max(1.0, tangent_count),
     }
 
 
@@ -122,8 +124,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--architecture", choices=["mobilenet_v3_fpn", "tiny_unet"], default="mobilenet_v3_fpn")
     parser.add_argument("--base-channels", type=int, default=16)
-    parser.add_argument("--context-radius", type=float, default=6.0)
-    parser.add_argument("--heatmap-sigma", type=float, default=2.0)
+    parser.add_argument("--context-radius", type=float, default=6.0, help="Tangent context radius in source-image pixels.")
+    parser.add_argument("--heatmap-sigma", type=float, default=3.0, help="Gaussian centerline sigma in source-image pixels.")
     parser.add_argument("--pretrained-backbone", action="store_true")
     parser.add_argument("--initial-weights", default="")
     parser.add_argument("--seed", type=int, default=20260906)
@@ -196,17 +198,17 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         row = {"epoch": epoch, "learning_rate": optimizer.param_groups[0]["lr"], "train": {key: value / max(1, len(train_loader)) for key, value in totals.items()}, "validation": validation}
         with history_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"epoch={epoch}/{args.epochs} loss={row['train']['loss']:.4f} fused_f1={validation['fused_f1']:.4f} tangent={validation['tangent_cosine_abs']:.4f}", flush=True)
+        print(f"epoch={epoch}/{args.epochs} loss={row['train']['loss']:.4f} fused_f1={validation['fused_f1']:.4f} tangent_2theta={validation['tangent_cosine_2theta']:.4f}", flush=True)
         if not best_validation or validation["fused_f1"] > best_validation["fused_f1"]:
             best_validation = validation
             best_epoch = epoch
-            torch.save({"format": CHECKPOINT_FORMAT, "model_config": {"architecture": args.architecture, "base_channels": args.base_channels, "input_width": args.input_width, "input_height": args.input_height, "context_radius": args.context_radius, "heatmap_sigma": args.heatmap_sigma}, "state_dict": model.state_dict(), "threshold": 0.25, "epoch": epoch, "validation_metrics": validation, "dataset_manifest_sha256": manifest_hash}, weights_dir / "best.pt")
+            torch.save({"format": CHECKPOINT_FORMAT, "model_config": {"architecture": args.architecture, "base_channels": args.base_channels, "input_width": args.input_width, "input_height": args.input_height, "context_radius_source_px": args.context_radius, "heatmap_sigma_source_px": args.heatmap_sigma}, "state_dict": model.state_dict(), "threshold": float(validation["threshold"]), "epoch": epoch, "validation_metrics": validation, "dataset_manifest_sha256": manifest_hash}, weights_dir / "best.pt")
     if not (weights_dir / "best.pt").exists():
         raise RuntimeError("Training produced no checkpoint")
-    torch.save({"format": CHECKPOINT_FORMAT, "model_config": {"architecture": args.architecture, "base_channels": args.base_channels, "input_width": args.input_width, "input_height": args.input_height, "context_radius": args.context_radius, "heatmap_sigma": args.heatmap_sigma}, "state_dict": model.state_dict(), "threshold": 0.25, "epoch": args.epochs, "validation_metrics": best_validation, "dataset_manifest_sha256": manifest_hash}, weights_dir / "last.pt")
+    torch.save({"format": CHECKPOINT_FORMAT, "model_config": {"architecture": args.architecture, "base_channels": args.base_channels, "input_width": args.input_width, "input_height": args.input_height, "context_radius_source_px": args.context_radius, "heatmap_sigma_source_px": args.heatmap_sigma}, "state_dict": model.state_dict(), "threshold": float(best_validation["threshold"]), "epoch": args.epochs, "validation_metrics": best_validation, "dataset_manifest_sha256": manifest_hash}, weights_dir / "last.pt")
     run_manifest = {
         "schema_version": "yoyo_training_v4_run_v2",
-        "task": "mask_centerline_tangent_fusion",
+        "task": "mask_centerline_tangent_2theta_fusion",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
         "dataset_manifest": str((dataset_dir / "manifest.json")),

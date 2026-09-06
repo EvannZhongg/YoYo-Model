@@ -52,7 +52,7 @@ class CenterlineFusionRecognizer:
             "probability_threshold": threshold,
             "component_count": len(paths),
             "polyline_count": len(paths),
-            "tangent_field": True,
+            "tangent_field": "cos2theta_sin2theta",
             "anchored_to_yoyo": yoyo is not None,
         }
 
@@ -62,4 +62,4 @@ def is_centerline_checkpoint(path: str | Path) -> bool:
         checkpoint = torch.load(Path(path), map_location="cpu", weights_only=True)
     except Exception:
         return False
-    return isinstance(checkpoint, dict) and checkpoint.get("format") == "yoyo_centerline_fusion_v1"
+    return isinstance(checkpoint, dict) and checkpoint.get("format") == "yoyo_centerline_fusion_v2"

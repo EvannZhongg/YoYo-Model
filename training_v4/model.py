@@ -9,8 +9,8 @@ from string_segmentation.semantic_model import ConvBlock, _FPNRefine, _group_cou
 class MultiTaskCenterlineFPN(nn.Module):
     """MobileNetV3-FPN with mask and geometry heads.
 
-    Channels are ordered as ``mask_logit, centerline_logit, tangent_x,
-    tangent_y``.  Keeping a tensor output makes the module usable by the
+    Channels are ordered as ``mask_logit, centerline_logit, cos_2theta,
+    sin_2theta``.  Keeping a tensor output makes the module usable by the
     existing CUDA inference path while the two supervision targets remain
     explicitly separated in the loss.
     """
