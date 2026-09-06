@@ -94,6 +94,30 @@ MobileNetV3-FPN 权重一致：
 默认 35 点、每 epoch 验证的完整协议复核。
 `--hard-negative-warmup-epochs` 可用于训练时序消融，默认 `0` 表示固定权重。
 
+中心线融合候选使用共享 MobileNetV3-FPN，同时输出语义 mask、软中心线
+heatmap 和 tangent field；融合结果直接解码为 polyline：
+
+```powershell
+.\.venv\Scripts\python.exe -m cli.training.train_centerline `
+  --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
+  --project runs/experiments `
+  --name centerline_fusion_v1 `
+  --epochs 12 `
+  --architecture mobilenet_v3_fpn `
+  --pretrained-backbone `
+  --device cuda
+.\.venv\Scripts\python.exe -m cli.training.evaluate_centerline `
+  --weights runs/experiments/centerline_fusion_v1/weights/best.pt `
+  --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
+  --split test --device cuda
+.\.venv\Scripts\python.exe -m cli.tracking.evaluate_centerline_consecutive `
+  --weights runs/experiments/centerline_fusion_v1/weights/best.pt `
+  --dataset-dir datasets/1Ayoyo_consecutive --device cuda
+```
+
+该候选默认不替换生产语义权重；只有在独立 test 和连续集同协议比较通过
+后才更新 `config.yaml` 的追踪权重路径。
+
 ROI 方向模型使用（默认四分类画面朝向视图）：
 
 ```powershell

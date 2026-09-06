@@ -154,10 +154,29 @@ def _load_string_model(
         logger.warning("String segmentation model not found: %s", path)
         return None, f"missing: {path}"
     try:
-        if not is_semantic_checkpoint(path):
-            return None, f"unsupported checkpoint: {path}"
         import torch
 
+        raw_checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("format") == "yoyo_centerline_fusion_v1":
+            from training_v4.evaluate import load_model as load_geometry_model
+
+            requested_device = str(device).strip()
+            if requested_device.isdigit():
+                requested_device = f"cuda:{requested_device}"
+            geometry_device = torch.device(
+                requested_device or ("cuda" if torch.cuda.is_available() else "cpu")
+            )
+            geometry_model, geometry_checkpoint = load_geometry_model(path, geometry_device)
+            return {
+                "kind": "geometry",
+                "model": geometry_model,
+                "checkpoint": geometry_checkpoint,
+                "device": geometry_device,
+                "path": str(path),
+                "cuda_graph": False,
+            }, f"geometry:{path}"
+        if not is_semantic_checkpoint(path):
+            return None, f"unsupported checkpoint: {path}"
         requested_device = str(device).strip()
         if requested_device.isdigit():
             requested_device = f"cuda:{requested_device}"
@@ -376,6 +395,57 @@ def _predict_string_model(
 ) -> dict[str, Any] | None:
     if model is None:
         return None
+    if isinstance(model, dict) and model.get("kind") == "geometry":
+        import torch
+
+        checkpoint = model["checkpoint"]
+        primary_model = model["model"]
+        model_device = model["device"]
+        model_config = checkpoint["model_config"]
+        scale = float(semantic_inference_scale)
+        input_width, input_height, _ = _semantic_inference_parameters(model_config, scale)
+        if prepared_letterbox is None:
+            tensor, meta = prepare_letterboxed_input(frame, input_width, input_height, model_device)
+        else:
+            image, _, meta = prepared_letterbox
+            if (meta.target_width, meta.target_height) != (input_width, input_height):
+                raise ValueError("Prepared geometry letterbox has an unexpected size")
+            tensor = normalize_image_for_inference(image, model_device)
+        with torch.inference_mode():
+            output = primary_model(tensor)
+        mask_probability = torch.sigmoid(output[:, 0:1])
+        heat_probability = torch.sigmoid(output[:, 1:2])
+        probability = (mask_probability * (0.35 + 0.65 * heat_probability))[0, 0].detach().cpu().numpy()
+        tangent = torch.tanh(output[0, 2:]).detach().cpu().numpy()
+        from training_v4.evaluate import decode_centerline
+        from string_segmentation.semantic_model import _skeleton_cover_paths, _skeletonize, restore_coordinates
+
+        threshold = max(float(checkpoint.get("threshold", 0.25)), float(confidence))
+        decoded = decode_centerline(probability, tangent, threshold)
+        paths = [restore_coordinates(path, meta) for path in _skeleton_cover_paths(_skeletonize(decoded), 8, 256) if len(path) >= 2]
+        if not paths:
+            return None
+        paths = paths[: max(1, int(max_components))]
+        observation = {
+            "points": paths[0],
+            "polylines": paths,
+            "confidence": float(np.max(probability[decoded > 0])) if np.any(decoded) else 0.0,
+            "method": "centerline_geometry_fusion",
+            "probability_threshold": threshold,
+            "component_count": len(paths),
+            "polyline_count": len(paths),
+            "anchored_to_yoyo": yoyo is not None,
+        }
+        if color_probability_augment:
+            observation = _augment_semantic_color_observation(
+                frame, yoyo, observation, probability, meta, threshold,
+                color_probability_min_mean, color_probability_min_fraction,
+                color_semantic_prefilter, bright_line_augment,
+                bright_line_min_mean, max_components,
+            )
+        observation["inference_scale"] = round(scale, 4)
+        observation["inference_size"] = [input_width, input_height]
+        return observation
     if isinstance(model, dict) and model.get("kind") == "semantic":
         checkpoint = model["checkpoint"]
         primary_model = model["model"]
@@ -442,7 +512,7 @@ def _prepare_semantic_letterbox(
     frame: np.ndarray,
     semantic_inference_scale: float,
 ) -> tuple[np.ndarray, np.ndarray | None, Any] | None:
-    if not isinstance(model, dict) or model.get("kind") != "semantic":
+    if not isinstance(model, dict) or model.get("kind") not in {"semantic", "geometry"}:
         return None
     input_width, input_height, _ = _semantic_inference_parameters(
         model["checkpoint"]["model_config"],
