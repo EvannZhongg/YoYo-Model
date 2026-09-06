@@ -57,10 +57,6 @@ class StringRecognizer:
 
 
 def load_string_model(weights: str | Path, device: str = "cpu") -> StringRecognizer:
-    from training_v4.inference import CenterlineFusionRecognizer, is_centerline_checkpoint
-
-    if is_centerline_checkpoint(weights):
-        return CenterlineFusionRecognizer(weights, device)  # type: ignore[return-value]
     return StringRecognizer(weights, device)
 
 

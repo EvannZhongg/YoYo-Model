@@ -28,7 +28,6 @@ from video_tracking.string_tracker import (
     _color_line_observation,
     estimate_string,
 )
-from video_tracking.tracker import _predict_string_model
 
 
 def _safe_name(value: str) -> str:
@@ -89,19 +88,7 @@ def evaluate_consecutive_checkpoint(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     device = resolve_device(device_name)
-    raw_checkpoint = torch.load(weights, map_location=device, weights_only=True)
-    geometry_runtime = isinstance(raw_checkpoint, dict) and raw_checkpoint.get("format") == "yoyo_centerline_fusion_v2"
-    if geometry_runtime:
-        from video_tracking.tracker import _load_string_model
-
-        model, runtime_status = _load_string_model(
-            weights, True, str(device), inference_scale, False,
-        )
-        if model is None:
-            raise RuntimeError(f"Could not load geometry checkpoint: {runtime_status}")
-        checkpoint = raw_checkpoint
-    else:
-        model, checkpoint = load_checkpoint(weights, device)
+    model, checkpoint = load_checkpoint(weights, device)
     config = checkpoint.get("model_config") or {}
     input_width = int(config.get("input_width", 960))
     input_height = int(config.get("input_height", 544))
@@ -139,48 +126,25 @@ def evaluate_consecutive_checkpoint(
             image = _read_image(image_path)
             active_input_width = input_width
             active_input_height = input_height
+            tensor, meta = prepare_letterboxed_input(
+                image, active_input_width, active_input_height, device,
+            )
+            probability = predict_prepared_probability(model, tensor)
             active_selected_threshold = selected_threshold
             yoyo = _yoyo(annotation)
-            if geometry_runtime:
-                observation = _predict_string_model(
-                    model,
-                    image,
-                    yoyo,
-                    active_selected_threshold,
-                    active_input_height,
-                    str(device),
-                    str(annotation.get("yoyo_division") or "1A"),
-                    semantic_inference_scale=inference_scale,
-                    color_probability_augment=color_augment,
-                    color_probability_min_mean=color_probability_min_mean,
-                    color_probability_min_fraction=color_probability_min_fraction,
-                    color_semantic_prefilter=color_semantic_prefilter,
-                    bright_line_augment=bright_line_augment,
-                    bright_line_min_mean=bright_line_min_mean,
-                    string_low_threshold=low_threshold,
-                    threshold_override=active_selected_threshold,
-                    max_components=max_components,
-                )
-                meta = None
-                probability = None
-            else:
-                tensor, meta = prepare_letterboxed_input(
-                    image, active_input_width, active_input_height, device,
-                )
-                probability = predict_prepared_probability(model, tensor)
-                observation = semantic_mask_observation(
-                    probability,
-                    meta,
-                    active_selected_threshold,
-                    low_threshold=low_threshold,
-                    yoyo=yoyo,
-                    yoyo_division=str(annotation.get("yoyo_division") or "1A"),
-                    min_component_pixels=max(1, int(min_component_pixels)),
-                    max_components=max(1, int(max_components)),
-                    max_polyline_points=max_polyline_points,
-                )
+            observation = semantic_mask_observation(
+                probability,
+                meta,
+                active_selected_threshold,
+                low_threshold=low_threshold,
+                yoyo=yoyo,
+                yoyo_division=str(annotation.get("yoyo_division") or "1A"),
+                min_component_pixels=max(1, int(min_component_pixels)),
+                max_components=max(1, int(max_components)),
+                max_polyline_points=max_polyline_points,
+            )
             final_string = observation
-            if color_augment and yoyo is not None and not geometry_runtime:
+            if color_augment and yoyo is not None:
                 color = None
                 color_support: dict[str, float] = {}
                 tried_points: set[tuple[tuple[float, float], ...]] = set()
