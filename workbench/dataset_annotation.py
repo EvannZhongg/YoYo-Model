@@ -710,7 +710,7 @@ DATASET_ANNOTATION_HTML = r"""
           <button type="button" id="yda-clear-box">清除悠悠球框</button>
           <button type="button" id="yda-delete-backup" hidden>删除当前备用球</button>
           <legend>绳线识别</legend>
-          <label>可见状态<select id="yda-string-visibility"><option value="visible">完整可见</option><option value="partial">部分可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
+          <label>可见状态<select id="yda-string-visibility"><option value="visible">清晰可见</option><option value="partial">模糊可见</option><option value="not_visible">不可见</option><option value="uncertain">不确定</option></select></label>
           <label>审阅状态<select id="yda-review-status"><option value="approved">已批准</option><option value="reviewed">已审阅</option><option value="needs_review">需要审阅</option><option value="unresolved">未解决</option></select></label>
           <div class="yda__line-list" id="yda-line-list"></div>
           <div class="yda__line-actions"><button type="button" id="yda-add-line">新增绳线</button><button type="button" id="yda-redraw-lines">重绘绳线</button><button type="button" id="yda-clear-lines">标记为不可见</button></div>
