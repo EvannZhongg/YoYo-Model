@@ -407,3 +407,13 @@
 **适用范围**：当前 `798/151/152` reviewed split、`partial` 长尾标注、MobileNetV3-FPN 和 4 epoch warm-start 筛选；未进入连续集评估。
 
 **后续建议**：保持统一正例监督；若未来能构造可靠的 partial 未知区域 mask，应改用显式 ignore/soft-target 监督并重新进行来源隔离评估。
+
+## FPN decoder deep-supervision screening
+
+**结论**：在 FPN 的三个中间解码尺度加入训练期深监督，独立 test 的中心线指标与生产几乎持平，但 Presence 和负图误检回退；当前不保留该训练分支。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、seed `20260913` 和 4 epoch 筛选下，深监督权重 `0.15` 的 test centerline F1@8 / Presence F1 / 负图平均误检像素为 `0.888456 / 0.975779 / 63.909`，同协议生产对照为 `0.888527 / 0.979167 / 60.364`。候选最佳 epoch 为 2、阈值 `0.8414`，主指标差异仅 `-0.000071`，不足以抵消安全回退。
+
+**适用范围**：当前 MobileNetV3-FPN、1/8–1/2 三尺度辅助头、自适应最大池化目标和 4 epoch warm-start；未进入连续集评估。
+
+**后续建议**：保持单一最终解码监督；只有训练数据和正样本密度明显增加时，才重新验证深监督权重与低分辨率目标构造。
