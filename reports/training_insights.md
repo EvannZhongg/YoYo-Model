@@ -387,3 +387,23 @@
 **适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN 32 通道、掩码骨架目标和 4 epoch warm-start 筛选；未进入连续集评估。
 
 **后续建议**：保持标准 focal + Dice + hard-negative 损失。若未来获得更精确的中心线/边界标注，应先在来源隔离 test 上验证边界监督，再考虑投入完整训练。
+
+## Visibility-conditioned semantic logit screening
+
+**结论**：让共享 FPN 的全局质量头学习 `string_visibility`（visible/partial/not_visible）并对分割 logits 做帧级自适应偏置，短训中未形成可部署的置信策略；其独立 test 的召回与存在性均低于生产。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、MobileNetV3-FPN、seed `20260911` 和 4 epoch 筛选下，候选 test centerline F1@8 / Presence F1 / 负图平均误检像素为 `0.886232 / 0.972414 / 70.455`，生产同协议对照为 `0.888527 / 0.979167 / 60.364`。候选验证选择的阈值为 `0.6877`；在 test 上扫描 `0.15–0.995` 后 F1 最高约 `0.8868`，Presence 始终 `0.9724`，说明质量头没有提供可利用的 operating-point 分离。
+
+**适用范围**：当前 `798/151/152` reviewed split、`visible/partial/not_visible=92/652/54` 长尾分布、MobileNetV3-FPN 和 4 epoch warm-start 筛选；未进入连续集完整评估。
+
+**后续建议**：不要把当前 `visible/partial` 辅助头接入推理阈值；若未来补充跨来源、帧级质量标注，应先验证质量分数与弱来源召回/误检的独立相关性，再考虑自适应策略。
+
+## Partial-frame positive-gradient weighting screening
+
+**结论**：仅提高 `partial` 样本中正像素的 focal 梯度权重，能降低部分负图误检并提高 Presence，但中心线 F1@8 在独立 test 仍回退，不能作为默认训练策略。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、MobileNetV3-FPN、seed `20260912` 和 4 epoch 筛选下，partial 正像素权重 `0.5` 的 test centerline F1@8 / Presence F1 / 负图平均误检像素为 `0.882565 / 0.982578 / 35.818`；此前同协议生产对照为 `0.888527 / 0.979167 / 60.364`。验证最佳阈值为 `0.2268`，说明该改动主要把 operating point 推向宽松召回，未改善几何主指标。
+
+**适用范围**：当前 `798/151/152` reviewed split、`partial` 长尾标注、MobileNetV3-FPN 和 4 epoch warm-start 筛选；未进入连续集评估。
+
+**后续建议**：保持统一正例监督；若未来能构造可靠的 partial 未知区域 mask，应改用显式 ignore/soft-target 监督并重新进行来源隔离评估。
