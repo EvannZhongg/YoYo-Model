@@ -361,9 +361,11 @@ def _predict_string_model(
     frame: np.ndarray,
     yoyo: dict[str, Any] | None,
     confidence: float,
-    imgsz: int,
-    device: str,
-    yoyo_division: str,
+    # Kept as positional compatibility slots for older callers; runtime
+    # inference derives size/device from the loaded checkpoint and model.
+    _legacy_imgsz: int | None = None,
+    _legacy_device: str | None = None,
+    _legacy_yoyo_division: str | None = None,
     semantic_inference_scale: float = 1.0,
     wrists: list[dict[str, Any]] | None = None,
     color_probability_augment: bool = False,
@@ -451,6 +453,35 @@ def _prepare_semantic_letterbox(
         float(semantic_inference_scale),
     )
     return letterbox(frame, input_width, input_height)
+
+
+def _run_string_inference(
+    model: Any,
+    frame: np.ndarray,
+    yoyo: dict[str, Any] | None,
+    wrists: list[dict[str, Any]] | None,
+    options: dict[str, Any],
+    *,
+    prepared_letterbox: tuple[np.ndarray, np.ndarray | None, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Apply the production string model with one canonical option mapping."""
+    return _predict_string_model(
+        model,
+        frame,
+        yoyo,
+        options["confidence"],
+        semantic_inference_scale=options["inference_scale"],
+        wrists=wrists,
+        color_probability_augment=options["color_probability_augment"],
+        color_probability_min_mean=options["color_probability_min_mean"],
+        color_probability_min_fraction=options["color_probability_min_fraction"],
+        color_semantic_prefilter=options["color_semantic_prefilter"],
+        bright_line_augment=options["bright_line_augment"],
+        bright_line_min_mean=options["bright_line_min_mean"],
+        string_low_threshold=options["low_threshold"],
+        prepared_letterbox=prepared_letterbox,
+        max_components=options["max_components"],
+    )
 
 
 def _select_pose_person(
@@ -929,7 +960,7 @@ def track_video(
     confidence: float = DETECTION_CONFIG.confidence,
     iou: float = DETECTION_CONFIG.iou,
     imgsz: int = DETECTION_CONFIG.imgsz,
-    device: str = DETECTION_CONFIG.device,
+    device: str = TRACKING_CONFIG.device,
     trace_length: int = TRACKING_CONFIG.trace_length,
     line_thickness: int = TRACKING_CONFIG.line_thickness,
     text_scale: float = TRACKING_CONFIG.text_scale,
@@ -1024,6 +1055,18 @@ def track_video(
         string_inference_scale,
         string_cuda_graph,
     )
+    string_options = {
+        "confidence": string_confidence,
+        "inference_scale": string_inference_scale,
+        "color_probability_augment": string_color_probability_augment,
+        "color_probability_min_mean": string_color_probability_min_mean,
+        "color_probability_min_fraction": string_color_probability_min_fraction,
+        "color_semantic_prefilter": string_color_semantic_prefilter,
+        "bright_line_augment": string_bright_line_augment,
+        "bright_line_min_mean": string_bright_line_min_mean,
+        "low_threshold": string_low_threshold,
+        "max_components": max(1, int(string_max_components)),
+    }
     resolved_orientation_weights = Path(orientation_weights_path or ORIENTATION_CONFIG.weights_path)
     orientation_model, orientation_model_status = load_orientation_model(
         resolved_orientation_weights,
@@ -1239,29 +1282,17 @@ def track_video(
             else None
         )
         if run_scheduled_string_inference:
-            model_string = _predict_string_model(
+            model_string = _run_string_inference(
                 string_model,
                 frame,
                 yoyo,
-                string_confidence,
-                imgsz,
-                device,
-                yoyo_division,
-                active_string_inference_scale,
                 wrists,
-                string_color_probability_augment,
-                string_color_probability_min_mean,
-                string_color_probability_min_fraction,
-                string_color_semantic_prefilter,
-                string_bright_line_augment,
-                string_bright_line_min_mean,
-                string_low_threshold,
-                (
+                {**string_options, "inference_scale": active_string_inference_scale},
+                prepared_letterbox=(
                     semantic_preprocess_future.result()
                     if semantic_preprocess_future is not None
                     else None
                 ),
-                max_components=max(1, int(string_max_components)),
             )
             string_inference_frames += 1
         allow_unanchored_semantic = bool(
@@ -1293,24 +1324,12 @@ def track_video(
             string,
         )
         if reacquired_string:
-            model_string = _predict_string_model(
+            model_string = _run_string_inference(
                 string_model,
                 frame,
                 yoyo,
-                string_confidence,
-                imgsz,
-                device,
-                yoyo_division,
-                active_string_inference_scale,
                 wrists,
-                string_color_probability_augment,
-                string_color_probability_min_mean,
-                string_color_probability_min_fraction,
-                string_color_semantic_prefilter,
-                string_bright_line_augment,
-                string_bright_line_min_mean,
-                string_low_threshold,
-                max_components=max(1, int(string_max_components)),
+                {**string_options, "inference_scale": active_string_inference_scale},
             )
             string_inference_frames += 1
             string = estimate_string(

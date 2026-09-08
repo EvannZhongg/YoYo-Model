@@ -319,7 +319,6 @@ class StringTrackingConfig:
 
     weights_path: Path = _as_path(_env_or_config("STRING_TRACKING_WEIGHTS_PATH", "string_tracking.weights_path", "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"))
     confidence: float = float(_env_or_config("STRING_TRACKING_CONFIDENCE", "string_tracking.confidence", 0.40))
-    imgsz: int = int(_env_or_config("STRING_TRACKING_IMGSZ", "string_tracking.imgsz", 544))
     device: str = str(_env_or_config("STRING_TRACKING_DEVICE", "string_tracking.device", ""))
 
 

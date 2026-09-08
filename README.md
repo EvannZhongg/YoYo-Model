@@ -144,6 +144,10 @@ Gradio 的训练页签按所选路径调用对应入口，评估器根据 run ma
 审核信息时可勾选 RTMPose，CLI 可传入 `--pose`。姿态推理只使用 RTMPose WholeBody
 及其 YOLOX 人体检测器。每次运行输出：
 
+完整追踪的统一设备取 `tracking.device`；独立的 `detection`、`string_tracking` 和
+`orientation` CLI 仍可使用各自设备覆盖。语义绳线模型的输入尺寸从 checkpoint 的
+`model_config` 读取，不在运行配置中重复声明。
+
 `tracking.string_confidence` 是语义阈值下限；实际阈值取 checkpoint 验证阈值和该值
 的较大者。当前默认 checkpoint 的验证阈值为 `0.9204`，因此默认实际阈值为 `0.9204`。
 

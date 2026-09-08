@@ -27,7 +27,7 @@ detection:
 string_tracking:
   weights_path: "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"
   confidence: 0.40
-  imgsz: 544
+  # Semantic input size is read from the checkpoint model_config.
   device: ""
 
 orientation:
