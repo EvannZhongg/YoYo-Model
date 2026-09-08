@@ -315,3 +315,13 @@
 **适用范围**：当前 `1Ayoyo_dataset` 验证集 151 张、`1Ayoyo_consecutive` 十组 927 帧、MobileNetV3-FPN 语义 checkpoint 和现有组件后处理；策略阈值在同一验证集上搜索，未用于默认配置。
 
 **后续建议**：若未来获得更多连续弱域帧，可把概率分布作为诊断特征继续研究，但必须加入来源隔离校准并优先满足 Presence、最弱来源和 HD95 护栏；当前保持单阈值默认路径。
+
+## Partial-label background-loss screening
+
+**结论**：把 `partial` 样本未标出的像素视为弱背景（背景 loss 权重 `0.5`），试图减少对模糊绳段的过度抑制，当前训练规模下没有带来有效收益，且静态 test 几何指标回退。
+
+**证据**：同一 `b0d246da...` manifest、MobileNetV3-FPN、ImageNet 初始化、8 epoch 和现有阈值扫描协议下，`partial` 背景权重 `0.5` 的验证 F1@8 为 `0.796187`，独立 test Centerline F1@8 / Presence F1 / 负图误检为 `0.868486 / 0.975610 / 73.545 px`；同日新 manifest 对照为 `0.884101 / 0.978873 / 12.636 px`。因此降低 partial 背景惩罚没有改善弱绳线召回，反而增加了误检。
+
+**适用范围**：当前 798/151/152 张 reviewed split、`partial` 占训练集 652 张、MobileNetV3-FPN 和 8 epoch 训练；未改变连续集评估协议。
+
+**后续建议**：只有在 partial 标注明确区分“未知区域”并补充连续帧验证后，才值得重新尝试 ignore/soft-target 监督；当前保留标准背景监督。
