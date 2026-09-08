@@ -4,7 +4,7 @@
 
 | 模块 | 模型与权重 | 运行参数 |
 | --- | --- | --- |
-| 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，`conf=0.15`，`IoU=0.7` |
+| 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，主检测 `conf=0.15`、`IoU=0.7`；可信轨迹掉检时启用 `conf=0.03`、距离门控 `1.5×` 框对角线的低置信度救援 |
 | 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.9204` |
 | 绳线追踪 | 语义概率图、颜色/亮脊候选、Lucas-Kanade 光流 | 组件上限 `32`，最多传播 `12` 帧 |
 | 方向识别 | 悠悠球 ROI 三分类；`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
@@ -40,6 +40,13 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 yoyo 标注；按 `(source_group, frame_index)` 对齐预测，`conf=0.15`、`IoU=0.7`，关闭姿态、
 绳模型和方向模型。最弱有效来源组为 `namdongxun-72f4a04fb5`；FPS 为 10 段共 927 帧
 除以累计追踪墙钟时间。
+
+追踪器新增的低置信度救援在 `namdongxun-72f4a04fb5` 的 `3121–3225` 片段（105 帧、
+60 FPS）上做了真实视频回放复核：该片段 presence P/R/F1 从 `1.0000/0.8667/0.9286`
+提升到 `1.0000/1.0000/1.0000`，FN 从 14 降为 0，FP 保持 0，最长缺失段从 6 帧降为
+0；mean IoU 为 `0.7733`，IoU@0.50 命中率 `0.9451`。检测专项回放（关闭绳线、方向和
+姿态模型）循环吞吐约 `23.47 FPS`。该结果是局部片段安全复核，完整 10 组 pooled 指标
+仍沿用上表生产基线，待下一次全量回放后再更新。
 
 ### 绳线分割与追踪
 
