@@ -365,3 +365,13 @@
 **适用范围**：当前 `798/151/152` reviewed split、十组 927 帧连续集、MobileNetV3-FPN 和 4 epoch warm-start；未改变评估类别口径。
 
 **后续建议**：保留 bilinear 上采样默认路径。若未来重新设计解码器，应要求几何尾部与 Presence 同时通过，不能仅凭缺失段改善晋升。
+
+## Shallow input-detail skip screening
+
+**结论**：向最高分辨率 FPN 层加入一个轻量 RGB 浅层细节支路，短训中提高了验证中心线召回，但独立 test 几何和误检显著回退，不进入默认网络。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、seed `20260909` 和 4 epoch 筛选下，input-skip 候选验证 centerline F1@8 为 `0.8296`、Presence F1 `0.9928`；独立 test centerline F1@8 / Presence F1 / 负图误检为 `0.873214 / 0.982578 / 56.273 px`，均低于同 manifest 生产对照的 `0.884101 / 0.978873 / 12.636 px`（对照数值来自同日评估）。
+
+**适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN、4 epoch warm-start 和既有组件后处理；未进入连续集完整评估，因为独立 test 已显示明显几何与误检回退。
+
+**后续建议**：保留原始 bilinear FPN，不增加浅层旁路；后续网络创新应先通过独立 test 的几何和负图误检筛选，再投入连续集资源。
