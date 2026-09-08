@@ -355,3 +355,13 @@
 **适用范围**：当前 `798/151/152` reviewed split、`1Ayoyo_consecutive` 十组 927 帧、MobileNetV3-FPN 和固定 Laplacian 输入通道实验；连续集按现有颜色/亮脊/时序协议评估。
 
 **后续建议**：保持三通道 RGB 默认输入。若未来引入高频表征，应优先使用可学习且来源隔离的轻量 stem，并以 Presence/最长缺失护栏约束，不保留本轮专用分支。
+
+## FPN nearest-upsampling screening
+
+**结论**：将 MobileNetV3-FPN 自顶向下融合的双线性上采样替换为 nearest，可改善存在性和短缺失段，但会产生严重几何尾部回退，不适合作为默认解码器。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、seed `20260909` 和 4 epoch 筛选下，nearest 候选验证 centerline F1@8 为 `0.8218`。独立 test centerline F1@8 / Presence F1 / 负图误检为 `0.893491 / 0.979167 / 43.364 px`。连续集按现有颜色/亮脊/时序协议的 pooled F1@8 约 `0.8294`，Presence F1 `0.997278`，最弱来源组 `0.6574`，最长缺失/恢复 `1/1`，但 Chamfer/HD95 `31.13/99.76 px`，其中单个来源组 Chamfer 约 `192 px`，超过几何护栏。
+
+**适用范围**：当前 `798/151/152` reviewed split、十组 927 帧连续集、MobileNetV3-FPN 和 4 epoch warm-start；未改变评估类别口径。
+
+**后续建议**：保留 bilinear 上采样默认路径。若未来重新设计解码器，应要求几何尾部与 Presence 同时通过，不能仅凭缺失段改善晋升。
