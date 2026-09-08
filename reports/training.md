@@ -27,19 +27,23 @@ SHA-256 为 `5bd3b22175317cc09ff0e160888643b856213944fb008f05a7da0e9ec2de7dc4`�
 | Recall | 0.804196 |
 | mAP50 | 0.906085 |
 | mAP50-95 | 0.597246 |
-| 连续集 Presence P / R / F1 | 0.987310 / 0.966460 / 0.976773 |
-| 连续集 Mean / Median IoU | 0.805805 / 0.847140 |
+| 连续集 Presence P / R / F1 | 0.984962 / 0.976398 / 0.980661 |
+| 连续集 Mean / Median IoU | 0.802578 / 0.846517 |
 | 连续集 IoU@0.50 命中率 | 0.955013 |
-| 连续集中心误差（px） | 16.5646 |
-| 最弱有效来源组 F1 | 0.928571 |
+| 连续集中心误差（px） | 16.5795 |
+| 最弱有效来源组 F1 | 0.923077（邬聪聪） |
 | 最长缺失段（帧） | 6 |
-| 检测回放 FPS | 8.0608 |
+| 最大恢复延迟（帧） | 6 |
+| 检测回放 FPS | 10.63 |
 
 静态结果为当前 `60b34d7d7db3...` manifest 的 152 张 test 显式跨 manifest 复评；checkpoint
 未使用该 test 来源。连续集使用 `1Ayoyo_consecutive` 10 组、927 帧，其中排除 107 帧未知
 yoyo 标注；按 `(source_group, frame_index)` 对齐预测，`conf=0.15`、`IoU=0.7`，关闭姿态、
-绳模型和方向模型。最弱有效来源组为 `namdongxun-72f4a04fb5`；FPS 为 10 段共 927 帧
-除以累计追踪墙钟时间。
+绳模型和方向模型。完整回放覆盖 10 个来源组、927 帧，其中 820 帧标签状态可用于悠悠球
+presence 评估，107 帧未知状态排除；按 `(source_group, frame_index)` 对齐预测，主检测
+`conf=0.15`、`IoU=0.7`，可信轨迹掉检时启用 `conf=0.03` 的 `1.5×` 对角线空间救援。
+pooled 统计由 `tmp/full_rescue_consecutive/summary.json` 生成；Jakub 来源组当前 71 帧
+均为 `needs_review`，不计入已知指标。最弱有效来源组为 `邬聪聪-0d26cf65b6`（F1 `0.923077`）。
 
 追踪器新增的低置信度救援在 `namdongxun-72f4a04fb5` 的 `3121–3225` 片段（105 帧、
 60 FPS）上做了真实视频回放复核：该片段 presence P/R/F1 从 `1.0000/0.8667/0.9286`
@@ -82,6 +86,7 @@ Recall 为 `0.863079`，预测切换数为 `10`；同协议旧生产权重为 `0
 - 检测运行：`runs/experiments/yoyo_detection_replay_20260830_detection_best_replay48x2/run_manifest.json`
 - 检测 test：`runs/experiments/det_replay_soup_a25/test_metrics_external_60b34d7d7db3.json`
 - 检测连续集评估：`tmp/det_production_consecutive_grouped_metrics.json`
+- 检测时序救援完整连续集评估：`tmp/full_rescue_consecutive/summary.json`
 - 连续集评估入口：`cli/tracking/evaluate_sequence.py`
 - 绳线训练：`runs/experiments/semantic_ablation_nomorph_foundation_r1/run_manifest.json`
 - 绳线静态评估：`tmp/semantic_production_aligned/test_semantic_metrics.json`
