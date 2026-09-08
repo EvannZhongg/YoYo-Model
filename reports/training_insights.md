@@ -327,6 +327,16 @@
 **适用范围**：当前 `798/151/152` reviewed split、约 1024/1101 canonical 样本有人工 polyline、现有 polygon mask 与 target 生成流程；不外推到重新审核或更密集的中心线标注。
 
 **后续建议**：删除该实验专用 target 分支，保留 polygon-mask 骨架化作为默认；若未来补齐连续帧中心线标注，应先建立来源隔离的 direct-polyline A/B，再投入完整训练。
+## 更新标注后的生产策略复训
+
+**结论**：在 2026-09-08 更新后的 1101 张 canonical 标签上，沿用当前 MobileNetV3-FPN 生产训练策略可提高连续集几何主指标和最弱来源组，但 Presence 安全护栏与局部几何尾部出现回退，当前不具备替换生产权重的资格。
+
+**证据**：候选 `runs/experiments/semantic_updated_labels_prod_e12` 使用新 view manifest `c01532f52581ddc767a5e9a3c356fcd3b2ae1783f1ab7cd3355d37ee806036c9`、ImageNet backbone、冻结 3 epoch、12 epoch、seed `20260830`。原生独立 test centerline F1@8 / Presence F1 / 负图误检像素为 `0.885846 / 0.975439 / 40.909`。同协议连续集 10 组/927 帧 pooled centerline F1@8 / 最弱组 / Presence F1 / 最长缺失-恢复约为 `0.821505 / 0.673003 / 0.991228 / 2-2`，当前生产为 `0.818297 / 0.638996 / 0.994530 / 2-2`；邬聪聪组 HD95 为 `1310.83 px`，说明局部错误尾部未满足部署护栏。
+
+**适用范围**：当前 1101 张 canonical reviewed 标签、固定来源拆分、MobileNetV3-FPN、`1.125x` 输入、颜色/亮线/时序后处理和 RTX 4070 Laptop；连续集仍为 10 组/927 帧，不能外推到新增视频来源。
+
+**后续建议**：保留候选 run manifest、独立 test 与连续集汇总作为复现证据，不更新默认权重路径；优先针对邬聪聪与池高宇等弱来源补充/复核连续标注，再在相同安全护栏下重训验证。
+
 ## 连续弱来源的中心线指标分解
 
 **结论**：在当前连续集的弱来源中，pooled centerline F1@8 的主要波动来自目标覆盖召回和可见性切换，不是单纯的骨架 path 碎片化；对称 F1 适合保留为定位主指标，但不能单独代表可部署追踪质量。
