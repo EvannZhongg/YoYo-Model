@@ -361,11 +361,7 @@ def _predict_string_model(
     frame: np.ndarray,
     yoyo: dict[str, Any] | None,
     confidence: float,
-    # Kept as positional compatibility slots for older callers; runtime
-    # inference derives size/device from the loaded checkpoint and model.
-    _legacy_imgsz: int | None = None,
-    _legacy_device: str | None = None,
-    _legacy_yoyo_division: str | None = None,
+    *,
     semantic_inference_scale: float = 1.0,
     wrists: list[dict[str, Any]] | None = None,
     color_probability_augment: bool = False,

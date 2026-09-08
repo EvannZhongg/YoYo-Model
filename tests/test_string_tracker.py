@@ -425,9 +425,6 @@ class StringTrackerTemporalTests(unittest.TestCase):
                 np.zeros((1080, 1920, 3), dtype=np.uint8),
                 None,
                 0.2,
-                1024,
-                "cpu",
-                "1A",
                 semantic_inference_scale=1.5,
             )
 
