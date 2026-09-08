@@ -335,3 +335,13 @@
 **适用范围**：当前生产 MobileNetV3-FPN 权重、RTX 4070 Laptop、十组连续集 927 帧及现有后处理；结果保存在 `tmp/hyst_0p2/`、`tmp/hyst_0p4/`、`tmp/hyst_0p6/`。
 
 **后续建议**：若未来能由来源隔离校准器只对高置信且时序连续的帧启用 hysteresis，可重新验证；当前不把低阈值扩张写入默认 tracking 配置。
+
+## Rasterized string-target width screening
+
+**结论**：将栅格化细绳监督的最小宽度从 `1` 提高到 `2` 个输入像素，可在短训验证中提高中心线召回，但会把最优阈值推到很低并增加误检；它没有形成跨 split、跨来源的稳健收益，不替换默认监督。
+
+**证据**：同一 `b0d246da...` manifest、生产 MobileNetV3-FPN 权重 warm-start、seed `20260909` 和 4 epoch 预算下，`min_mask_width_px=2` 的验证 centerline F1@8 / Presence F1 为 `0.823810 / 0.989091`，最优阈值 `0.1749`；独立 test 为 `0.880246 / 0.989474`，负图平均误检 `34.0 px`，低于同 manifest 对照 centerline F1@8 `0.884101`。按现有十组连续集、`1.125x`、颜色/亮脊/时序协议评估，候选 pooled F1@8 约 `0.833105`、Presence F1 `0.991238`、最弱组 `0.638201`、最长缺失/恢复 `4/4`、Chamfer/HD95 `13.79/55.23 px`；虽高于生产 pooled `0.818297`，但 Presence、弱组和静态 test 均未过护栏。
+
+**适用范围**：当前 `798/151/152` reviewed split、`1Ayoyo_consecutive` 十组 927 帧、MobileNetV3-FPN 和 4 epoch warm-start 筛选；连续集 pooled 数值由逐组 centerline hit 汇总得到。
+
+**后续建议**：保持 `min_mask_width_px=1`。若未来补齐可靠的细绳宽度/不确定区域标注，应先在来源隔离的完整训练中验证空间软目标，再考虑调整栅格宽度。
