@@ -417,3 +417,13 @@
 **适用范围**：当前 MobileNetV3-FPN、1/8–1/2 三尺度辅助头、自适应最大池化目标和 4 epoch warm-start；未进入连续集评估。
 
 **后续建议**：保持单一最终解码监督；只有训练数据和正样本密度明显增加时，才重新验证深监督权重与低分辨率目标构造。
+
+## FPN concatenation fusion screening
+
+**结论**：将 FPN 的逐层相加改为 lateral/top-down 特征拼接后投影，能提高连续集 pooled centerline F1@8 和最弱来源组，但 Presence、缺失段和推理吞吐回退，当前不晋升。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、MobileNetV3-FPN、seed `20260915` 和 4 epoch 筛选下，独立 test centerline F1@8 / Presence F1 / 负图误检为 `0.897600 / 0.982578 / 28.727 px`，生产对照为 `0.888527 / 0.979167 / 60.364 px`。完整 `1Ayoyo_consecutive` 十组、`1.125x`、颜色/亮脊/时序协议下，候选 pooled F1@8 约 `0.8316`、最弱组 `0.6844`、Presence `0.9913`、最长缺失/恢复 `4/4`、Chamfer/HD95 `12.54/51.47 px`；生产为 `0.8183/0.6390/0.9945/2/2/15.62/57.47 px`。同一 GPU 纯模型前向约 `98.84 FPS`，生产 `108.91 FPS`，下降约 `9.2%`。将组件上限降至 16 后 pooled F1@8 约 `0.8163`，未保留主指标收益；阈值 `0.995` 时 pooled 约 `0.8244`、Presence `0.9896`、最长缺失 `5`，不能恢复安全护栏。
+
+**适用范围**：当前 reviewed split、`1Ayoyo_consecutive` 927 帧、MobileNetV3-FPN 32 通道和现有后处理；连续集结果用于同协议候选判断，不外推到不同硬件或更大数据规模。
+
+**后续建议**：保持原始 bilinear FPN 相加融合。若未来引入特征拼接，应先证明端到端速度和 Presence/缺失段不回退，再投入完整训练。
