@@ -294,4 +294,14 @@
 
 **适用范围**：当前 `1Ayoyo_consecutive` 十组连续集、`1088x608` 输入、e30 语义模型和现有 path 输出/评估实现；诊断基于人工 `string_polylines_pixel` 与逐帧 JSONL 预测，不外推到重新标注的数据。
 
-**后续建议**：保留 pooled centerline F1@8 作为几何主排名（只在有目标中心线的帧上累计采样点），同时固定报告可见帧（`visible/partial` 合并）的 precision、recall、F1，以及 `not_visible` 帧的 presence 误检率/误检帧数；另外报告最长缺失/恢复延迟、主干覆盖率和预测碎片化指数。当前数据中 `visible` 与 `partial` 没有形成稳定的几何差异，不单独设为晋升门槛。只有当主指标、最弱来源和时序护栏同时通过时才晋升；不要用单 path 覆盖率替换对称 F1，也不要仅凭 presence F1 晋升。
+**后续建议**：保留 pooled centerline F1@8 作为几何主排名（只在有目标中心线的帧上累计采样点），同时固定报告可见帧的 precision、recall、F1，以及 `not_visible` 帧的 presence 误检率/误检帧数；另外报告最长缺失/恢复延迟、主干覆盖率和预测碎片化指数。当前数据中 `visible` 与 `partial` 没有形成稳定的几何差异，不单独设为晋升门槛。只有当主指标、最弱来源和时序护栏同时通过时才晋升；不要用单 path 覆盖率替换对称 F1，也不要仅凭 presence F1 晋升。
+
+## Visibility auxiliary head screening
+
+**结论**：将 `string_visibility` 作为共享 FPN 的三分类辅助头，当前数据规模下不能稳定提供帧级阈值策略；该组件不进入默认模型。
+
+**证据**：同一 `b0d246da...` manifest、MobileNetV3-FPN、ImageNet 初始化和现有后处理协议下，未加权辅助头（8 epoch）独立 test 的 centerline F1@8 / Presence F1 / 负图误检为 `0.878590 / 0.972414 / 111.091 px`，连续集 pooled F1@8 / Presence F1 / 最弱组 / 最长缺失段为 `0.817177 / 0.995326 / 0.661527 / 1`；类别加权复训（visible/partial/not_visible 权重 `3.0/0.5/2.0`，6 epoch）test 为 `0.877502 / 0.978873 / 53.455 px`。未加权头验证混淆矩阵中 `visible` 13 张全部被判为 `partial/not_visible`，test 25 张全部漏检，说明辅助头没有学到可部署的清晰度状态。
+
+**适用范围**：当前 798/151/152 张 reviewed 训练/验证/测试图、`visible/partial/not_visible=92/652/54` 的长尾分布、MobileNetV3-FPN 和 8/6 epoch 筛选训练。
+
+**后续建议**：若未来补充数量平衡且跨来源的清晰/模糊连续标注，可重新验证辅助状态头；在此之前保持单一语义概率和现有时序后处理，避免把不可靠的状态预测接入阈值控制。
