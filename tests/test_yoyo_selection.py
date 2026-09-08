@@ -96,6 +96,23 @@ class YoyoSelectionTests(unittest.TestCase):
         self.assertEqual(selected["bbox"], distant["bbox"])
         self.assertNotIn("temporal_yoyo_selection", flags)
 
+    def test_low_confidence_temporal_rescue(self):
+        weak = detection([102, 101, 142, 141], 0.04)
+        selected, flags = _pick_yoyo(
+            [weak], previous_bbox=[100, 100, 140, 140], temporal_reference_trusted=True, minimum_confidence=0.15
+        )
+        self.assertIs(selected, weak)
+        self.assertEqual(selected["selection_source"], "low_confidence_temporal_rescue")
+        self.assertIn("low_confidence_temporal_rescue", flags)
+
+    def test_low_confidence_rescue_rejects_distant_candidate(self):
+        weak = detection([500, 500, 540, 540], 0.9)
+        selected, flags = _pick_yoyo(
+            [weak], previous_bbox=[100, 100, 140, 140], temporal_reference_trusted=True, minimum_confidence=0.95
+        )
+        self.assertIsNone(selected)
+        self.assertIn("no_yoyo", flags)
+
     def test_short_spatially_continuous_gap_carries_selected_track_id(self):
         candidate = detection([115, 110, 215, 210], 0.8)
 

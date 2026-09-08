@@ -60,6 +60,8 @@ from video_tracking.string_tracker import (
 
 LOG_FILE = BASE_DIR / "track_video.log"
 YOYO_TEMPORAL_TRUST_CONFIDENCE = 0.50
+YOYO_LOW_CONFIDENCE_RESCUE = 0.03
+YOYO_LOW_CONFIDENCE_MAX_DISTANCE = 1.5
 POSE_EDGES = (
     (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
     (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
@@ -826,11 +828,31 @@ def _pick_yoyo(
     preferred_track_id: int | None = None,
     previous_bbox: list[float] | None = None,
     temporal_reference_trusted: bool = False,
+    minimum_confidence: float = 0.0,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     yoyos = [item for item in detections if item["class_name"].lower() in {"yoyo", "yo-yo", "yoyo_body"}]
     if not yoyos:
         return None, ["no_yoyo"]
     yoyos.sort(key=lambda item: item["confidence"], reverse=True)
+    primary = [item for item in yoyos if float(item.get("confidence", 0.0)) >= float(minimum_confidence)]
+    if primary:
+        yoyos = primary
+    elif previous_bbox is not None and temporal_reference_trusted:
+        previous_center = ((previous_bbox[0] + previous_bbox[2]) / 2.0, (previous_bbox[1] + previous_bbox[3]) / 2.0)
+        previous_diagonal = math.hypot(previous_bbox[2] - previous_bbox[0], previous_bbox[3] - previous_bbox[1])
+        rescue = []
+        for candidate in yoyos:
+            bbox = candidate["bbox"]
+            diagonal = max(1.0, previous_diagonal, math.hypot(bbox[2] - bbox[0], bbox[3] - bbox[1]))
+            distance = math.hypot(candidate["center"][0] - previous_center[0], candidate["center"][1] - previous_center[1]) / diagonal
+            if distance <= YOYO_LOW_CONFIDENCE_MAX_DISTANCE and float(candidate.get("confidence", 0.0)) >= YOYO_LOW_CONFIDENCE_RESCUE:
+                rescue.append((math.log(max(float(candidate["confidence"]), 1e-6)) - distance, distance, candidate))
+        if rescue:
+            _, distance, selected = max(rescue, key=lambda item: item[0])
+            selected["selection_source"] = "low_confidence_temporal_rescue"
+            selected["temporal_normalized_distance"] = round(float(distance), 4)
+            return selected, ["low_confidence_temporal_rescue"]
+        return None, ["no_yoyo"]
     distinct: list[dict[str, Any]] = []
     for candidate in yoyos:
         if any(_bbox_iou(candidate["bbox"], accepted["bbox"]) >= 0.35 for accepted in distinct):
@@ -1133,6 +1155,18 @@ def track_video(
         result = model.predict(**kwargs)[0]
         detections_raw = detector_extract_detections(result, class_names)
         ultralytics_detections = sv.Detections.from_ultralytics(result)
+        primary_yoyo = [
+            item for item in detections_raw
+            if item["class_name"].lower() in {"yoyo", "yo-yo", "yoyo_body"}
+            and float(item.get("confidence", 0.0)) >= float(confidence)
+        ]
+        if not primary_yoyo and selected_yoyo_trusted:
+            rescue_kwargs = dict(kwargs)
+            rescue_kwargs["conf"] = YOYO_LOW_CONFIDENCE_RESCUE
+            rescue_result = model.predict(**rescue_kwargs)[0]
+            detections_raw.extend(detector_extract_detections(rescue_result, class_names))
+        if len(ultralytics_detections):
+            ultralytics_detections = ultralytics_detections[ultralytics_detections.confidence >= float(confidence)]
         tracked = tracker.update_with_detections(ultralytics_detections)
         _assign_tracker_ids(detections_raw, tracked)
         yoyo, flags = _pick_yoyo(
@@ -1140,6 +1174,7 @@ def track_video(
             selected_track_id,
             previous_bbox=selected_yoyo_bbox,
             temporal_reference_trusted=selected_yoyo_trusted,
+            minimum_confidence=confidence,
         )
         _carry_preferred_track_id(
             yoyo,
@@ -1551,6 +1586,9 @@ def track_video(
                 "score": "log_confidence_minus_1.5_normalized_center_distance",
                 "trust_confidence": YOYO_TEMPORAL_TRUST_CONFIDENCE,
                 "max_normalized_center_distance": 2.0,
+                "low_confidence_rescue": True,
+                "low_confidence_threshold": YOYO_LOW_CONFIDENCE_RESCUE,
+                "low_confidence_max_normalized_center_distance": YOYO_LOW_CONFIDENCE_MAX_DISTANCE,
             },
             "yoyo_track_id_carry": {
                 "enabled": True,
