@@ -345,3 +345,13 @@
 **适用范围**：当前 `798/151/152` reviewed split、`1Ayoyo_consecutive` 十组 927 帧、MobileNetV3-FPN 和 4 epoch warm-start 筛选；连续集 pooled 数值由逐组 centerline hit 汇总得到。
 
 **后续建议**：保持 `min_mask_width_px=1`。若未来补齐可靠的细绳宽度/不确定区域标注，应先在来源隔离的完整训练中验证空间软目标，再考虑调整栅格宽度。
+
+## Fixed high-frequency input channel screening
+
+**结论**：在 RGB 输入前追加固定 Laplacian 高频通道，能提高部分弱来源的定位召回，但未同时满足 Presence 与缺失段护栏；该网络分支不进入默认模型。
+
+**证据**：同一 `b0d246da...` manifest、MobileNetV3-FPN、生产权重 warm-start 和 seed `20260909` 下，4 epoch 高频通道候选在独立 test 的 centerline F1@8 / Presence F1 / 负图误检为 `0.892414 / 0.986014 / 28.909 px`；连续集 pooled F1@8 约 `0.833522`（阈值 `0.1749`）和 `0.836923`（阈值 `0.995`），最弱组分别约 `0.6648/0.6567`，但 Presence 仅 `0.992900/0.987397`，最长缺失/恢复为 `4/4` 和 `6/6`。延长至等效 12 epoch 后，独立 test 为 `0.895912 / 0.992958 / 21.636 px`，连续集 pooled F1@8 `0.840550`、最弱组 `0.656663`、Presence `0.987397`、最长缺失/恢复 `6/6`、Chamfer/HD95 `12.29/54.17 px`，仍未通过安全门槛。
+
+**适用范围**：当前 `798/151/152` reviewed split、`1Ayoyo_consecutive` 十组 927 帧、MobileNetV3-FPN 和固定 Laplacian 输入通道实验；连续集按现有颜色/亮脊/时序协议评估。
+
+**后续建议**：保持三通道 RGB 默认输入。若未来引入高频表征，应优先使用可学习且来源隔离的轻量 stem，并以 Presence/最长缺失护栏约束，不保留本轮专用分支。
