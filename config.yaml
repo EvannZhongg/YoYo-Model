@@ -25,7 +25,7 @@ detection:
   device: ""
 
 string_tracking:
-  weights_path: "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"
+  weights_path: "runs/experiments/semantic_retrain_manifest2689_e12_s20260830/weights/best.pt"
   confidence: 0.40
   # Semantic input size is read from the checkpoint model_config.
   device: ""

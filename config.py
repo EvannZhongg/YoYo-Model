@@ -317,7 +317,7 @@ class DetectionConfig:
 class StringTrackingConfig:
     """Configuration owned by the string recognition/tracking path."""
 
-    weights_path: Path = _as_path(_env_or_config("STRING_TRACKING_WEIGHTS_PATH", "string_tracking.weights_path", "runs/experiments/semantic_ablation_nomorph_foundation_r1/weights/best.pt"))
+    weights_path: Path = _as_path(_env_or_config("STRING_TRACKING_WEIGHTS_PATH", "string_tracking.weights_path", "runs/experiments/semantic_retrain_manifest2689_e12_s20260830/weights/best.pt"))
     confidence: float = float(_env_or_config("STRING_TRACKING_CONFIDENCE", "string_tracking.confidence", 0.40))
     device: str = str(_env_or_config("STRING_TRACKING_DEVICE", "string_tracking.device", ""))
 

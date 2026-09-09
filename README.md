@@ -149,7 +149,7 @@ Gradio 的训练页签按所选路径调用对应入口，评估器根据 run ma
 `model_config` 读取，不在运行配置中重复声明。
 
 `tracking.string_confidence` 是语义阈值下限；实际阈值取 checkpoint 验证阈值和该值
-的较大者。当前默认 checkpoint 的验证阈值为 `0.9204`，因此默认实际阈值为 `0.9204`。
+的较大者。当前默认 checkpoint 的验证阈值为 `0.9453`，因此默认实际阈值为 `0.9453`。
 
 - 完整追踪视频
 - 逐帧 JSONL
