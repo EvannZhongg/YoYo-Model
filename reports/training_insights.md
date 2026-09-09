@@ -30,16 +30,6 @@
 
 **后续建议**：默认仍使用单阈值；若未来引入视频训练或改变时序融合策略，应在连续集主协议下重新验证低阈值，优先关注 H1 的缺失段收益是否能在不牺牲 pooled F1 的情况下保留。
 
-## 方向时序滤波的时间确认
-
-**结论**：将方向切换确认改为累计时间并配合连续时间 EMA，可以显著减少抖动，但在当前连续集上会牺牲宏召回；暂不作为默认生产策略。
-
-**证据**：同一批 856 帧 raw predictions、5 FPS 稳态/25 FPS 突发回放下，现有按 observation 方案 accuracy/macro recall/预测切换数为 `0.903037/0.864272/13`；时间方案（确认 `0.16 s`、EMA 时间常数 `0.15 s`）为 `0.910047/0.836840/12`。时间方案减少 1 次切换并提高 pooled accuracy，但 macro recall 下降 `0.027432`，且邬聪聪来源组 accuracy 为 `0.727273`，低于现有 `0.747475`。
-
-**适用范围**：当前三分类 ROI 模型、`1Ayoyo_consecutive` 856 帧、5 FPS 稳态与 25 FPS 突发调度；结论仅针对该数据规模和滤波参数。
-
-**后续建议**：保留时间参数作为可复现实验开关；收集真实方向切换和 hard negative 后，再在独立连续集上重新校准确认时长与 EMA 时间常数。
-
 ## 检测 replay-only 与参数 soup
 
 **结论**：在当前 replay 数据与评估协议下，replay-only 不能替代 replay+soup；soup 对连续帧召回和弱来源组有明显收益。
@@ -93,16 +83,6 @@
 综合来看，`0.2 × hard-negative` 与 `negative sampling ×4` 仍是当前生产配置；本轮没有证据支持直接删除 hard-negative，也没有必要继续堆叠新的 Loss。该结论只适用于当前 632/136/136 reviewed split、输入尺寸和训练日程，不外推到从头训练、不同学习率或更大真实 hard-negative 数据。后续若要重新判断，应在多个 seed、从头训练和扩充真实 hard-negative 来源后，继续以连续集 pooled centerline F1@8、最弱来源组、Presence 及缺失段护栏共同评估。
 
 可复现实验位于 `runs/experiments/semantic_ablation_hn*_neg*_fullscreen_r1`、`runs/experiments/semantic_warmprod_hn0_seed20260902_full12_r1` 和 `runs/experiments/semantic_warmprod_hn02_seed20260902_full12_r1`。
-
-## 语义组件上限
-
-**结论**：当前多分支语义绳输出受组件上限约束；将运行时上限从 8 提升到 32 能在不改变权重和推理结构的情况下提高连续集中心线召回，且安全指标保持稳定。
-
-**证据**：同一 `semantic_ablation_nomorph_foundation_r1` 权重、`1Ayoyo_consecutive` 927 帧和固定颜色/亮脊/光流协议下，pooled centerline F1@8 从 `0.766228` 提升到 `0.807238`，Presence F1 均为 `0.991772`，最长缺失段和最大恢复延迟均为 `4` 帧；最弱来源组 F1@8 从 `0.612640` 提升到 `0.615901`。上限 24/32/64 的 pooled F1@8 分别为 `0.804695/0.807238/0.808698`；32 的同一 300 帧端到端吞吐为 `14.6545 FPS`，相对上限 8 的 `15.2890 FPS` 下降约 `4.1%`。
-
-**适用范围**：当前 MobileNetV3-FPN 语义模型、`960x544` 输入、`1Ayoyo_consecutive` 连续集及组件级中心线融合协议；上限 32 会增加候选几何输出数量，不能外推到不同分辨率或不同后处理门控。
-
-**后续建议**：保留 `string_max_components=32` 作为默认运行配置；更换模型或门控后，应重新检查组件数是否再次触顶，并以连续集 pooled F1@8 与最弱来源组共同校准上限。
 
 ## 更新 manifest 的语义 checkpoint 与缺失段权衡
 
@@ -163,16 +143,6 @@
 **适用范围**：当前 MobileNetV3-FPN 高阈值二值掩码、形态学骨架、8 邻域像素图和最多 64 点的 polyline 输出；不外推到直接预测矢量拓扑、显式 junction 监督或经过可靠 spur pruning 的骨架。
 
 **后续建议**：若重新尝试图表示，应先让模型输出稳定的节点/边置信度，或用独立监督学习 spur pruning；不要在当前噪声骨架上继续增加按长度、角度或链数门控。
-
-## 语义推理尺度 `1.125x`
-
-**结论**：在不改变 MobileNetV3-FPN 权重、阈值和后处理的条件下，将语义推理尺寸从 `960x544` 提高到 `1088x608` 能稳定改善连续集细绳召回和缺失段，当前晋升为默认运行尺度；代价是几何尾部变差和端到端吞吐小幅下降。
-
-**证据**：同一 checkpoint、`1Ayoyo_consecutive` 927 帧和现有颜色/亮脊/光流协议下，`1.0x` 的 pooled centerline F1@8 / 最弱组 / Presence F1 / 最长缺失/恢复为 `0.807238 / 0.615901 / 0.991772 / 4/4`，`1.125x` 为 `0.818297 / 0.638996 / 0.994530 / 2/2`。Chamfer/HD95 从 `12.7498/54.2854` 恶化到 `15.6212/57.4703 px`。扩展 reviewed manifest 的独立 test centerline F1@8 为 `0.832031 → 0.877249`，Presence F1 为 `0.975610 → 0.979167`，负图平均误检像素为 `40.182 → 60.364`。同一 300 帧视频的两次端到端 FPS 为 `1.0x: 10.8439/13.0430`、`1.125x: 10.7685/11.5082`，配对均值约下降 `6.7%`；`1.25x` 虽将 pooled F1 提至 `0.821607`，但 FPS 降至 `7.85`，并恶化 DSCF7145 与几何指标，因此不采用。
-
-**适用范围**：当前语义 checkpoint、RTX 4070 Laptop、CUDA Graph、`max_components=32`、`1Ayoyo_consecutive` 10 组/927 帧和扩展 reviewed test；不同 GPU、输入视频尺寸或模型权重需重新测量速度与几何护栏。
-
-**后续建议**：保留 `1.125x` 作为默认部署档，并持续监控误检像素和 Chamfer/HD95；只有在新硬件或新 checkpoint 上重新证明吞吐与几何代价可接受时才考虑更高尺度。
 
 ## 新 manifest 候选的召回-安全折中
 
@@ -478,12 +448,12 @@
 
 **后续建议**：保持标准 FPN 融合，不保留方向卷积专用分支；若未来有更密集的细绳中心线标注，可在来源隔离 test 上重新验证方向监督。
 
-## Yoyo-anchor input conditioning screening
+## Production 低置信区域 Recall Gate screening
 
-**结论**：给语义模型增加由当前悠悠球框生成的锚点热图通道，能小幅提高独立 test 中心线召回并降低负图误检，但总体增益不足，且会把绳模型运行依赖扩展到球框输入，当前不保留。
+**结论**：为 production 语义 logits 增加 utility head，并按样本预测决定是否开启低阈值 Recall 分支，未能形成可复现收益；当前 Gate 仅作为实验接口保留，不替换生产路径。
 
-**证据**：同一 `b0d246da...` manifest、生产 MobileNetV3-FPN warm-start、seed `20260920` 和 4 epoch 筛选下，四通道锚点候选验证最佳 epoch 为 2、阈值 `0.5725`；独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.891078 / 0.979167 / 56.364 px`，生产同协议为 `0.888527 / 0.979167 / 60.364 px`。约 `+0.00255` 的静态主指标收益不足以证明引入检测误差传播和接口复杂度合理，因此未进入连续集评估。
+**证据**：同一 `b0d246da...` manifest、`semantic_quality_warm_e4` checkpoint、`low=0.35/high=0.9204` 和 `quality_cutoff=-0.454262` 下，独立 test 的 Gate centerline F1@8 为 `0.888934`，Presence F1 `0.982578`，负图平均误检 `55.0 px`；同 checkpoint 不启用 Gate 为 `0.888868/0.982578/55.364 px`，提升仅 `+0.000066`。`1Ayoyo_consecutive` 十组、927 帧同协议回放中，Gate pooled centerline F1@8 `0.817463`，不启用 Gate `0.817514`，当前生产 `0.818297`；Presence F1 均 `0.991790`，最弱来源组 `0.657271`（Gate）对比 `0.656582`（不启用），最长缺失/恢复均 `4/4`。
 
-**适用范围**：当前 `798/151/152` reviewed split、训练/静态评估使用人工 active-yoyo 框、MobileNetV3-FPN 和 4 epoch warm-start；结果不代表使用检测框时的端到端表现。
+**适用范围**：当前 MobileNetV3-FPN、4 epoch warm-start quality head、`1Ayoyo_dataset` reviewed test 和 `1Ayoyo_consecutive` 10 组/927 帧；该实现是帧级 utility gate，不能外推为已验证的组件级局部分类器。
 
-**后续建议**：保持 RGB 单输入默认路径。只有在真实检测框扰动训练和连续集 A/B 中出现更大且稳定的 pooled/弱组收益时，才重新考虑显式锚点条件化。
+**后续建议**：不将 `mobilenet_v3_fpn_quality` 或自动低阈值策略写入默认权重/配置。若要继续回答组件级问题，应构造 production 低置信连通区域的独立正负监督，并在来源隔离连续集上验证区域级 Gate 的收益与误检护栏。
