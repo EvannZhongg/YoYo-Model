@@ -1,5 +1,15 @@
 # 训练经验
 
+## 扩张 manifest 上的同策略重训
+
+**结论**：将当前 MobileNetV3-FPN 绳线生产训练策略直接迁移到扩张后的 `1Ayoyo_dataset` manifest，能稳定提升静态与连续集中心线质量，但会牺牲连续集 presence、缺失恢复和端到端吞吐，因此当前不具备晋升资格。
+
+**证据**：同一 `960x544`、12 epoch、ImageNet backbone、`seed=20260830` 协议下，当前 manifest（SHA `fcbb69124cb5...`）重训 checkpoint `c96e95e2b0b1...` 的独立 test centerline F1@8 为 `0.874020`；生产权重在同一 test view 的结果为 `0.809675`。`1Ayoyo_consecutive` 927 帧纯模型回放 pooled F1@8 为 `0.830082`，高于生产纯模型 `0.816521`；加入现有颜色/亮线与时序后为 `0.833485`。但全流程 Presence F1 为 `0.989578`（生产 `0.993428`），最长缺失/恢复为 `4/4` 帧（生产 `2/2`），实测吞吐 `8.20 FPS`（生产约 `11.14 FPS`）。
+
+**适用范围**：当前扩张 reviewed manifest、`1Ayoyo_consecutive` 10 组/927 帧、MobileNetV3-FPN `1088x608` 推理输入及现有绳线后处理协议。
+
+**后续建议**：保留扩张数据和重训权重作为候选实验，不替换生产权重；后续若要继续，应优先定位新增来源造成的漏检/长缺失，并在不降低 FPS 的条件下重新验证安全护栏。
+
 ## Hessian ridge prior 融合筛选
 
 **结论**：在当前语义 MobileNetV3-FPN 与纯模型连续集协议下，多尺度 Hessian/Frangi ridge prior 的残差门控融合没有形成可复现的中心线收益，并增加推理开销，因此不保留为默认结构。
