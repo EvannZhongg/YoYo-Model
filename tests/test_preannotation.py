@@ -6,7 +6,9 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from workbench.preannotation import _draft_document, _read_image
+from workbench.preannotation import _draft_document, _read_image, preannotate_dataset
+from helpers import make_annotation_dataset
+from config import STRING_TRACKING_CONFIG, TRACKING_CONFIG
 
 
 def _document() -> dict:
@@ -73,6 +75,33 @@ class PreannotationTests(unittest.TestCase):
         self.assertEqual(result["string_path"]["paths"][0]["path_id"], "model-line-1")
         self.assertEqual(result["string_path"]["paths"][0]["edges"][0]["evidence"], "inferred")
         self.assertEqual(result["workbench_edits"][-1]["actor"], "workbench-preannotator")
+
+    def test_batch_loads_string_model_with_configured_inference_shape(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset, _ = make_annotation_dataset(root)
+
+            class Detector:
+                def predict(self, image, **kwargs):
+                    return []
+
+            with (
+                patch("workbench.preannotation.base.DATASETS_DIR", root),
+                patch("workbench.preannotation.load_detector", return_value=Detector()),
+                patch("workbench.preannotation.load_runtime_string_model", return_value=(None, "disabled")) as load_string,
+                patch("workbench.preannotation.load_orientation_model", return_value=(None, "disabled")),
+            ):
+                result = preannotate_dataset(dataset, device="cpu")
+
+            self.assertEqual(result["processed_count"], 1)
+            self.assertEqual(result["failure_count"], 0)
+            load_string.assert_called_once_with(
+                STRING_TRACKING_CONFIG.weights_path,
+                True,
+                "cpu",
+                inference_scale=TRACKING_CONFIG.string_inference_scale,
+                enable_cuda_graph=TRACKING_CONFIG.string_cuda_graph,
+            )
 
 
 if __name__ == "__main__":
