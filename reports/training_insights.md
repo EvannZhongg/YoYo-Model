@@ -427,3 +427,23 @@
 **适用范围**：当前 reviewed split、`1Ayoyo_consecutive` 927 帧、MobileNetV3-FPN 32 通道和现有后处理；连续集结果用于同协议候选判断，不外推到不同硬件或更大数据规模。
 
 **后续建议**：保持原始 bilinear FPN 相加融合。若未来引入特征拼接，应先证明端到端速度和 Presence/缺失段不回退，再投入完整训练。
+
+## FPN concatenation extended-training screening
+
+**结论**：将拼接 FPN 候选从 4 epoch 延长到等效 12 epoch 后，连续集几何主指标继续提升，但 Presence、最长缺失/恢复和最弱来源组回退，不能晋升。
+
+**证据**：同一 `b0d246da...` manifest、生产 MobileNetV3-FPN warm-start、seed `20260915` 和既有后处理协议下，独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.898322 / 0.982456 / 14.273 px`。完整 `1Ayoyo_consecutive` 十组、`1.125x`、颜色/亮脊/时序协议下，候选 pooled F1@8 `0.843023`，最弱来源组 `0.672963`，Presence F1 `0.987356`（TP/FP/FN=`898/2/21`），最长缺失/恢复 `7/7`，Chamfer/HD95 `10.492/42.329 px`；生产对应为 `0.818297/0.638996/0.994530/2/2/15.621/57.470 px`。阈值 `0.5` 时 pooled F1@8 仅 `0.844004`，安全指标仍未恢复。
+
+**适用范围**：当前 reviewed split、`1Ayoyo_consecutive` 927 帧、MobileNetV3-FPN 32 通道和 12 epoch 等效训练；未改变评估类别口径。
+
+**后续建议**：不保留拼接融合专用分支。后续 FPN 结构改动应同时满足 Presence、最长缺失/恢复和最弱来源护栏，而非仅追求 pooled 几何指标。
+
+## FPN concatenation logit-distillation screening
+
+**结论**：用生产 FPN 的语义 logits 对拼接 FPN 做训练期蒸馏，短训独立 test 主指标低于生产，未显示蒸馏能够修复拼接结构的安全回退。
+
+**证据**：同一 `b0d246da...` manifest、生产权重 warm-start、seed `20260916`、4 epoch 和既有阈值扫描协议下，蒸馏权重 `0.2` 的独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.884946 / 0.982456 / 44.0 px`，生产同协议对照为 `0.888527 / 0.979167 / 60.364 px`。候选低于生产主指标，未进入连续集评估。
+
+**适用范围**：当前 reviewed split、MobileNetV3-FPN 拼接解码器、生产 logit 教师、4 epoch warm-start 筛选；未改变连续集评估协议。
+
+**后续建议**：保持单一生产 FPN 路径，不在默认训练脚本中保留蒸馏参数或教师模型流程。若未来重新评估蒸馏，应先通过独立 test 的几何主指标和 Presence 筛选。
