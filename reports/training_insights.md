@@ -447,3 +447,33 @@
 **适用范围**：当前 reviewed split、MobileNetV3-FPN 拼接解码器、生产 logit 教师、4 epoch warm-start 筛选；未改变连续集评估协议。
 
 **后续建议**：保持单一生产 FPN 路径，不在默认训练脚本中保留蒸馏参数或教师模型流程。若未来重新评估蒸馏，应先通过独立 test 的几何主指标和 Presence 筛选。
+
+## FPN channel-gate screening
+
+**结论**：在每个 FPN 解码尺度加入零初始化的轻量通道重标定，短训独立 test 的中心线略有提升，但 Presence 明显回退，未形成可部署收益。
+
+**证据**：同一 `b0d246da...` manifest、生产 MobileNetV3-FPN warm-start、seed `20260917` 和 4 epoch 筛选下，ECA 候选独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.890314 / 0.972222 / 66.182 px`，生产同协议为 `0.888527 / 0.979167 / 60.364 px`；候选验证最佳 epoch 为 3、阈值 `0.995`。中心线增益不足以抵消 `7` 个误检帧和 Presence 回退。
+
+**适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN 32 通道和 4 epoch warm-start；未进入连续集评估。
+
+**后续建议**：保持原始 FPN 解码器，不保留通道门控专用分支；若未来数据规模扩大，应先在独立 test 同时验证 Presence 和负图误检，再考虑通道重标定。
+
+## FPN spatial-gate screening
+
+**结论**：在各 FPN 尺度加入零初始化的空间门控没有改善独立 test 的综合安全指标，调高阈值也不能恢复生产水平。
+
+**证据**：同一 manifest、生产权重 warm-start、seed `20260918` 和 4 epoch 筛选下，空间门控候选在阈值 `0.9204` 的独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.889734 / 0.979167 / 82.545 px`；阈值 `0.995` 时为 `0.888291 / 0.979167 / 65.455 px`。生产对照为 `0.888527 / 0.979167 / 60.364 px`，候选误检仍更高且中心线不升。
+
+**适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN 32 通道和 4 epoch warm-start；未进入连续集评估。
+
+**后续建议**：不保留空间门控分支；后续结构实验先以负图误检和独立 test F1 作为连续集投入门槛。
+
+## FPN directional-kernel screening
+
+**结论**：在 FPN 解码特征上加入零初始化的横/竖长核残差，独立 test 的误检有所下降，但中心线主指标和 Presence 仍低于生产，未达到候选资格。
+
+**证据**：同一 manifest、生产权重 warm-start、seed `20260919` 和 4 epoch 筛选下，方向残差候选验证最佳 epoch 为 3、阈值 `0.9701`；独立 test centerline F1@8 / Presence F1 / 负图平均误检为 `0.888676 / 0.975610 / 51.455 px`，阈值 `0.92` 时为 `0.888389 / 0.975610 / 53.727 px`。生产同协议为 `0.888527 / 0.979167 / 60.364 px`，候选存在性回退且主指标无可靠提升。
+
+**适用范围**：当前 `798/151/152` reviewed split、MobileNetV3-FPN 32 通道和 4 epoch warm-start；未进入连续集评估。
+
+**后续建议**：保持标准 FPN 融合，不保留方向卷积专用分支；若未来有更密集的细绳中心线标注，可在来源隔离 test 上重新验证方向监督。
