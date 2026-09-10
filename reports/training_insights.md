@@ -467,3 +467,13 @@
 **适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s/YOLO11n foundation、固定输入尺寸和现有方向时序过滤；检测实验为 12 epoch 快速训练，不外推到更长日程。
 
 **后续建议**：保留现有生产权重与默认配置。若继续投入，应先延长检测训练日程并在连续集完成位置召回/IoU 护栏评估；方向训练优先沿三分类视图扩充弱来源样本，再以连续集 macro recall 和最弱组共同筛选。
+
+## 检测 warm-start 与短缺口补全筛选
+
+**结论**：当前 manifest 上从 foundation 训练最佳点 warm-start 能改善 native test 和候选框几何，但连续集只有在低阈值加短缺口补全后才接近生产 Presence；弱来源和最长缺失段仍不满足晋升护栏，因此不替换生产检测权重。
+
+**证据**：YOLO11s、`imgsz=1024`、seed `20260911` 的 12 epoch foundation run native test mAP50-95 为 `0.547847`；从该 run 的 best checkpoint 以 AdamW `lr0=1e-4` warm-start 8 epoch 后 native test mAP50-95 提升到 `0.569378`，但仍低于生产 `0.586875`。连续集 raw `conf=0.15` 的候选 Presence F1 / mean IoU / longest missing 为 `0.943570 / 0.834955 / 9`，生产为 `0.977387 / 0.799693 / 7`。候选降到 `conf=0.03` 并对相邻最多 2 个缺口做线性 bbox 补全后，Presence F1=`0.980442`、FP=`3`、mean IoU=`0.812556`，但最长缺失仍为 `8`；弱来源 `邬聪聪` F1=`0.8645`，低于生产 `0.9444`。补全至 8 帧可把最长缺失降到 `6`、F1=`0.986369`，但 FP 增至 `13`、mean IoU 降到 `0.794779`，不满足误检与几何护栏。
+
+**适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s foundation/warm-start、`1Ayoyo_consecutive` 927 帧、固定 `imgsz=1024` 和现有 bbox 评估；缺口补全仅为离线追踪筛选，不改变模型结构。
+
+**后续建议**：保留生产检测权重和现有 rescue 路径；继续优化前应优先补充弱来源中“远距离小球、暗背景/高对比墙面”样本并重新训练，避免用更长时间补全掩盖真实漏检。显式 optimizer/lr 参数已加入检测训练入口，便于后续可复现 warm-start 消融。

@@ -21,11 +21,14 @@ def train_detection(
     seed: int = 20260726,
     initial_weights: str | Path | None = None,
     run_tag: str = "",
+    optimizer: str = "auto",
+    learning_rate: float | None = None,
 ) -> dict:
     return train_task(
         task="detection", dataset_dir=Path(dataset_dir), project_dir=Path(project_dir), models_dir=Path(models_dir),
         epochs=int(epochs), imgsz=int(imgsz), batch=str(batch), workers=int(workers), device=str(device), seed=int(seed),
         auto_download=True, initial_weights_override=initial_weights, run_tag=run_tag,
+        optimizer=str(optimizer), learning_rate=learning_rate,
     )
 
 
@@ -36,6 +39,8 @@ def main() -> int:
     parser.add_argument("--models-dir", default=str(BASE_DIR / "models"))
     parser.add_argument("--initial-weights", default="")
     parser.add_argument("--run-tag", default="")
+    parser.add_argument("--optimizer", default="auto")
+    parser.add_argument("--lr0", type=float, default=None)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--batch", default="2")
@@ -45,6 +50,7 @@ def main() -> int:
     args = parser.parse_args()
     values = vars(args).copy()
     values["initial_weights"] = values.get("initial_weights") or None
+    values["learning_rate"] = values.pop("lr0")
     result = train_detection(**values)
     print({"run_dir": result["run_dir"], "task": result["task"]})
     return 0
