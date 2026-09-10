@@ -326,7 +326,7 @@ class StringTrackingConfig:
 class OrientationConfig:
     """Configuration owned by the yoyo orientation path."""
 
-    weights_path: Path = _as_path(_env_or_config("ORIENTATION_WEIGHTS_PATH", "orientation.weights_path", "runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt"))
+    weights_path: Path = _as_path(_env_or_config("ORIENTATION_WEIGHTS_PATH", "orientation.weights_path", "runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/weights/best.pt"))
     imgsz: int = int(_env_or_config("ORIENTATION_IMGSZ", "orientation.imgsz", 320))
     device: str = str(_env_or_config("ORIENTATION_DEVICE", "orientation.device", ""))
 

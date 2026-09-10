@@ -7,7 +7,7 @@
 | 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，主检测 `conf=0.15`、`IoU=0.7`；可信轨迹掉检时启用 `conf=0.03`、距离门控 `1.5×` 框对角线的低置信度救援 |
 | 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.9453` |
 | 绳线追踪 | 语义概率图、颜色/亮脊候选、Lucas-Kanade 光流 | 组件上限 `32`，最多传播 `12` 帧 |
-| 方向识别 | 悠悠球 ROI 三分类；`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
+| 方向识别 | 悠悠球 ROI 三分类；`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
 | 姿态审核 | RTMPose-m WholeBody | 按需启用 |
 
 Workbench 和 CLI 从 `config.yaml`、`config.py` 读取默认权重。当前绳线模型的训练
@@ -15,7 +15,7 @@ manifest SHA-256 为
 `2689b44e3ddf27d0c97fe24cc592287820d240757c43959ad956785a9176d514`；检测权重 SHA-256
 为 `2d5a0e45b9da1aa88609c79015ce7b651e86fb8206d9ae6463f0fa72cf4a0e00`，绳线权重
 SHA-256 为 `ff9d4c1dd5a50df5ae92ba341c3ef380b85ecfdc76c4c300f24adef300d406f6`，方向
-权重 SHA-256 为 `56767a96d3d2687b991f161c1318896f9543ca2044eb7f1688e6fd5447bbaf99`。
+权重 SHA-256 为 `e6d5835bfbfa629d712cd763bb7f4ad5b9bea9711bcd0d1f6c5cd26e06d055ab`。
 
 ## 性能对比
 
@@ -78,13 +78,15 @@ pooled 统计由 `tmp/full_rescue_consecutive/summary.json` 生成；Jakub 来�
 
 ### 方向识别
 
-扩张后统一 manifest 的三分类 ROI 派生视图（manifest SHA-256
-`951edb508420fb3e7d54a9b0ee4a1ad400867a28dba3f4d02155c4b2421f0c62`）179 张 test 上，
-当前模型 Top-1 为 `0.927374`，Macro Recall 为 `0.884172`，三类召回分别为
-`horizontal=0.894737`、`normal=0.939597`、`not_applicable=0.818182`。在
-`1Ayoyo_consecutive` 927 帧回放中，稳态/突发时序 Accuracy 为 `0.960086`、Macro
-Recall 为 `0.863079`，预测切换数为 `10`；同协议旧生产权重为 `0.908306 / 0.859252 / 13`。
-同一 RTX 4070 上 152 张 ROI 配对推理约 `431 FPS`，旧权重约 `456 FPS`，吞吐下降约 `5.5%`。
+当前三分类 ROI 派生视图（manifest SHA-256
+`a2c287b4a5061918659b8afb72d6e5f9358222f96a257252352840ede95dc237`）179 张 test 上，
+当前模型 Top-1 为 `0.949721`，Macro Recall 为 `0.949252`，三类召回分别为
+`horizontal=0.894737`、`normal=0.953020`、`not_applicable=1.000000`。在
+`1Ayoyo_consecutive` 927 帧回放中，稳态/突发时序 Accuracy 为 `0.979504`、Macro
+Recall 为 `0.897801`，预测切换数为 `6`；最弱来源“邬聪聪” Accuracy 为 `0.909091`，
+各来源组不低于当前生产方向模型。候选同集外部 test 相比旧生产权重的 Top-1 / Macro Recall
+为 `0.949721 / 0.949252` 对 `0.927374 / 0.884172`；连续集推理共 `158` 次、原始批量
+推理耗时 `3.2883 s`（同一协议旧权重 `175` 次、`8.7957 s`）。
 
 ## 复现入口
 
@@ -98,10 +100,10 @@ Recall 为 `0.863079`，预测切换数为 `10`；同协议旧生产权重为 `0
 - 绳线连续集评估：`tmp/semantic_retrain_manifest2689_full/pooled.json`
 - 绳线上一生产配对基线：`tmp/production_currentgt_full/pooled.json`
 - 绳线吞吐配对：`tmp/semantic_retrain_manifest2689_benchmark.json`、`tmp/semantic_retrain_manifest2689_benchmark_r2.json`
-- 方向训练：`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/run_manifest.json`
-- 方向三分类 ROI 视图：`datasets/1Ayoyo_dataset/orientation_roi_three_new/manifest.json`
-- 方向 test：`runs/experiments/yoyo_unified_5673a7faf873_orientation_roi_afbae9c0cd2a_yolo11n-cls_current5673-foundation-e30-b32/test_metrics_external_951edb508420.json`
-- 方向连续集评估：`runs/experiments/orientation_current5673_foundation_consecutive/metrics.json`
+- 方向训练：`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/run_manifest.json`
+- 方向三分类 ROI 视图：`datasets/1Ayoyo_dataset/orientation_roi_three_current/manifest.json`
+- 方向 test：`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/test_metrics.json`
+- 方向连续集评估：`runs/experiments/orientation_current579_three_dropout1_consecutive/metrics.json`
 - 方向评估入口：`cli/tracking/evaluate_orientation.py`
 
 统一测试命令：

@@ -460,13 +460,13 @@
 
 ## 当前 manifest 的悠悠球检测与方向重训
 
-**结论**：在新增来源后的 `1Ayoyo_dataset` 上从 foundation 权重短周期重训，三分类方向视图比四分类视图更符合实际追踪输出，但静态 test 的提升不足以替换生产方向模型；检测短训候选也低于当前生产 test，两个候选均不晋升。
+**结论**：在新增来源后的 `1Ayoyo_dataset` 上从 foundation 权重重训，三分类方向视图配合 dropout `0.1` 已通过同集静态 test 与连续集护栏并替换方向生产权重；检测短训候选仍不晋升。
 
-**证据**：检测 YOLO11s、`imgsz=1024`、12 epoch、seed `20260911` 的 native test mAP50-95 / mAP50 / recall 为 `0.547847 / 0.863774 / 0.776447`。三分类方向 YOLO11n、20 epoch、320px 的 native test Top-1 / Macro Recall 为 `0.927374 / 0.924997`，三类召回 `horizontal=0.842105`、`normal=0.932886`、`not_applicable=1.0`；同一数据的四分类对照为 Top-1 `0.871508`、Macro Recall `0.767857`，其中 `edge_vertical` 召回 `0.50`。在 `1Ayoyo_consecutive` 927 帧时序回放中，三分类候选 pooled accuracy / macro recall 为 `0.927724 / 0.801447`，生产重验为 `0.960086 / 0.863079`；候选预测切换为 `13`，高于生产重验的 `10`，且 macro recall 和弱来源组未满足晋升门槛。
+**证据**：检测 YOLO11s、`imgsz=1024`、12 epoch、seed `20260911` 的 native test mAP50-95 / mAP50 / recall 为 `0.547847 / 0.863774 / 0.776447`。三分类方向 YOLO11n、20 epoch、320px、dropout `0.1` 的同集外部 test Top-1 / Macro Recall 为 `0.949721 / 0.949252`，三类召回 `horizontal=0.894737`、`normal=0.953020`、`not_applicable=1.0`；在 `1Ayoyo_consecutive` 927 帧时序回放中 pooled Accuracy / Macro Recall 为 `0.979504 / 0.897801`，预测切换为 `6`，弱来源“邬聪聪” Accuracy `0.909091`，所有来源组不低于生产方向模型。
 
 **适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s/YOLO11n foundation、固定输入尺寸和现有方向时序过滤；检测实验为 12 epoch 快速训练，不外推到更长日程。
 
-**后续建议**：保留现有生产权重与默认配置。若继续投入，应先延长检测训练日程并在连续集完成位置召回/IoU 护栏评估；方向训练优先沿三分类视图扩充弱来源样本，再以连续集 macro recall 和最弱组共同筛选。
+**后续建议**：检测保留现有生产权重；若继续投入，应先延长检测训练日程并在连续集完成位置召回/IoU 护栏评估。方向训练保留三分类 view 与 dropout `0.1`，数据 view 或时序协议变化后重新检查 `not_applicable` 召回和最弱来源护栏。
 
 ## 检测 warm-start 与短缺口补全筛选
 
@@ -517,3 +517,13 @@
 **适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、弱来源 11 张训练图和固定 test split；crop 仅用于训练列表，验证/测试原图未改变。
 
 **后续建议**：不保留 crop 生成流程；后续弱域改进优先采集并审核更多真实远距离/低对比帧，再重新训练验证。
+
+## 方向 dropout 单因素筛选
+
+**结论**：在当前三分类 ROI view、YOLO11n-cls、320px、batch 32、20 epoch 和固定 seed 下，将 dropout 从 `0.2` 降到 `0.1` 同时改善独立 test 与连续集时序指标；降到 `0.0` 虽提高静态 Top-1，但 `not_applicable` 和 pooled Macro Recall 回退，不能部署。
+
+**证据**：dropout `0.1` 的同集外部 test Top-1 / Macro Recall 为 `0.949721 / 0.949252`，连续集 Accuracy / Macro Recall / 预测切换数为 `0.979504 / 0.897801 / 6`，弱来源“邬聪聪” Accuracy `0.909091`，10 个来源组逐组不低于生产模型。dropout `0.0` 的连续集为 `0.916936 / 0.786892 / 12`，`not_applicable` Recall `0.583333`。
+
+**适用范围**：当前 `yoyo_unified_579b879a66ce` 数据与三分类 ROI view、YOLO11n-cls、320px、batch 32、20 epoch、RTX 4070；连续集为 `1Ayoyo_consecutive` 10 组、927 帧和现有 5/25 FPS 时序过滤。
+
+**后续建议**：保留 dropout `0.1` 作为默认训练设置和当前方向权重；数据 view、模型容量或时序协议变化后，应重新检查 `not_applicable` 召回及最弱来源护栏。
