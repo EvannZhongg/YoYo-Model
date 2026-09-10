@@ -457,3 +457,13 @@
 **适用范围**：当前 MobileNetV3-FPN、4 epoch warm-start quality head、`1Ayoyo_dataset` reviewed test 和 `1Ayoyo_consecutive` 10 组/927 帧；该实现是帧级 utility gate，不能外推为已验证的组件级局部分类器。
 
 **后续建议**：不将 `mobilenet_v3_fpn_quality` 或自动低阈值策略写入默认权重/配置。若要继续回答组件级问题，应构造 production 低置信连通区域的独立正负监督，并在来源隔离连续集上验证区域级 Gate 的收益与误检护栏。
+
+## 当前 manifest 的悠悠球检测与方向重训
+
+**结论**：在新增来源后的 `1Ayoyo_dataset` 上从 foundation 权重短周期重训，三分类方向视图比四分类视图更符合实际追踪输出，但静态 test 的提升不足以替换生产方向模型；检测短训候选也低于当前生产 test，两个候选均不晋升。
+
+**证据**：检测 YOLO11s、`imgsz=1024`、12 epoch、seed `20260911` 的 native test mAP50-95 / mAP50 / recall 为 `0.547847 / 0.863774 / 0.776447`。三分类方向 YOLO11n、20 epoch、320px 的 native test Top-1 / Macro Recall 为 `0.927374 / 0.924997`，三类召回 `horizontal=0.842105`、`normal=0.932886`、`not_applicable=1.0`；同一数据的四分类对照为 Top-1 `0.871508`、Macro Recall `0.767857`，其中 `edge_vertical` 召回 `0.50`。在 `1Ayoyo_consecutive` 927 帧时序回放中，三分类候选 pooled accuracy / macro recall 为 `0.927724 / 0.801447`，生产重验为 `0.960086 / 0.863079`；候选预测切换为 `13`，高于生产重验的 `10`，且 macro recall 和弱来源组未满足晋升门槛。
+
+**适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s/YOLO11n foundation、固定输入尺寸和现有方向时序过滤；检测实验为 12 epoch 快速训练，不外推到更长日程。
+
+**后续建议**：保留现有生产权重与默认配置。若继续投入，应先延长检测训练日程并在连续集完成位置召回/IoU 护栏评估；方向训练优先沿三分类视图扩充弱来源样本，再以连续集 macro recall 和最弱组共同筛选。
