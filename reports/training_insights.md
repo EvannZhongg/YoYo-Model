@@ -477,3 +477,13 @@
 **适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s foundation/warm-start、`1Ayoyo_consecutive` 927 帧、固定 `imgsz=1024` 和现有 bbox 评估；缺口补全仅为离线追踪筛选，不改变模型结构。
 
 **后续建议**：保留生产检测权重和现有 rescue 路径；继续优化前应优先补充弱来源中“远距离小球、暗背景/高对比墙面”样本并重新训练，避免用更长时间补全掩盖真实漏检。显式 optimizer/lr 参数已加入检测训练入口，便于后续可复现 warm-start 消融。
+
+## 检测小目标尺度增强筛选
+
+**结论**：在当前 manifest、同一 YOLO11s foundation 初始化和 12 epoch 日程下，将训练 `scale` 从 `0.15` 提高到 `0.40` 未改善连续集召回；静态 test 略优于 foundation 但仍低于生产，弱来源明显回退。
+
+**证据**：候选 `yoyo_unified_579b879a66ce_detection_best_current579-scale40-e12` 的 native test mAP50-95 / mAP50 / recall 为 `0.572 / 0.887 / 0.817`，生产 mAP50-95 为 `0.586875`。连续集原始 `conf=0.15` 下 Presence F1 / mean IoU / 最长缺失为 `0.9202 / 0.8378 / 11`，弱来源 `邬聪聪` F1 为 `0.5424`；`conf=0.03` 时分别为 `0.9620 / 0.8178 / 6`，弱来源 F1 为 `0.8138`，仍低于生产 `0.9774 / 0.7997 / 7` 及弱来源 `0.9444`。
+
+**适用范围**：当前 `yoyo_unified_579b879a66ce` manifest、YOLO11s、`imgsz=1024`、seed `20260911` 和 `1Ayoyo_consecutive` 927 帧 bbox 回放；只改变尺度增强，未改变网络结构或追踪后处理。
+
+**后续建议**：默认保留 `scale=0.15`；若继续处理远距离小球，应优先扩充并平衡弱来源样本，再单独验证增强组合，避免仅靠扩大尺度扰动牺牲来源组召回。
