@@ -103,9 +103,6 @@ def train_task(
     patience: int = 20,
     optimizer: str = "auto",
     learning_rate: float | None = None,
-    mosaic: float = 0.0,
-    scale: float = 0.15,
-    translate: float = 0.05,
 ) -> dict[str, Any]:
     if task not in TASKS:
         raise ValueError(f"Unsupported task: {task}")
@@ -140,7 +137,7 @@ def train_task(
     if learning_rate is not None:
         train_kwargs["lr0"] = float(learning_rate)
     if task in {"detection", "string_segmentation"}:
-        train_kwargs.update({"mosaic": float(mosaic), "scale": float(scale), "translate": float(translate)})
+        train_kwargs.update({"mosaic": 0.0, "scale": 0.15, "translate": 0.05})
     if task == "string_segmentation":
         train_kwargs.update({"mask_ratio": 1, "close_mosaic": 0})
     if task == "orientation":
