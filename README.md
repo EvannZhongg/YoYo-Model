@@ -2,6 +2,10 @@
 
 悠悠球检测、绳线分割、三分类方向识别和完整视频追踪项目。训练数据统一由一个 canonical 数据集管理。
 
+## 架构文档
+
+项目模块关系、从标注到模型晋升的端到端流程，以及视频逐帧追踪的数据流见 [`reports/architecture_pipeline.md`](reports/architecture_pipeline.md)。
+
 ## 命令行入口
 
 所有命令行入口集中在 `cli/`，从项目根目录使用 `python -m` 调用，查看任一命令的参数说明：
