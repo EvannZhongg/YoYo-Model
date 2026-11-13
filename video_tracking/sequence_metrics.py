@@ -765,12 +765,12 @@ def evaluate_sequence(
             "centerline": centerline_summary,
             "temporal": {
                 **_longest_missing_streak(
-                    [{"source_group": row["source_group"], "frame_index": row["frame_index"], "target": row.get("string_present_target"), "prediction": row.get("string_present_prediction")} for row in string_rows],
+                    [{"source_group": row["source_group"], "frame_index": row["frame_index"], "target": row.get("string_present_target"), "prediction": row.get("string_present_prediction")} for row in rows],
                     "target",
                     "prediction",
                 ),
                 **_recovery_summary(
-                    [{"source_group": row["source_group"], "frame_index": row["frame_index"], "target": row.get("string_present_target"), "prediction": row.get("string_present_prediction")} for row in string_rows],
+                    [{"source_group": row["source_group"], "frame_index": row["frame_index"], "target": row.get("string_present_target"), "prediction": row.get("string_present_prediction")} for row in rows],
                     "target",
                     "prediction",
                 ),

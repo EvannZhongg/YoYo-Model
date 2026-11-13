@@ -714,12 +714,15 @@ def estimate_string(
 
     observed = _annotate_observation(observation) if observation is not None else None
     propagated = None
-    # Run flow on every frame with an existing track. Fresh model/color geometry
-    # remains authoritative, while flow supplies temporal diagnostics and can
-    # restore secondary components that a frame-local observation dropped.
+    # Propagation cannot yield more polylines than its seed contains.
     if previous_string and previous_string.get("points"):
         previous_age = int(previous_string.get("propagation_age_frames", 0))
-        if previous_age < max(0, int(max_propagation_frames)):
+        seed_count = len(previous_string.get("polylines") or [previous_string["points"]])
+        observed_count = (
+            len(observed.get("polylines") or ([observed["points"]] if observed.get("points") else []))
+            if observed is not None else 0
+        )
+        if previous_age < max(0, int(max_propagation_frames)) and seed_count > observed_count:
             if observed is not None:
                 observed = dict(observed)
                 observed["flow_temporal_attempted"] = True

@@ -9,15 +9,15 @@ flowchart TD
 
     C --> D{存在当前/最近悠悠球<br/>或已有绳线轨迹?}
     D -->|否| E[跳过语义前向]
-    D -->|是| F[单 MobileNetV3-FPN<br/>960x544 checkpoint -> 1088x608 推理（1.125x） / threshold 0.40]
+    D -->|是| F[单 MobileNetV3-FPN<br/>960x544 checkpoint -> 1088x608 推理（1.125x） / threshold 0.9453]
     F --> G[语义概率与多组件中心线]
     A --> H[语义支持邻域内<br/>饱和色/亮脊 Hough]
     G --> I[沿线概率门控与组件并集]
     H --> I
 
-    I --> J{当前帧有新鲜观测?}
-    J -->|是| K[直接保留当前几何]
-    J -->|否| L[Lucas-Kanade 前后向光流<br/>最多短时传播 12 帧]
+    I --> J{观测线段数少于上一帧轨迹?}
+    J -->|否| K[保留当前几何]
+    J -->|是| L[Lucas-Kanade 前后向光流<br/>补回次级绳段或短时延续]
 
     C --> M[仅悠悠球方形 ROI]
     M --> N[三分类方向模型<br/>5/25 FPS 自适应采样<br/>EMA 与切换滞回]

@@ -136,6 +136,24 @@ class SequenceMetricsTests(unittest.TestCase):
         self.assertEqual(result["excluded_unknown"]["string"], 1)
         self.assertEqual(result["string"]["presence"]["known_frames"], 3)
 
+    def test_unknown_string_frame_interrupts_missing_streak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset, predictions = self._dataset(Path(directory))
+            label = dataset / "canonical" / "labels" / "video-a" / "frame-001.json"
+            data = json.loads(label.read_text(encoding="utf-8"))
+            data["string_review_status"] = "unresolved"
+            data["string_polylines_pixel"] = []
+            label.write_text(json.dumps(data), encoding="utf-8")
+            records = [json.loads(line) for line in predictions.read_text(encoding="utf-8").splitlines()]
+            for record in records[:3]:
+                record["string"] = None
+            predictions.write_text("\n".join(json.dumps(item) for item in records) + "\n", encoding="utf-8")
+            result = evaluate_sequence(dataset, predictions)
+        temporal = result["string"]["temporal"]
+        self.assertEqual(temporal["longest_missing_streak_frames"], 1)
+        self.assertEqual(temporal["max_recovery_latency_frames"], 1)
+        self.assertEqual(temporal["unrecovered_episode_count"], 1)
+
     def test_uncertain_yoyo_is_excluded_but_reviewed_absent_is_negative(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset, predictions = self._dataset(Path(directory))

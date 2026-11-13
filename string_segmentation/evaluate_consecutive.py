@@ -14,19 +14,21 @@ import numpy as np
 import torch
 
 from common.files import sha256_file
-from config import TRACKING_CONFIG
+from config import STRING_TRACKING_CONFIG, TRACKING_CONFIG
 from string_segmentation.device import resolve_device
 from string_segmentation.semantic_model import (
     load_checkpoint,
-    polyline_probability_support,
     predict_prepared_probability,
     prepare_letterboxed_input,
     semantic_mask_observation,
 )
 from video_tracking.sequence_metrics import evaluate_sequence
-from video_tracking.string_tracker import (
-    _color_line_observation,
-    estimate_string,
+from video_tracking.string_tracker import estimate_string
+from video_tracking.tracker import (
+    _augment_semantic_color_observation,
+    _can_seed_previous_string,
+    _semantic_inference_parameters,
+    _should_run_scheduled_string_model,
 )
 
 
@@ -68,15 +70,15 @@ def evaluate_consecutive_checkpoint(
     threshold: float | None = None,
     groups: list[str] | None = None,
     color_augment: bool = False,
-    color_probability_min_mean: float | None = TRACKING_CONFIG.string_color_probability_min_mean,
-    color_probability_min_fraction: float = 0.5,
+    color_probability_min_mean: float = TRACKING_CONFIG.string_color_probability_min_mean,
+    color_probability_min_fraction: float = TRACKING_CONFIG.string_color_probability_min_fraction,
     color_semantic_prefilter: bool = TRACKING_CONFIG.string_color_semantic_prefilter,
     bright_line_augment: bool = TRACKING_CONFIG.string_bright_line_augment,
     bright_line_min_mean: float = TRACKING_CONFIG.string_bright_line_min_mean,
     temporal: bool = False,
     max_propagation_frames: int = TRACKING_CONFIG.string_max_propagation_frames,
     max_forward_backward_error: float = TRACKING_CONFIG.string_flow_fb_max_error,
-    unanchored_semantic_grace_frames: int = 12,
+    unanchored_semantic_grace_frames: int | None = None,
     max_polyline_points: int = 64,
     max_components: int = TRACKING_CONFIG.string_max_components,
     min_component_pixels: int = 8,
@@ -89,19 +91,14 @@ def evaluate_consecutive_checkpoint(
     output_dir.mkdir(parents=True, exist_ok=True)
     device = resolve_device(device_name)
     model, checkpoint = load_checkpoint(weights, device)
-    config = checkpoint.get("model_config") or {}
-    input_width = int(config.get("input_width", 960))
-    input_height = int(config.get("input_height", 544))
     inference_scale = float(inference_scale)
-    if not 0.5 <= inference_scale <= 2.0:
-        raise ValueError("inference_scale must be between 0.5 and 2.0")
-    input_width = max(32, int(round(input_width * inference_scale / 16.0)) * 16)
-    input_height = max(32, int(round(input_height * inference_scale / 16.0)) * 16)
-    primary_calibration_threshold = float(
-        checkpoint.get("threshold", 0.5) if threshold is None else threshold
+    input_width, input_height, _ = _semantic_inference_parameters(checkpoint["model_config"], inference_scale)
+    selected_threshold = (
+        max(float(checkpoint.get("threshold", 0.5)), STRING_TRACKING_CONFIG.confidence)
+        if threshold is None else float(threshold)
     )
-    selected_threshold = primary_calibration_threshold
-    document = json.loads((dataset_dir / "consecutive_groups.json").read_text(encoding="utf-8"))
+    manifest_path = dataset_dir / "consecutive_groups.json"
+    document = json.loads(manifest_path.read_text(encoding="utf-8"))
     selected = set(groups or [])
     results: list[dict[str, Any]] = []
 
@@ -114,123 +111,60 @@ def evaluate_consecutive_checkpoint(
         predicted_components = []
         target_components = []
         accepted_color_candidates = 0
-        rejected_color_candidates = 0
         previous_frame: np.ndarray | None = None
         previous_string: dict[str, Any] | None = None
         last_yoyo_frame: int | None = None
-        for frame in group.get("frames") or []:
+        frames = group.get("frames") or []
+        if not frames:
+            continue
+        grace_frames = 0
+        if temporal and unanchored_semantic_grace_frames is not None:
+            grace_frames = max(0, int(unanchored_semantic_grace_frames))
+        elif temporal:
+            first, last = frames[0], frames[-1]
+            duration = float(last["timestamp_s"]) - float(first["timestamp_s"])
+            fps = (int(last["frame_index"]) - int(first["frame_index"])) / duration if duration > 0 else 0.0
+            grace_frames = max(2, int(round(fps * 0.25)))
+        for frame in frames:
             relative = Path(str(frame["sample_key"]))
             annotation_path = dataset_dir / "canonical" / "labels" / relative
             annotation = json.loads(annotation_path.read_text(encoding="utf-8"))
             image_path = dataset_dir / str(frame["image"])
             image = _read_image(image_path)
-            active_input_width = input_width
-            active_input_height = input_height
-            tensor, meta = prepare_letterboxed_input(
-                image, active_input_width, active_input_height, device,
-            )
-            probability = predict_prepared_probability(model, tensor)
-            active_selected_threshold = selected_threshold
+            frame_index = int(frame["frame_index"])
             yoyo = _yoyo(annotation)
-            observation = semantic_mask_observation(
-                probability,
-                meta,
-                active_selected_threshold,
-                low_threshold=low_threshold,
-                yoyo=yoyo,
-                yoyo_division=str(annotation.get("yoyo_division") or "1A"),
-                min_component_pixels=max(1, int(min_component_pixels)),
-                max_components=max(1, int(max_components)),
-                max_polyline_points=max_polyline_points,
-            )
-            final_string = observation
-            if color_augment and yoyo is not None:
-                color = None
-                color_support: dict[str, float] = {}
-                tried_points: set[tuple[tuple[float, float], ...]] = set()
-                had_color_candidate = False
-                color_search_cache: dict[str, Any] = {}
-                for use_bright_lines in ((False, True) if bright_line_augment else (False,)):
-                    candidate = _color_line_observation(
-                        image, yoyo, require_yoyo_proximity=False,
-                        mark_far_ambiguous=True,
-                        reference_points=(observation or {}).get("points"),
-                        semantic_probability=probability if color_semantic_prefilter else None,
-                        semantic_meta=meta if color_semantic_prefilter else None,
-                        include_bright_lines=use_bright_lines,
-                        search_cache=color_search_cache,
+            final_string = None
+            if not temporal or _should_run_scheduled_string_model(
+                True, yoyo, previous_string, last_yoyo_frame, frame_index, grace_frames,
+            ):
+                tensor, meta = prepare_letterboxed_input(image, input_width, input_height, device)
+                probability = predict_prepared_probability(model, tensor)
+                final_string = semantic_mask_observation(
+                    probability,
+                    meta,
+                    selected_threshold,
+                    low_threshold=low_threshold,
+                    yoyo=yoyo,
+                    yoyo_division=str(annotation.get("yoyo_division") or "1A"),
+                    min_component_pixels=max(1, int(min_component_pixels)),
+                    max_components=max(1, int(max_components)),
+                    max_polyline_points=max_polyline_points,
+                )
+                if color_augment:
+                    final_string = _augment_semantic_color_observation(
+                        image, yoyo, final_string, probability, meta, selected_threshold,
+                        color_probability_min_mean, color_probability_min_fraction,
+                        semantic_prefilter=color_semantic_prefilter,
+                        include_bright_lines=bright_line_augment,
+                        bright_line_min_mean=bright_line_min_mean,
+                        max_components=max_components,
                     )
-                    if candidate is None:
-                        continue
-                    point_key = tuple(
-                        tuple(float(value) for value in point) for point in candidate["points"]
-                    )
-                    if point_key in tried_points:
-                        continue
-                    tried_points.add(point_key)
-                    had_color_candidate = True
-                    candidate_support = polyline_probability_support(
-                        probability, meta, candidate["points"], active_selected_threshold,
-                    )
-                    candidate_min_mean = (
-                        max(float(color_probability_min_mean or 0.0), float(bright_line_min_mean))
-                        if use_bright_lines else color_probability_min_mean
-                    )
-                    if bool(
-                        color_probability_min_mean is None
-                        or (
-                            float(candidate_support.get("mean", 0.0))
-                            >= float(candidate_min_mean)
-                            and float(candidate_support.get("fraction_at_0_10", 0.0))
-                            >= color_probability_min_fraction
-                        )
-                    ):
-                        color = candidate
-                        color_support = candidate_support
-                        break
-                if color is None:
-                    rejected_color_candidates += int(had_color_candidate)
-                elif final_string is None:
-                    accepted_color_candidates += 1
-                    final_string = dict(color)
-                    final_string["color_points"] = color["points"]
-                    final_string["color_probability_support"] = color_support
-                    if color.get("line_features"):
-                        final_string["color_line_features"] = color["line_features"]
-                else:
-                    final_string = dict(final_string)
-                    polylines = list(final_string.get("polylines") or [final_string["points"]])
-                    if len(polylines) < max(1, int(max_components)):
-                        accepted_color_candidates += 1
-                        polylines.append(color["points"])
-                        component_count = int(
-                            final_string.get("component_count")
-                            or max(1, len(polylines) - 1)
-                        ) + 1
-                        final_string.update({
-                            "polylines": polylines,
-                            "component_count": component_count,
-                            "polyline_count": len(polylines),
-                            "method": (
-                                "semantic_color_probability_union"
-                                if color_probability_min_mean is not None
-                                else "semantic_color_union"
-                            ),
-                            "color_confidence": color.get("confidence"),
-                            "color_distance_to_yoyo_px": color.get("distance_to_yoyo_px"),
-                            "color_spatially_ambiguous": color.get("spatially_ambiguous"),
-                            "color_points": color["points"],
-                            "color_probability_support": color_support,
-                        })
-                        if color.get("line_features"):
-                            final_string["color_line_features"] = color["line_features"]
+                    accepted_color_candidates += int(bool((final_string or {}).get("color_points")))
             if temporal:
-                frame_index = int(frame["frame_index"])
                 allow_unanchored_semantic = bool(
                     yoyo is None
                     and last_yoyo_frame is not None
-                    and frame_index - last_yoyo_frame
-                    <= max(0, int(unanchored_semantic_grace_frames))
+                    and frame_index - last_yoyo_frame <= grace_frames
                 )
                 final_string = estimate_string(
                     image,
@@ -246,13 +180,7 @@ def evaluate_consecutive_checkpoint(
                     allow_unanchored_semantic=allow_unanchored_semantic,
                     previous_frame=previous_frame,
                 )
-                previous_string = (
-                    final_string
-                    if final_string is not None
-                    and not final_string.get("spatially_ambiguous")
-                    and not final_string.get("hand_anchor_mismatch")
-                    else None
-                )
+                previous_string = final_string if _can_seed_previous_string(final_string) else None
                 previous_frame = image if previous_string is not None else None
                 if yoyo is not None:
                     last_yoyo_frame = frame_index
@@ -289,13 +217,13 @@ def evaluate_consecutive_checkpoint(
             "mean_target_components": round(float(np.mean(target_components)), 4),
             "zero_prediction_frames": int(sum(value == 0 for value in predicted_components)),
             "accepted_color_candidates": accepted_color_candidates,
-            "rejected_color_candidates": rejected_color_candidates,
+            "unanchored_semantic_grace_frames": grace_frames,
             "string": metrics["string"],
         })
     if not results:
         raise ValueError("No consecutive groups matched the requested selection")
     summary = {
-        "schema_version": "yoyo_semantic_consecutive_evaluation_v1",
+        "schema_version": "yoyo_semantic_consecutive_evaluation_v2",
         "weights": str(weights),
         "weights_sha256": sha256_file(weights),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
@@ -304,6 +232,7 @@ def evaluate_consecutive_checkpoint(
         "input_size": [input_width, input_height],
         "inference_scale": inference_scale,
         "dataset_dir": str(dataset_dir),
+        "consecutive_groups_sha256": sha256_file(manifest_path),
         "color_augment": bool(color_augment),
         "color_probability_min_mean": color_probability_min_mean,
         "color_probability_min_fraction_at_0_10": color_probability_min_fraction,
@@ -313,7 +242,7 @@ def evaluate_consecutive_checkpoint(
         "temporal": bool(temporal),
         "max_propagation_frames": int(max_propagation_frames),
         "max_forward_backward_error": float(max_forward_backward_error),
-        "unanchored_semantic_grace_frames": int(unanchored_semantic_grace_frames),
+        "unanchored_semantic_grace_frames": unanchored_semantic_grace_frames,
         "max_polyline_points": int(max_polyline_points),
         "max_components": int(max_components),
         "min_component_pixels": int(min_component_pixels),
@@ -340,7 +269,10 @@ def main() -> int:
         type=float,
         default=TRACKING_CONFIG.string_color_probability_min_mean,
     )
-    parser.add_argument("--color-probability-min-fraction", type=float, default=0.5)
+    parser.add_argument(
+        "--color-probability-min-fraction", type=float,
+        default=TRACKING_CONFIG.string_color_probability_min_fraction,
+    )
     parser.add_argument(
         "--color-semantic-prefilter",
         action=argparse.BooleanOptionalAction,
@@ -367,7 +299,10 @@ def main() -> int:
         type=float,
         default=TRACKING_CONFIG.string_flow_fb_max_error,
     )
-    parser.add_argument("--unanchored-semantic-grace-frames", type=int, default=12)
+    parser.add_argument(
+        "--unanchored-semantic-grace-frames", type=int, default=None,
+        help="Override the production grace window of 0.25 seconds (minimum two frames).",
+    )
     parser.add_argument("--max-polyline-points", type=int, default=64)
     parser.add_argument("--max-components", type=int, default=TRACKING_CONFIG.string_max_components)
     parser.add_argument("--min-component-pixels", type=int, default=8)

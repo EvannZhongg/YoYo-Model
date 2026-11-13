@@ -148,7 +148,7 @@ Gradio 的训练页签按所选路径调用对应入口，评估器根据 run ma
 `orientation` CLI 仍可使用各自设备覆盖。语义绳线模型的输入尺寸从 checkpoint 的
 `model_config` 读取，不在运行配置中重复声明。
 
-`tracking.string_confidence` 是语义阈值下限；实际阈值取 checkpoint 验证阈值和该值
+`string_tracking.confidence` 是语义阈值下限。实际阈值取 checkpoint 验证阈值和该值
 的较大者。当前默认 checkpoint 的验证阈值为 `0.9453`，因此默认实际阈值为 `0.9453`。
 
 - 完整追踪视频
@@ -157,7 +157,8 @@ Gradio 的训练页签按所选路径调用对应入口，评估器根据 run ma
 - 输入路径、权重路径和参数的 `run.json`
 
 逐帧结果保留球体、绳线、姿态、bad case 和 `trick_orientation`。
-绳线已有轨迹时，逐帧运行前后向一致光流；语义观测仍优先，光流可补回被当前帧分割漏掉的次级绳段，纯光流延续受 `tracking.string_max_propagation_frames` 限制。
+当前帧缺少绳线观测或观测线段数少于上一帧轨迹时，运行前后向一致光流。光流可补回次级绳段，
+纯光流延续受 `tracking.string_max_propagation_frames` 限制。
 每帧最多保留 `tracking.string_max_components` 个语义绳线组件（默认 `32`），可通过
 CLI 的 `--string-max-components` 覆盖。
 颜色增强在 Hough 无直线结果时额外尝试骨架曲线 ridge 路径，用于弯曲绳线候选。

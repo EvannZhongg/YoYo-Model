@@ -99,8 +99,8 @@ tracking:
   string_color_probability_min_fraction: 0.50
   # Maximum semantic string components retained per frame.
   string_max_components: 32
-  # Temporal string tracking is review-only: run forward/backward optical flow
-  # every frame while a track exists and cap unanchored persistence.
+  # Limit optical-flow propagation when observations are absent or have fewer
+  # polylines than the previous track.
   string_max_propagation_frames: 12
   string_flow_fb_max_error: 4.0
   # Competition division metadata used for hand-anchor annotation.

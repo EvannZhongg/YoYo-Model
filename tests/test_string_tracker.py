@@ -248,6 +248,10 @@ class StringTrackerTemporalTests(unittest.TestCase):
 
         previous_string = {
             "points": [[18.0, 20.0], [78.0, 60.0]],
+            "polylines": [
+                [[18.0, 20.0], [78.0, 60.0]],
+                [[25.0, 30.0], [58.0, 50.0]],
+            ],
             "confidence": 0.7,
             "method": "semantic_segmentation",
         }
@@ -279,6 +283,18 @@ class StringTrackerTemporalTests(unittest.TestCase):
         convert.assert_not_called()
         propagate.assert_called_once()
         self.assertTrue(result["flow_temporal_checked"])
+
+    def test_estimate_string_skips_flow_when_observation_covers_seed_count(self):
+        frame = np.zeros((80, 120, 3), dtype=np.uint8)
+        observation = {
+            "points": [[20.0, 20.0], [80.0, 60.0]],
+            "method": "semantic_segmentation",
+        }
+        with patch("video_tracking.string_tracker._propagate_string_geometry") as propagate:
+            result = estimate_string(frame, None, [], None, observation, observation=observation)
+
+        propagate.assert_not_called()
+        self.assertEqual(result["points"], observation["points"])
 
     def test_estimate_string_defers_gray_conversion_until_flow_gap(self):
         frame = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -469,12 +485,23 @@ class StringTrackerTemporalTests(unittest.TestCase):
             min_mean=0.4,
             min_fraction_at_0_10=0.5,
         )
+        without_semantic_observation = _augment_semantic_color_observation(
+            frame,
+            yoyo,
+            None,
+            np.ones((180, 240), dtype=np.float32),
+            meta,
+            threshold=0.4,
+            min_mean=0.4,
+            min_fraction_at_0_10=0.5,
+        )
 
         self.assertEqual(accepted["method"], "semantic_color_probability_union")
         self.assertEqual(len(accepted["polylines"]), 3)
         self.assertEqual(accepted["component_count"], 2)
         self.assertEqual(accepted["polyline_count"], 3)
         self.assertEqual(rejected, observation)
+        self.assertIsNone(without_semantic_observation)
 
     def test_semantic_color_augmentation_respects_component_limit(self):
         frame = np.zeros((180, 240, 3), dtype=np.uint8)

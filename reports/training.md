@@ -62,19 +62,26 @@ pooled 统计由 `tmp/full_rescue_consecutive/summary.json` 生成；Jakub 来�
 | val | 178 | 0.858789 / 0.812687 / 0.835102 | 0.987952 | 0.690193 |
 | test | 179 | 0.894728 / 0.857238 / 0.875582 | 0.982353 | 0.689983 |
 
-连续集同一 927 帧、当前标注与完整颜色/亮线/LK 流程的配对对比：
+连续集使用 10 段、8 个来源的 927 帧，以标注球框作为共同锚点。回放复用生产颜色/亮脊
+补线、语义调度和 LK 传播条件。Centerline F1 对已审核的有绳帧按 2 px 间隔累加采样点。
+全部已知帧的中心线 F1@8 为 `0.836130`，包括不可见帧上的预测几何。Presence 的
+TP/FP/FN/TN 为 `906/2/13/6`。
 
-| 配置 | Centerline F1@8 | Presence F1 | Chamfer / HD95（px） | 最长缺失 / 最大恢复（帧） |
-| --- | ---: | ---: | ---: | ---: |
-| 上一生产 checkpoint | 0.818273 | 0.992908 | 15.6473 / 57.6004 | 4 / 4 |
-| 当前生产重训 checkpoint | 0.834513 | 0.991790 | 12.3987 / 50.4698 | 4 / 4 |
+| 连续集 | Centerline F1@2 / @4 / @8 | F1@8 P / R | Presence F1 | Chamfer / HD95（px） | 最长缺失 / 最大恢复（帧） |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 全量 927 帧 | 0.418442 / 0.671871 / 0.836205 | 0.907864 / 0.775030 | 0.991790 | 12.3643 / 50.8095 | 4 / 4 |
+| 训练来源外的 243 帧 | 0.475965 / 0.745106 / 0.887242 | 0.940430 / 0.839747 | 0.997938 | 10.9422 / 50.1029 | 1 / 1 |
 
-当前连续集最弱来源组为 `NYPC-嘉宾表演-周博文-c01fad75f6`，Centerline F1@8 为
-`0.784833`；上一生产模型的最弱来源 `DSCF7145-e237bbfb5d` 从 `0.738184` 提升到
-`0.788475`。三个训练来源外的连续组 pooled F1@8 从 `0.881297` 提升到 `0.883399`；
-最大来源回退为邬聪聪组的 `-0.014932`。同一 RTX 4070 上两次交替顺序、共 8 轮 100 帧
-配对基准中，纯模型与组件后处理吞吐为 `49.98 FPS`，上一生产权重为 `50.76 FPS`
-（下降 `1.5%`）；包含图像解码时为 `20.22 / 20.46 FPS`（下降 `1.2%`）。
+按来源汇总后，最弱组为 `DSCF7145-e237bbfb5d`，F1@8 为 `0.788475`。连续集含 8 帧
+已审核不可见绳线，训练来源外的 243 帧均有绳线。静态 test 的 12 张负图中有 6 张误检，
+平均每张负图预测 `106.17` 个前景像素。几何距离均值只统计同时有目标和预测的帧，缺失
+由 Presence 与时序指标计入。
+
+当前观测线段数小于上一帧轨迹时才运行 LK。与逐帧 LK 配对回放中，927 帧的输出几何完全
+一致，有输出记录的光流尝试从 857 帧减至 349 帧，21 帧次级绳段补全全部保留。
+在 RTX 4070 Laptop 上对唐浩翔同一 100 帧片段按 AB/BA 顺序复测，包含解码、检测、
+方向模型和视频输出的追踪循环吞吐由 `2.67` 提至 `3.17 FPS`。两轮分别为
+`2.36 → 3.15` 和 `3.08 → 3.19 FPS`，测试期间有同机训练负载。
 
 ### 方向识别
 
@@ -100,8 +107,9 @@ Recall 为 `0.897801`，预测切换数为 `6`；最弱来源“邬聪聪” Acc
 - 连续集评估入口：`cli/tracking/evaluate_sequence.py`
 - 绳线训练：`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/run_manifest.json`
 - 绳线静态评估：`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/test_semantic_metrics.json`
-- 绳线连续集评估：`tmp/semantic_retrain_manifest2689_full/pooled.json`
-- 绳线上一生产配对基线：`tmp/production_currentgt_full/pooled.json`
+- 绳线连续集评估：`tmp/string_resolution_20261114/continuous_optimized_flow/pooled.json`
+- 绳线光流等价检查：`tmp/string_resolution_20261114/flow_geometry_equivalence.json`
+- 绳线完整追踪吞吐：`tmp/string_resolution_20261114/full_tracking_fps.json`
 - 绳线吞吐配对：`tmp/semantic_retrain_manifest2689_benchmark.json`、`tmp/semantic_retrain_manifest2689_benchmark_r2.json`
 - 方向训练：`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/run_manifest.json`
 - 方向三分类 ROI 视图：`datasets/1Ayoyo_dataset/orientation_roi_three_current/manifest.json`
