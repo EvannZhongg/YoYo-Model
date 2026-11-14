@@ -144,6 +144,15 @@ class SemanticStringTests(unittest.TestCase):
         self.assertEqual(lineage["evaluation_source_overlap"], {"val": [], "test": []})
         self.assertTrue(lineage["promotion_eligible"])
 
+    def test_semantic_warm_start_without_source_inventory_is_ineligible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            weights = run_dir / "weights" / "best.pt"
+            (run_dir / "run_manifest.json").write_text('{"source_groups": {}}', encoding="utf-8")
+            lineage = _initialization_lineage(weights, {"val": {"val-a"}, "test": {"test-a"}})
+
+        self.assertFalse(lineage["promotion_eligible"])
+
     def test_reviewed_negative_sampling_weights_only_empty_masks(self):
         with tempfile.TemporaryDirectory() as directory:
             positive = Path(directory) / "positive.txt"

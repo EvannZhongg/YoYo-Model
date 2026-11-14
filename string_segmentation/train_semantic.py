@@ -79,16 +79,19 @@ def _initialization_lineage(
         }
 
     parent_manifest_path = initial_weights.resolve().parent.parent / "run_manifest.json"
-    if not parent_manifest_path.exists():
+    parent = (
+        json.loads(parent_manifest_path.read_text(encoding="utf-8"))
+        if parent_manifest_path.exists() else {}
+    )
+    parent_train = set((parent.get("source_groups") or {}).get("train") or [])
+    if not parent_train:
         return {
             "kind": "unversioned_checkpoint",
-            "parent_run_manifest": "",
+            "parent_run_manifest": str(parent_manifest_path) if parent_manifest_path.exists() else "",
             "evaluation_source_overlap": {"val": [], "test": []},
             "promotion_eligible": False,
         }
 
-    parent = json.loads(parent_manifest_path.read_text(encoding="utf-8"))
-    parent_train = set((parent.get("source_groups") or {}).get("train", []))
     overlap = {
         split: sorted(parent_train & current_groups.get(split, set()))
         for split in ("val", "test")
