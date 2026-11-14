@@ -69,30 +69,27 @@ RTMPose-m WholeBody 仅在视频追踪运行时使用，其 ONNX 模型只存放
 
 每条路径独立产生自己的 `run_manifest.json` 和 checkpoint，不再通过单一多任务命令生成 suite。
 
-语义绳模型使用统一数据集的 `string_segmentation` view。默认训练协议与当前
-MobileNetV3-FPN 权重一致：
+语义绳模型使用统一数据集的 `string_segmentation` view。当前生产权重由原
+MobileNetV3-FPN 继续训练 4 轮，训练尺寸为 960×544，验证和推理尺寸为 1088×608。
 
 ```powershell
 .\.venv\Scripts\python.exe -m cli.training.train_string `
   --dataset-dir datasets/1Ayoyo_dataset/string_segmentation `
-  --project runs/v2v3 `
-  --name yoyo_v2v3_semantic_string `
-  --epochs 12 `
-  --architecture mobilenet_v3_fpn `
-  --pretrained-backbone `
-  --freeze-backbone-epochs 3 `
-  --backbone-lr-multiplier 0.05 `
-  --hard-negative-weight 0.2 `
-  --negative-sample-weight 4.0 `
-  --seed 20260830 `
-  --device cuda
+  --initial-weights runs/experiments/semantic_retrain_manifest2689_e12_s20260830/weights/best.pt `
+  --project runs/experiments --name semantic_resolution_960x544_s20261114 `
+  --epochs 4 --batch 2 --workers 0 --lr 0.00001 `
+  --freeze-backbone-epochs 0 --backbone-lr-multiplier 0.20 `
+  --seed 20261114 --device cuda --validation-inference-scale 1.125 `
+  --validation-every 2 --threshold-values 0.40,0.55,0.70,0.80,0.87,0.92,0.9453,0.97,0.985,0.995
 ```
 
-验证阈值默认每个 epoch 扫描 35 个点；消融筛选可用
-`--threshold-values 0.85,0.92,0.97` 或 `--threshold-sweep-count` 降低扫描开销，
-并用 `--validation-every N` 仅按周期验证（最终 epoch 始终验证）；最终候选仍应使用
-默认 35 点、每 epoch 验证的完整协议复核。
-`--hard-negative-warmup-epochs` 可用于训练时序消融，默认 `0` 表示固定权重。
+发布权重可下载到默认位置。文件 SHA-256 见 [训练报告](reports/training.md)。
+
+```powershell
+gh release download string-20261114 --repo EvannZhongg/YoYo-Model --pattern best.pt --dir runs/experiments/semantic_resolution_960x544_s20261114/weights
+gh release download string-20261114 --repo EvannZhongg/YoYo-Model --pattern run_manifest.json --dir runs/experiments/semantic_resolution_960x544_s20261114
+gh release download string-20261114 --repo EvannZhongg/YoYo-Model --pattern test_semantic_metrics.json --dir runs/experiments/semantic_resolution_960x544_s20261114
+```
 
 ROI 方向模型使用（默认四分类画面朝向视图）：
 
@@ -149,7 +146,7 @@ Gradio 的训练页签按所选路径调用对应入口，评估器根据 run ma
 `model_config` 读取，不在运行配置中重复声明。
 
 `string_tracking.confidence` 是语义阈值下限。实际阈值取 checkpoint 验证阈值和该值
-的较大者。当前默认 checkpoint 的验证阈值为 `0.9453`，因此默认实际阈值为 `0.9453`。
+的较大者。当前默认实际阈值为 `0.92`。
 
 - 完整追踪视频
 - 逐帧 JSONL

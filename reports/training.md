@@ -5,7 +5,7 @@
 | 模块 | 模型与权重 | 运行参数 |
 | --- | --- | --- |
 | 悠悠球检测 | YOLO11s；`runs/experiments/det_replay_soup_a25/weights/best.pt` | `imgsz=1024`，主检测 `conf=0.15`、`IoU=0.7`；可信轨迹掉检时启用 `conf=0.03`、距离门控 `1.5×` 框对角线的低置信度救援 |
-| 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.9453` |
+| 绳线分割 | MobileNetV3-FPN；`runs/experiments/semantic_resolution_960x544_s20261114/weights/best.pt` | `960x544` checkpoint，推理 `1088x608`（`1.125x`），验证阈值 `0.92` |
 | 绳线追踪 | 语义概率图、颜色/亮脊候选、Lucas-Kanade 光流 | 组件上限 `32`，最多传播 `12` 帧 |
 | 方向识别 | 悠悠球 ROI 三分类；`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/weights/best.pt` | 稳态 `5 FPS`，突发 `25 FPS`，EMA 与切换滞回 |
 | 姿态审核 | RTMPose-m WholeBody | 按需启用 |
@@ -14,7 +14,7 @@ Workbench 和 CLI 从 `config.yaml`、`config.py` 读取默认权重。当前绳
 manifest SHA-256 为
 `2689b44e3ddf27d0c97fe24cc592287820d240757c43959ad956785a9176d514`；检测权重 SHA-256
 为 `2d5a0e45b9da1aa88609c79015ce7b651e86fb8206d9ae6463f0fa72cf4a0e00`，绳线权重
-SHA-256 为 `ff9d4c1dd5a50df5ae92ba341c3ef380b85ecfdc76c4c300f24adef300d406f6`，方向
+SHA-256 为 `124033343dc85e5f50d2e9ac06ba1b1882d847ee752db2ac1204ad8df3ea7c40`，方向
 权重 SHA-256 为 `e6d5835bfbfa629d712cd763bb7f4ad5b9bea9711bcd0d1f6c5cd26e06d055ab`。
 
 ## 性能对比
@@ -54,28 +54,44 @@ pooled 统计由 `tmp/full_rescue_consecutive/summary.json` 生成；Jakub 来�
 
 ### 绳线分割与追踪
 
-静态 test/val 结果（扩张后 string manifest SHA-256
-`2689b44e3ddf27d0c97fe24cc592287820d240757c43959ad956785a9176d514`）：
+生产权重从上一版 MobileNetV3-FPN 以 `960×544` 继续训练 4 轮，在 `1088×608` 验证
+集选择第 4 轮及阈值 `0.92`。数据为来源隔离的 829/178/179 张 reviewed train/val/test，
+初始化血缘对 val/test 的训练来源重叠均为空。
 
-| split | 样本数 | Centerline P / R / F1@8 | Presence F1 | Pixel Dice |
+| 静态集 | Centerline P / R / F1@8 | Presence F1 | Pixel Dice |
+| --- | ---: | ---: | ---: |
+| val | 0.875815 / 0.830964 / 0.852800 | 0.984894 | 0.674642 |
+| test | 0.904688 / 0.860282 / 0.881926 | 0.982353 | 0.700606 |
+| 上一权重 test | 0.894728 / 0.857238 / 0.875582 | 0.982353 | 0.689983 |
+
+主连续集使用 10 段、8 个来源的 927 帧，复用生产颜色/亮脊补线、语义调度与 LK 传播条件，
+两边均使用同一标注球框和 `1088×608` 输入。Centerline F1 对已审核的有绳帧按 2 px 间隔
+累加采样点。Chamfer 和 HD95 按同时有目标和预测的帧求均值。缺失帧计入召回及恢复统计。
+
+| 配对评估 | Centerline F1@2 / @4 / @8 | F1@8 P / R | Chamfer / HD95（px） | 最长缺失 / 最大恢复（帧） |
 | --- | ---: | ---: | ---: | ---: |
-| val | 178 | 0.858789 / 0.812687 / 0.835102 | 0.987952 | 0.690193 |
-| test | 179 | 0.894728 / 0.857238 / 0.875582 | 0.982353 | 0.689983 |
+| 全量 927 帧 · 上一权重 | 0.418442 / 0.671871 / 0.836205 | 0.907864 / 0.775030 | 12.3643 / 50.8095 | 4 / 4 |
+| 全量 927 帧 · 当前权重 | 0.422120 / 0.674060 / 0.839198 | 0.908017 / 0.780076 | 10.9908 / 46.6678 | 4 / 4 |
+| 训练来源外 243 帧 · 上一权重 | 0.475965 / 0.745106 / 0.887242 | 0.940430 / 0.839747 | 10.9422 / 50.1029 | 1 / 1 |
+| 训练来源外 243 帧 · 当前权重 | 0.477922 / 0.746201 / 0.888740 | 0.941752 / 0.841378 | 10.7080 / 48.7334 | 1 / 1 |
 
-连续集使用 10 段、8 个来源的 927 帧，以标注球框作为共同锚点。回放复用生产颜色/亮脊
-补线、语义调度和 LK 传播条件。Centerline F1 对已审核的有绳帧按 2 px 间隔累加采样点。
-全部已知帧的中心线 F1@8 为 `0.836130`，包括不可见帧上的预测几何。Presence 的
-TP/FP/FN/TN 为 `906/2/13/6`。
+20 个额外独立来源的 48 段五帧视频（240 帧）提供几何复核。F1@8 由 `0.807184`
+提升到 `0.811873`，按来源配对 bootstrap 的增量 95% 区间为 `[0.00223, 0.00729]`，
+漏检均为 6 帧。主集同法估计的全量增量区间为 `[0.00012, 0.00551]`。243 帧子集仅
+3 个来源，其中 1 个同时出现在静态 test，增量区间跨零 `[-0.00068, 0.00588]`。
+两个独立连续子集均只有有绳帧，五帧短片段用于几何覆盖验证。
 
-| 连续集 | Centerline F1@2 / @4 / @8 | F1@8 P / R | Presence F1 | Chamfer / HD95（px） | 最长缺失 / 最大恢复（帧） |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 全量 927 帧 | 0.418442 / 0.671871 / 0.836205 | 0.907864 / 0.775030 | 0.991790 | 12.3643 / 50.8095 | 4 / 4 |
-| 训练来源外的 243 帧 | 0.475965 / 0.745106 / 0.887242 | 0.940430 / 0.839747 | 0.997938 | 10.9422 / 50.1029 | 1 / 1 |
+主集最弱来源 `DSCF7145-e237bbfb5d` 的 F1@8 由 `0.788475` 提升至 `0.789071`。
+2023 华南赛来源下降 `0.00948`，新增 1 个约 7 px 的误检，并在同一段末端漏掉一次
+约 18 px 的贴球短绳，片段结束时未恢复次数由 1 增至 2。namdongxun 和池高宇各少漏 1 帧，邬聪聪多漏 1 帧。
+全量漏检仍为 13，误检从 2 增至 3，Presence F1 从 `0.991790` 降至 `0.991247`。
+计入不可见帧的全量几何 F1@8 从 `0.836130` 升至 `0.839134`。静态 test 的 12 张负图
+中误检图数均为 6，负图平均预测前景由 `106.17` 降至 `67.67 px`。结合独立几何收益、
+弱组改善及总体缺失护栏，将这处局部回退纳入本次晋升。
 
-按来源汇总后，最弱组为 `DSCF7145-e237bbfb5d`，F1@8 为 `0.788475`。连续集含 8 帧
-已审核不可见绳线，训练来源外的 243 帧均有绳线。静态 test 的 12 张负图中有 6 张误检，
-平均每张负图预测 `106.17` 个前景像素。几何距离均值只统计同时有目标和预测的帧，缺失
-由 Presence 与时序指标计入。
+同一 100 帧完整追踪片段以 AB/BA 顺序配对复测，启用已部署的 LK 调度。上一权重和当前
+权重分别为 `6.37` 和 `6.34 FPS`（约 `-0.35%`）。两轮分别为 `5.71 → 6.53`
+和 `7.19 → 6.17 FPS`，测速只覆盖一段视频且受同机负载波动影响。
 
 当前观测线段数小于上一帧轨迹时才运行 LK。与逐帧 LK 配对回放中，927 帧的输出几何完全
 一致，有输出记录的光流尝试从 857 帧减至 349 帧，21 帧次级绳段补全全部保留。
@@ -105,12 +121,13 @@ Recall 为 `0.897801`，预测切换数为 `6`；最弱来源“邬聪聪” Acc
 - 检测连续集评估：`tmp/det_production_consecutive_grouped_metrics.json`
 - 检测时序救援完整连续集评估：`tmp/full_rescue_consecutive/summary.json`
 - 连续集评估入口：`cli/tracking/evaluate_sequence.py`
-- 绳线训练：`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/run_manifest.json`
-- 绳线静态评估：`runs/experiments/semantic_retrain_manifest2689_e12_s20260830/test_semantic_metrics.json`
-- 绳线连续集评估：`tmp/string_resolution_20261114/continuous_optimized_flow/pooled.json`
+- 绳线训练：`runs/experiments/semantic_resolution_960x544_s20261114/run_manifest.json`
+- 绳线静态评估：`tmp/string_resolution_20261114/static_scale_960/test_semantic_metrics.json`
+- 绳线连续集评估：`tmp/string_resolution_20261114/continuous_scale_960/pooled.json`
+- 绳线独立短片段评估：`tmp/string_resolution_20261114/secondary_scale_960/pooled.json`
+- 绳线晋升吞吐：`tmp/string_resolution_20261114/full_model_960_fps.json`
 - 绳线光流等价检查：`tmp/string_resolution_20261114/flow_geometry_equivalence.json`
 - 绳线完整追踪吞吐：`tmp/string_resolution_20261114/full_tracking_fps.json`
-- 绳线吞吐配对：`tmp/semantic_retrain_manifest2689_benchmark.json`、`tmp/semantic_retrain_manifest2689_benchmark_r2.json`
 - 方向训练：`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/run_manifest.json`
 - 方向三分类 ROI 视图：`datasets/1Ayoyo_dataset/orientation_roi_three_current/manifest.json`
 - 方向 test：`runs/experiments/yoyo_unified_579b879a66ce_orientation_roi_b7fb7417b09a_yolo11n-cls_current579-three-dropout1-e20-b32/test_metrics.json`

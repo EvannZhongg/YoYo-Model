@@ -55,6 +55,7 @@ class SemanticStringTests(unittest.TestCase):
         self.assertEqual(args.hard_negative_weight, 0.2)
         self.assertEqual(args.negative_sample_weight, 4.0)
         self.assertEqual(args.threshold_sweep_count, 35)
+        self.assertEqual(args.validation_inference_scale, TRACKING_CONFIG.string_inference_scale)
         self.assertEqual(args.threshold_values, "")
         self.assertEqual(args.epochs, 12)
         self.assertEqual(args.seed, 20260830)

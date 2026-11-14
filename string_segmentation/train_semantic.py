@@ -117,6 +117,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=SEMANTIC_STRING_CONFIG.epochs)
     parser.add_argument("--input-width", type=int, default=SEMANTIC_STRING_CONFIG.input_width)
     parser.add_argument("--input-height", type=int, default=SEMANTIC_STRING_CONFIG.input_height)
+    parser.add_argument(
+        "--validation-inference-scale", type=float, default=TRACKING_CONFIG.string_inference_scale,
+        help="Scale the validation canvas relative to the training input.",
+    )
     parser.add_argument("--batch", type=int, default=SEMANTIC_STRING_CONFIG.batch)
     parser.add_argument("--workers", type=int, default=SEMANTIC_STRING_CONFIG.workers)
     parser.add_argument("--lr", type=float, default=SEMANTIC_STRING_CONFIG.learning_rate)
@@ -251,6 +255,11 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         threshold_values = np.linspace(0.15, 0.995, int(args.threshold_sweep_count)).tolist()
     if args.input_width % 16 or args.input_height % 16:
         raise ValueError("Semantic input width and height must be divisible by 16")
+    validation_scale = float(args.validation_inference_scale)
+    if not 0.5 <= validation_scale <= 2.0:
+        raise ValueError("validation-inference-scale must be between 0.5 and 2.0")
+    validation_width = max(32, int(round(args.input_width * validation_scale / 16)) * 16)
+    validation_height = max(32, int(round(args.input_height * validation_scale / 16)) * 16)
     dataset_dir = Path(args.dataset_dir)
     dataset_manifest_path = dataset_dir / "manifest.json"
     manifest = load_dataset_manifest(dataset_dir)
@@ -293,8 +302,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     val_dataset = ReviewedStringDataset(
         dataset_dir,
         "val",
-        args.input_width,
-        args.input_height,
+        validation_width,
+        validation_height,
         args.min_mask_width_px,
         augment=False,
     )
@@ -543,6 +552,8 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             "threshold_values": [float(value) for value in threshold_values],
             "max_components": int(TRACKING_CONFIG.string_max_components),
             "validation_every": int(args.validation_every),
+            "validation_inference_scale": validation_scale,
+            "validation_input_size": [validation_width, validation_height],
             **model_config,
         },
         "training": {
